@@ -49,6 +49,7 @@ local `.env.local`:
 | `SUPABASE_SERVICE_ROLE_KEY` | your service_role key | ✅ |
 | `DATABASE_URL` | **transaction pooler** string (port 6543, password URL-encoded) | ✅ |
 | `NEXT_PUBLIC_APP_URL` | your Vercel URL, e.g. `https://operator-xxxx.vercel.app` | recommended |
+| `ANTHROPIC_API_KEY` | `sk-ant-…` — turns on **real AI drafting** (agents draft & revise with Claude) | optional |
 | `DIRECT_URL` | session pooler string (port 5432) | only if running migrations from CI |
 
 Then click **Deploy**.
@@ -83,5 +84,31 @@ backed by Postgres. Done.
 - **🔒 Rotate the secrets** you shared during setup before real production use
   (Supabase → Settings → API → roll `service_role`; Database → reset password → update
   `DATABASE_URL`/`DIRECT_URL` locally and in Vercel).
-- **Custom domain:** add it in Vercel → Domains, then update `NEXT_PUBLIC_APP_URL` and the
-  Supabase Site/Redirect URLs to match.
+- **CI:** `.github/workflows/ci.yml` runs typecheck + build on every push/PR, and applies
+  DB migrations on pushes to `main` **if** you add a `DIRECT_URL` repo secret
+  (Settings → Secrets and variables → Actions). Without that secret, the migrate step is skipped.
+
+---
+
+## Custom domain
+
+The app uses origin-relative auth redirects, so it adapts to any domain automatically —
+connecting one is a dashboard + DNS task, no code change:
+
+1. **Vercel → Project → Settings → Domains** → add your domain; follow Vercel's DNS
+   instructions at your registrar (A/CNAME records).
+2. Update the **`NEXT_PUBLIC_APP_URL`** env var to the custom domain and redeploy.
+3. **Supabase → Authentication → URL Configuration** → set **Site URL** to the custom
+   domain and add `https://yourdomain.com/**` to **Redirect URLs**.
+
+That's all — the live app, auth emails, and sign-in flow will all use the new domain.
+
+---
+
+## AI drafting (Anthropic)
+
+Add an `ANTHROPIC_API_KEY` env var (locally in `.env.local`, and in Vercel) to turn on
+**real AI drafting**: agents draft content with Claude grounded in your business brief, and
+**Request changes** actually revises the draft against your note. Without the key, the app
+falls back to the seeded/simulated drafts. Optional `ANTHROPIC_MODEL` overrides the model
+(defaults to `claude-opus-4-8`).

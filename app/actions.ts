@@ -3,13 +3,14 @@
 import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/server";
-import { isBackendConfigured } from "@/lib/config";
+import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import {
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
 } from "@/lib/db/queries";
-import type { AppState } from "@/lib/types";
+import { draftWithClaude } from "@/lib/ai/draft";
+import type { AppState, DraftRequest } from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
@@ -47,6 +48,23 @@ export async function resetWorkspace(): Promise<AppState | null> {
   const user = await getCurrentUser();
   if (!user) return null;
   return resetBundleForUser(user.id, user.email ?? "", displayName(user));
+}
+
+/* --------------------------- AI drafting --------------------------- */
+
+export async function generateDraft(
+  req: DraftRequest,
+): Promise<{ content?: string; error?: string }> {
+  if (!hasAnthropicKey()) return { error: "AI drafting is not configured." };
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  try {
+    const content = await draftWithClaude(req);
+    return { content };
+  } catch (e) {
+    console.error("[generateDraft] failed:", e instanceof Error ? e.message : e);
+    return { error: e instanceof Error ? e.message : "AI drafting failed." };
+  }
 }
 
 /* ----------------------------- auth -------------------------------- */

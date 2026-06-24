@@ -19,4 +19,9 @@ export function isBackendConfigured(): boolean {
   return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && process.env.DATABASE_URL);
 }
 
+/** Server-side check: real AI drafting (Anthropic) is configured. */
+export function hasAnthropicKey(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY);
+}
+
 export const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";

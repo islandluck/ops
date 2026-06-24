@@ -231,5 +231,22 @@ export interface AppState {
     onboarded: boolean;
     user_name: string;
     user_email: string;
+    /** True when the backend has an Anthropic API key (real AI drafting on). */
+    ai_enabled: boolean;
   };
+}
+
+/** Payload for AI drafting / revision (Phase 2). */
+export interface DraftRequest {
+  category: Category;
+  title: string;
+  description: string;
+  rationale: string;
+  instruction?: string;
+  existingDraft?: string;
+  companyName: string;
+  companyContext: string;
+  idealCustomer: string;
+  voiceRules: string[];
+  restrictedPhrases: string[];
 }

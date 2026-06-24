@@ -919,6 +919,7 @@ export function createSeedState(now: number): AppState {
       onboarded: false,
       user_name: "Alex Rivera",
       user_email: "alex@northwindstudio.com",
+      ai_enabled: false,
     },
   };
 

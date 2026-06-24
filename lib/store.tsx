@@ -15,6 +15,7 @@ import { createSeedState } from "./seed";
 import { makeId } from "./format";
 import { hasSupabaseClientEnv } from "./config";
 import {
+  generateDraft,
   loadWorkspace,
   resetWorkspace,
   saveWorkspace,
@@ -25,8 +26,10 @@ import type {
   Agent,
   AppState,
   ApprovalDecision,
+  AssetType,
   BusinessBrief,
   Category,
+  DraftRequest,
   ExecutionRun,
   ExecutionStep,
   PermissionMode,
@@ -114,6 +117,7 @@ interface StoreContext {
   // task actions
   approve: (id: string, comment?: string, withEdits?: boolean) => void;
   requestChanges: (id: string, comment: string) => void;
+  draftTask: (id: string) => void;
   reject: (id: string, comment?: string) => void;
   snooze: (id: string) => void;
   reassign: (id: string, agentId: string) => void;
@@ -156,6 +160,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const serverMode = hasSupabaseClientEnv;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipFirstSave = useRef(true);
+
+  // Always-current snapshot for async actions (AI drafting) that must read
+  // the latest task/brief at call time, not a stale closure.
+  const latest = useRef<AppState | null>(null);
+  latest.current = state;
 
   // Load the workspace bundle in server mode, retrying transient failures
   // (e.g. a cold connection-pool start) before surfacing an error state.
@@ -468,6 +477,89 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [patchState, updateTask, logEvent, schedule, runExecution],
   );
 
+  /* ---------------- AI drafting (Phase 2, server mode) ------------- */
+
+  const applyAiDraft = useCallback(
+    (id: string, content: string, isRevision: boolean) => {
+      patchState((prev) => {
+        const task = prev.tasks.find((t) => t.id === id);
+        if (!task) return prev;
+        const agentName = prev.agents.find((a) => a.id === task.agent_id)?.name ?? "The agent";
+        const assets = task.assets.length
+          ? task.assets.map((a, i) => (i === 0 ? { ...a, content } : a))
+          : [
+              {
+                id: makeId(),
+                task_id: id,
+                asset_type: assetTypeFor(task.category),
+                title: "Drafted by Claude",
+                content,
+              },
+            ];
+        return {
+          ...prev,
+          tasks: prev.tasks.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  assets,
+                  status: "ready",
+                  approval_status: "pending",
+                  execution_status: "none",
+                  updated_at: new Date().toISOString(),
+                }
+              : t,
+          ),
+          agents: prev.agents.map((a) =>
+            a.id === task.agent_id ? { ...a, status: "waiting" } : a,
+          ),
+          activity: logEvent(
+            prev,
+            id,
+            isRevision ? "agent_revised" : "agent_updated_draft",
+            "agent",
+            task.agent_id,
+            isRevision
+              ? `${agentName} revised the draft with Claude and moved it back to Ready for Approval.`
+              : `${agentName} drafted this with Claude and moved it to Ready for Approval.`,
+          ),
+        };
+      });
+    },
+    [patchState, logEvent],
+  );
+
+  const draftTask = useCallback(
+    (id: string) => {
+      const s = latest.current;
+      if (!s || !s.session.ai_enabled) return;
+      const task = s.tasks.find((t) => t.id === id);
+      if (!task) return;
+      pushToast({ tone: "working", title: "Drafting with Claude…", description: task.title });
+      patchState((prev) => ({
+        ...prev,
+        agents: prev.agents.map((a) =>
+          a.id === task.agent_id ? { ...a, status: "working" } : a,
+        ),
+      }));
+      void generateDraft(buildDraftRequest(s, task)).then((res) => {
+        if (res.content) {
+          applyAiDraft(id, res.content, task.assets.length > 0);
+          pushToast({ tone: "success", title: "Draft ready", description: "Claude prepared it — review and approve." });
+        } else {
+          pushToast({ tone: "error", title: "Couldn't draft", description: res.error });
+          patchState((prev) => ({
+            ...prev,
+            agents: prev.agents.map((a) =>
+              a.id === task.agent_id ? { ...a, status: "idle" } : a,
+            ),
+          }));
+        }
+      });
+    },
+    [pushToast, patchState, applyAiDraft],
+  );
+
   const requestChanges = useCallback(
     (id: string, comment: string) => {
       patchState((prev) => {
@@ -501,12 +593,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ),
         };
       });
+      const snapshot = latest.current;
+      const aiOn = Boolean(snapshot?.session.ai_enabled);
       pushToast({
         tone: "info",
         title: "Sent back for changes",
-        description: "The agent is revising the draft…",
+        description: aiOn ? "Claude is revising the draft…" : "The agent is revising the draft…",
       });
-      // Simulate the agent revising and returning to Ready.
+
+      if (aiOn && snapshot) {
+        const task = snapshot.tasks.find((t) => t.id === id);
+        if (task) {
+          const existing = task.assets[0]?.content ?? "";
+          void generateDraft(buildDraftRequest(snapshot, task, comment, existing)).then((res) => {
+            if (res.content) {
+              applyAiDraft(id, res.content, true);
+              pushToast({ tone: "success", title: "Draft revised", description: "Claude updated it — ready for another look." });
+            } else {
+              pushToast({ tone: "error", title: "Revision failed", description: res.error });
+            }
+          });
+          return;
+        }
+      }
+
+      // Demo / no-AI fallback: simulate the agent revising and returning to Ready.
       schedule(() => {
         setState((prev) => {
           if (!prev) return prev;
@@ -539,7 +650,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         });
       }, 3800);
     },
-    [patchState, updateTask, logEvent, schedule, pushToast],
+    [patchState, updateTask, logEvent, schedule, pushToast, applyAiDraft],
   );
 
   const reject = useCallback(
@@ -921,6 +1032,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dismissToast,
       approve,
       requestChanges,
+      draftTask,
       reject,
       snooze,
       reassign,
@@ -940,7 +1052,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       hydrated, state, loadError, loadServer, selectedTaskId, filters, toasts, setFilters, resetFilters,
-      applySavedView, dismissToast, approve, requestChanges, reject, snooze, reassign,
+      applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
@@ -1052,4 +1164,31 @@ function labelForStatus(status: TaskStatus): string {
     done: "Done",
   };
   return map[status];
+}
+
+function assetTypeFor(category: Category): AssetType {
+  if (category === "content") return "document";
+  if (category === "research") return "summary";
+  return "email";
+}
+
+function buildDraftRequest(
+  s: AppState,
+  task: Task,
+  instruction?: string,
+  existingDraft?: string,
+): DraftRequest {
+  return {
+    category: task.category,
+    title: task.title,
+    description: task.description,
+    rationale: task.rationale,
+    instruction,
+    existingDraft,
+    companyName: s.brief.company_name,
+    companyContext: `${s.brief.business_description} ${s.brief.core_offer}`.trim(),
+    idealCustomer: s.brief.ideal_customer_profile,
+    voiceRules: s.brief.voice_rules,
+    restrictedPhrases: s.brief.restricted_phrases,
+  };
 }

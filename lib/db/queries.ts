@@ -16,6 +16,7 @@ import {
   workspaces,
 } from "./schema";
 import { buildSeedRows } from "./seed-workspace";
+import { hasAnthropicKey } from "@/lib/config";
 import type {
   ActivityEvent,
   Agent,
@@ -271,6 +272,7 @@ async function readBundle(
       onboarded: true,
       user_name: fullName || workspace.name,
       user_email: email,
+      ai_enabled: hasAnthropicKey(),
     },
   };
 }

@@ -72,6 +72,7 @@ export function TaskDrawer() {
     selectTask,
     approve,
     requestChanges,
+    draftTask,
     reject,
     retry,
     snooze,
@@ -80,15 +81,23 @@ export function TaskDrawer() {
 
   const [mode, setMode] = useState<"idle" | "changes" | "reject">("idle");
   const [note, setNote] = useState("");
+  const [drafting, setDrafting] = useState(false);
 
   const task = state?.tasks.find((t) => t.id === selectedTaskId) ?? null;
   const open = Boolean(task);
+  const aiEnabled = Boolean(state?.session.ai_enabled);
 
   // Reset action panel whenever a different task opens.
   useEffect(() => {
     setMode("idle");
     setNote("");
+    setDrafting(false);
   }, [selectedTaskId]);
+
+  // Clear the drafting spinner once a draft arrives.
+  useEffect(() => {
+    if (task && task.assets.length > 0) setDrafting(false);
+  }, [task]);
 
   // Keyboard shortcuts: A = approve, R = request changes.
   useEffect(() => {
@@ -308,6 +317,11 @@ export function TaskDrawer() {
             <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
               <Layers className="h-3.5 w-3.5" />
               Draft output ({task.assets.length})
+              {aiEnabled && (
+                <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium normal-case tracking-normal text-primary">
+                  <Sparkles className="h-3 w-3" /> Claude
+                </span>
+              )}
             </p>
             {task.assets.map((asset) => (
               <AssetBlock key={asset.id} asset={asset} />
@@ -316,10 +330,37 @@ export function TaskDrawer() {
         )}
         {task.assets.length === 0 && !completed && !rejected && (
           <div className="rounded-lg border border-dashed border-border p-4 text-center">
-            <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
-            <p className="mt-2 text-[13px] text-muted-foreground">
-              {agent?.name ?? "The agent"} is still preparing the draft for this task.
-            </p>
+            {aiEnabled ? (
+              <>
+                <p className="text-[13px] text-muted-foreground">
+                  No draft yet. Have {agent?.name ?? "the agent"} write one with Claude,
+                  grounded in your business brief.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-3"
+                  disabled={drafting}
+                  onClick={() => {
+                    setDrafting(true);
+                    draftTask(task.id);
+                  }}
+                >
+                  {drafting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  {drafting ? "Drafting…" : "Draft with Claude"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
+                <p className="mt-2 text-[13px] text-muted-foreground">
+                  {agent?.name ?? "The agent"} is still preparing the draft for this task.
+                </p>
+              </>
+            )}
           </div>
         )}
 

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Assumes this repo's root is the Operator app (the `operator/` folder pushed
+# as its own repository, per DEPLOY.md option A).
+
+jobs:
+  verify:
+    name: Typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build # builds in demo mode; needs no secrets
+
+  migrate:
+    name: Apply DB migrations (main only)
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      # Add a DIRECT_URL repo secret (Settings → Secrets → Actions) to enable.
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Run Drizzle migrations
+        if: env.DIRECT_URL != ''
+        run: npm run db:migrate
