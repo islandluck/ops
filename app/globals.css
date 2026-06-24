@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Calm, neutral SaaS palette ----------------------------------------- */
+    --canvas: 220 24% 97%; /* app background behind boards */
+    --background: 0 0% 100%;
+    --foreground: 222 24% 14%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 24% 14%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 24% 14%;
+
+    /* Indigo brand for navigation / focus / primary accents */
+    --primary: 243 75% 59%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 222 20% 22%;
+
+    --muted: 220 16% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 16% 95%;
+    --accent-foreground: 222 20% 22%;
+
+    /* Approve = go = emerald */
+    --success: 152 60% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 30 50% 16%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 16% 90%;
+    --input: 220 16% 88%;
+    --ring: 243 75% 59%;
+
+    --radius: 0.65rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-canvas text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Thin, calm scrollbars ------------------------------------------------ */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(220 13% 80%) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(220 13% 82%);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(220 13% 70%);
+  }
+
+  :focus-visible {
+    outline: 2px solid transparent;
+    box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring) / 0.6);
+    border-radius: var(--radius);
+  }
+}
+
+@layer components {
+  /* Subtle grid texture for marketing + empty states */
+  .bg-grid {
+    background-image:
+      linear-gradient(to right, hsl(220 16% 92% / 0.7) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(220 16% 92% / 0.7) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Card lift on hover for board cards */
+  .card-interactive {
+    @apply transition-all duration-150 ease-out;
+  }
+  .card-interactive:hover {
+    @apply shadow-elevated -translate-y-px;
+  }
+
+  /* Loading skeleton shimmer */
+  .skeleton {
+    @apply relative overflow-hidden bg-muted;
+  }
+  .skeleton::after {
+    content: "";
+    @apply absolute inset-0;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      hsl(0 0% 100% / 0.6),
+      transparent
+    );
+    transform: translateX(-100%);
+    animation: shimmer 1.6s infinite;
+  }
+}
+
+/* Hide scrollbar utility for horizontal board on touch */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

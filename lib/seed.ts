@@ -1,0 +1,945 @@
+import type {
+  ActivityEvent,
+  Agent,
+  AppState,
+  ApprovalDecision,
+  BusinessBrief,
+  ExecutionRun,
+  Integration,
+  Task,
+  Workspace,
+} from "./types";
+
+/**
+ * Seed factory. Builds a believable, alive workspace for "Northwind Studio",
+ * a three-person web & brand studio. All timestamps are relative to `now` so
+ * the board reads naturally ("2h ago", "Due in 6h") whenever it is generated.
+ */
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+
+export function createSeedState(now: number): AppState {
+  const at = (offset: number) => new Date(now + offset).toISOString();
+
+  const workspace: Workspace = {
+    id: "ws_northwind",
+    name: "Northwind Studio",
+    owner_id: "u_alex",
+    plan: "Operator Pro",
+    created_at: at(-120 * DAY),
+    updated_at: at(-2 * HOUR),
+  };
+
+  const brief: BusinessBrief = {
+    id: "brief_northwind",
+    workspace_id: workspace.id,
+    company_name: "Northwind Studio",
+    website_url: "https://northwindstudio.com",
+    business_description:
+      "A three-person studio that designs websites and brand identities for small, owner-run service businesses.",
+    core_offer:
+      "Done-for-you website + brand identity packages, plus monthly care plans that keep sites fast and fresh.",
+    ideal_customer_profile:
+      "Owner-operated service businesses (clinics, law firms, boutique agencies) with 2–25 staff and $250k–$3M revenue who need a credible, converting web presence.",
+    goals: [
+      "Book 8 discovery calls per month",
+      "Reply to every warm lead within 24 hours",
+      "Publish one newsletter per week",
+      "Keep overdue invoices at zero",
+    ],
+    voice_rules: [
+      "Warm and plain-spoken",
+      "Confident, never hypey",
+      "Short sentences",
+      "Lead with the client's outcome",
+    ],
+    restricted_phrases: ["world-class", "synergy", "revolutionary", "guarantee", "cheap"],
+    approval_rules: [
+      { label: "Send outreach & follow-up email", mode: "approval" },
+      { label: "Publish website changes", mode: "approval" },
+      { label: "Update CRM records", mode: "auto" },
+      { label: "Send invoice reminders", mode: "approval" },
+      { label: "Spend money / paid media", mode: "suggest" },
+    ],
+    budget_limits: [
+      { label: "Paid media", amount: 0, period: "monthly" },
+      { label: "Tools & software", amount: 500, period: "monthly" },
+    ],
+    working_hours: "Mon–Fri, 9:00–17:00",
+    timezone: "America/Los_Angeles",
+    connected_systems: ["Gmail", "Google Calendar", "Webflow", "HubSpot", "Stripe"],
+    updated_at: at(-9 * DAY),
+  };
+
+  const agents: Agent[] = [
+    {
+      id: "ag_growth",
+      workspace_id: workspace.id,
+      name: "Growth Agent",
+      category: "growth",
+      status: "working",
+      permissions_mode: "approval",
+      description:
+        "Watches your inbox and CRM for warm leads, drafts follow-ups, and keeps the pipeline moving.",
+      last_run_at: at(-18 * MIN),
+      tasks_prepared: 34,
+    },
+    {
+      id: "ag_admin",
+      workspace_id: workspace.id,
+      name: "Admin Agent",
+      category: "admin",
+      status: "waiting",
+      permissions_mode: "approval",
+      description:
+        "Handles scheduling, reschedules, receipts, and the small inbox chores that pile up.",
+      last_run_at: at(-52 * MIN),
+      tasks_prepared: 41,
+    },
+    {
+      id: "ag_content",
+      workspace_id: workspace.id,
+      name: "Content Agent",
+      category: "content",
+      status: "working",
+      permissions_mode: "approval",
+      description:
+        "Drafts newsletters, website copy, and social posts in your brand voice — then waits for sign-off.",
+      last_run_at: at(-8 * MIN),
+      tasks_prepared: 27,
+    },
+    {
+      id: "ag_research",
+      workspace_id: workspace.id,
+      name: "Research Agent",
+      category: "research",
+      status: "idle",
+      permissions_mode: "suggest",
+      description:
+        "Tracks competitors, summarizes calls, and turns scattered notes into briefs you can act on.",
+      last_run_at: at(-3 * HOUR),
+      tasks_prepared: 19,
+    },
+    {
+      id: "ag_finance",
+      workspace_id: workspace.id,
+      name: "Finance Agent",
+      category: "finance",
+      status: "waiting",
+      permissions_mode: "approval",
+      description:
+        "Chases overdue invoices, reconciles payouts, and keeps the books tidy — never moves money on its own.",
+      last_run_at: at(-40 * MIN),
+      tasks_prepared: 23,
+    },
+  ];
+
+  const integrations: Integration[] = [
+    {
+      id: "int_gmail",
+      name: "Gmail",
+      provider: "Google",
+      category: "email",
+      connected: true,
+      account: "alex@northwindstudio.com",
+      permission_mode: "approval",
+      optional: false,
+    },
+    {
+      id: "int_gcal",
+      name: "Google Calendar",
+      provider: "Google",
+      category: "calendar",
+      connected: true,
+      account: "alex@northwindstudio.com",
+      permission_mode: "approval",
+      optional: false,
+    },
+    {
+      id: "int_webflow",
+      name: "Webflow",
+      provider: "Webflow",
+      category: "website",
+      connected: true,
+      account: "northwindstudio.com",
+      permission_mode: "approval",
+      optional: false,
+    },
+    {
+      id: "int_hubspot",
+      name: "HubSpot",
+      provider: "HubSpot",
+      category: "crm",
+      connected: true,
+      account: "Northwind Studio CRM",
+      permission_mode: "auto",
+      optional: false,
+    },
+    {
+      id: "int_stripe",
+      name: "Stripe",
+      provider: "Stripe",
+      category: "payments",
+      connected: true,
+      account: "acct_northwind",
+      permission_mode: "approval",
+      optional: true,
+    },
+    {
+      id: "int_sheets",
+      name: "Google Sheets",
+      provider: "Google",
+      category: "other",
+      connected: true,
+      account: "alex@northwindstudio.com",
+      permission_mode: "auto",
+      optional: true,
+    },
+    {
+      id: "int_linkedin",
+      name: "LinkedIn",
+      provider: "LinkedIn",
+      category: "other",
+      connected: false,
+      permission_mode: "approval",
+      optional: true,
+    },
+    {
+      id: "int_slack",
+      name: "Slack",
+      provider: "Slack",
+      category: "other",
+      connected: false,
+      permission_mode: "approval",
+      optional: true,
+    },
+    {
+      id: "int_notion",
+      name: "Notion",
+      provider: "Notion",
+      category: "other",
+      connected: false,
+      permission_mode: "suggest",
+      optional: true,
+    },
+  ];
+
+  const tasks: Task[] = [
+    /* ---------------------------- READY: hero --------------------------- */
+    {
+      id: "t_leads",
+      workspace_id: workspace.id,
+      category: "growth",
+      title: "Follow up with 12 warm leads from last week",
+      description:
+        "Twelve people replied or booked time last week and then went quiet. Each one is a personalized nudge that picks up exactly where the conversation left off.",
+      rationale:
+        "12 leads have had no contact in 4+ days. Your goal is a reply within 24h — these are slipping past that window.",
+      status: "ready",
+      risk_level: "medium",
+      priority: "high",
+      due_at: at(6 * HOUR),
+      agent_id: "ag_growth",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail", "HubSpot"],
+      proposed_actions: 12,
+      impact_score: 92,
+      created_at: at(-22 * MIN),
+      updated_at: at(-18 * MIN),
+      assets: [
+        {
+          id: "as_leads_1",
+          task_id: "t_leads",
+          asset_type: "email_batch",
+          title: "12 personalized follow-up emails",
+          metadata: { recipients: 12, send_window: "Today 9am–11am PT" },
+          content:
+            "Each draft is personalized from your CRM notes. Two examples shown in full; the other ten follow the same structure.\n\n— — — Draft 1 of 12 — — —\nTo: dr.patel@brightsmileclinic.com\nSubject: Quick follow-up on your new-patient page\n\nHi Dr. Patel,\n\nThanks again for walking me through Brightsmile's goals on Tuesday. You mentioned new-patient bookings stall because the site doesn't explain what makes the practice different.\n\nI sketched two quick homepage directions — both lead with the calmer first visit you described and make \"Book a consult\" the obvious next step. Want me to send them over?\n\nNo rush. Happy to keep it to 15 minutes if that's easier.\n\n— Alex, Northwind Studio\n\n— — — Draft 2 of 12 — — —\nTo: marcus@hargrovelaw.com\nSubject: The case-results page we talked about\n\nHi Marcus,\n\nGood speaking last week. You were weighing whether a refreshed site would actually bring in the right kind of cases.\n\nI pulled one example of a firm we helped do exactly that, plus a rough outline for your results page. Worth a short look?\n\n— Alex\n\n— — — Recipients (12) — — —\n1. Dr. Patel · Brightsmile Clinic · new-patient page\n2. Marcus Hargrove · Hargrove Law · case-results page\n3. Lena Ortiz · Ortiz Bookkeeping · pricing clarity\n4. Sam Whitfield · Whitfield HVAC · service-area SEO\n5. Priya Nair · Coastal Physio · online booking\n6. Tom Becker · Becker Roofing · quote request form\n7. Grace Lim · Lim Family Dental · brand refresh\n8. Dan Reyes · Reyes Auto Detailing · gallery + reviews\n9. Aisha Khan · Khan Consulting · lead magnet\n10. Owen Pratt · Pratt Landscaping · seasonal promo page\n11. Nadia Haddad · Haddad Interiors · portfolio rebuild\n12. Carlos Mendez · Mendez Plumbing · 24/7 call CTA",
+        },
+        {
+          id: "as_leads_2",
+          task_id: "t_leads",
+          asset_type: "checklist",
+          title: "What runs on approval",
+          content:
+            "On approval, Operator will:\n• Send 12 emails from alex@northwindstudio.com, spaced 2–4 min apart\n• Log each send as an activity on the matching HubSpot contact\n• Set a 3-day follow-up reminder on any lead that doesn't reply\n• Skip anyone who has replied since the drafts were written",
+        },
+      ],
+    },
+
+    /* ---------------------------- READY: admin -------------------------- */
+    {
+      id: "t_reschedule",
+      workspace_id: workspace.id,
+      category: "admin",
+      title: "Approve reschedule email for Tuesday's client call",
+      description:
+        "Brightsmile asked to move their Tuesday 2pm call. The agent found your next open slot and drafted the reply plus the calendar update.",
+      rationale:
+        "Client emailed 40 minutes ago asking to reschedule. A same-day reply keeps the relationship warm.",
+      status: "ready",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(20 * HOUR),
+      agent_id: "ag_admin",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail", "Google Calendar"],
+      proposed_actions: 2,
+      impact_score: 58,
+      created_at: at(-38 * MIN),
+      updated_at: at(-35 * MIN),
+      assets: [
+        {
+          id: "as_resch_1",
+          task_id: "t_reschedule",
+          asset_type: "email",
+          title: "Reply to Dr. Patel",
+          content:
+            "To: dr.patel@brightsmileclinic.com\nSubject: Re: Need to move Tuesday\n\nHi Dr. Patel,\n\nNo problem at all. I have Thursday at 11:00am or Friday at 1:30pm PT open — would either work?\n\nI'll send a fresh invite as soon as you pick. Looking forward to it.\n\n— Alex",
+        },
+        {
+          id: "as_resch_2",
+          task_id: "t_reschedule",
+          asset_type: "calendar_event",
+          title: "Calendar update",
+          metadata: { from: "Tue 2:00pm PT", to: "Pending client choice" },
+          content:
+            "• Decline current Tue 2:00pm hold\n• Hold Thu 11:00am and Fri 1:30pm tentatively until the client replies\n• Send Google Calendar invite once confirmed",
+        },
+      ],
+    },
+
+    /* ---------------------------- READY: content ------------------------ */
+    {
+      id: "t_hero_copy",
+      workspace_id: workspace.id,
+      category: "content",
+      title: "Review homepage hero copy revision",
+      description:
+        "Your homepage hero still uses two phrases on your restricted list. The agent rewrote it to lead with the client outcome.",
+      rationale:
+        "Quarterly copy audit flagged 'world-class' and 'revolutionary' in the live hero — both are on your restricted-phrases list.",
+      status: "ready",
+      risk_level: "medium",
+      priority: "medium",
+      due_at: at(2 * DAY),
+      agent_id: "ag_content",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Webflow"],
+      proposed_actions: 1,
+      impact_score: 70,
+      created_at: at(-3 * HOUR),
+      updated_at: at(-2 * HOUR),
+      assets: [
+        {
+          id: "as_hero_1",
+          task_id: "t_hero_copy",
+          asset_type: "copy_diff",
+          title: "Homepage hero — before / after",
+          content:
+            "BEFORE (live now)\nHeadline: We build world-class websites for growing businesses.\nSubhead: Northwind Studio delivers revolutionary design and digital strategy.\n\nAFTER (proposed)\nHeadline: A website your customers actually trust.\nSubhead: We design clear, fast websites for service businesses — so the right clients book you, not the competitor down the street.\n\nWhy this change\n• Removes 'world-class' and 'revolutionary' (restricted phrases)\n• Leads with the client's outcome (trust → bookings)\n• Shorter, plainer sentences that match your voice",
+        },
+      ],
+    },
+
+    /* ---------------------------- READY: research ----------------------- */
+    {
+      id: "t_competitor",
+      workspace_id: workspace.id,
+      category: "research",
+      title: "Approve competitor pricing summary delivery",
+      description:
+        "A one-page summary of how three nearby studios price websites — ready to send to your lead at Hargrove Law, who asked how you compare.",
+      rationale:
+        "Marcus at Hargrove Law asked 'how do you compare on price?' This summary answers it without underselling your value.",
+      status: "ready",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(28 * HOUR),
+      agent_id: "ag_research",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail"],
+      proposed_actions: 1,
+      impact_score: 64,
+      created_at: at(-5 * HOUR),
+      updated_at: at(-4 * HOUR),
+      assets: [
+        {
+          id: "as_comp_1",
+          task_id: "t_competitor",
+          asset_type: "summary",
+          title: "How we compare — 1-page summary",
+          content:
+            "Website pricing in your market (3 studios, public pages + quotes)\n\n• Meridian Web Co. — $2,500 flat. Template-based, 2-week turnaround, no brand work, no ongoing support.\n• Lighthouse Digital — $8,000–$15,000. Custom, but 8–12 week timelines and upsells for every revision.\n• Northwind Studio (you) — $5,500 package. Custom site + brand identity, 4-week turnaround, two revision rounds, 3 months of care included.\n\nHow to frame it for Marcus\nYou sit in the middle on price and at the top on value: he gets a custom site AND brand work for less than Lighthouse charges for the site alone, and far faster.",
+        },
+      ],
+    },
+
+    /* ---------------------------- READY: finance ------------------------ */
+    {
+      id: "t_invoices",
+      workspace_id: workspace.id,
+      category: "finance",
+      title: "Approve invoice reminder batch for 3 overdue clients",
+      description:
+        "Three invoices are past due by 9–21 days. The agent drafted friendly, on-brand reminders — no late fees, no pressure.",
+      rationale:
+        "$11,400 is outstanding across three clients. Gentle reminders at this stage recover most invoices without friction.",
+      status: "ready",
+      risk_level: "medium",
+      priority: "high",
+      due_at: at(10 * HOUR),
+      agent_id: "ag_finance",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail", "Stripe"],
+      proposed_actions: 3,
+      impact_score: 80,
+      created_at: at(-80 * MIN),
+      updated_at: at(-70 * MIN),
+      assets: [
+        {
+          id: "as_inv_1",
+          task_id: "t_invoices",
+          asset_type: "invoice_batch",
+          title: "3 reminder emails",
+          metadata: { total_outstanding: 11400 },
+          content:
+            "— — — Reminder 1 — — —\nTo: billing@coastalphysio.com · Invoice #1043 · $3,200 · 9 days overdue\n\nHi Priya,\n\nQuick nudge that invoice #1043 ($3,200) for the Coastal Physio site is now a little past due. If it's already on the way, please ignore this!\n\nYou can pay securely here: [Stripe link]. Happy to resend the invoice if it's helpful.\n\nThanks so much,\nAlex\n\n— — — Reminder 2 — — —\nTo: owen@prattlandscaping.com · Invoice #1039 · $4,000 · 14 days overdue\n\nHi Owen,\n\nHope the season's off to a strong start. Invoice #1039 ($4,000) is showing as overdue on my end — would you be able to settle it this week?\n\nSecure payment link: [Stripe link]. Let me know if anything's unclear.\n\nThanks,\nAlex\n\n— — — Reminder 3 — — —\nTo: nadia@haddadinteriors.com · Invoice #1031 · $4,200 · 21 days overdue\n\nHi Nadia,\n\nFollowing up on invoice #1031 ($4,200), now three weeks past due. I want to make sure it didn't slip through the cracks.\n\nYou can pay here: [Stripe link]. If you'd prefer a payment plan, just say the word.\n\nThanks,\nAlex",
+        },
+      ],
+    },
+
+    /* ---------------------------- AGENT WORKING ------------------------- */
+    {
+      id: "t_reengage",
+      workspace_id: workspace.id,
+      category: "growth",
+      title: "Re-engage 5 cooled trial signups",
+      description:
+        "Five people started a care-plan trial last month and went quiet. The agent is drafting a light, helpful check-in for each.",
+      rationale:
+        "Trials that get one helpful touch in week 3 convert at roughly double the rate of those that don't.",
+      status: "agent_working",
+      risk_level: "medium",
+      priority: "medium",
+      due_at: at(2 * DAY),
+      agent_id: "ag_growth",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail", "HubSpot"],
+      proposed_actions: 5,
+      impact_score: 55,
+      created_at: at(-26 * MIN),
+      updated_at: at(-4 * MIN),
+      assets: [],
+    },
+    {
+      id: "t_newsletter_draft",
+      workspace_id: workspace.id,
+      category: "content",
+      title: "Draft June product-update newsletter",
+      description:
+        "Monthly newsletter pulling together your spring case study, two new care-plan features, and a booking CTA.",
+      rationale:
+        "Your goal is one newsletter per week. The June issue is due to subscribers Thursday.",
+      status: "agent_working",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(3 * DAY),
+      agent_id: "ag_content",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Gmail"],
+      proposed_actions: 1,
+      impact_score: 48,
+      created_at: at(-14 * MIN),
+      updated_at: at(-2 * MIN),
+      assets: [],
+    },
+    {
+      id: "t_calls_summary",
+      workspace_id: workspace.id,
+      category: "research",
+      title: "Summarize 6 customer discovery calls",
+      description:
+        "Turning this week's six recorded discovery calls into a one-page brief of patterns, objections, and feature requests.",
+      rationale:
+        "Six calls happened this week. A single brief beats scrubbing six recordings before your Monday planning.",
+      status: "agent_working",
+      risk_level: "low",
+      priority: "low",
+      due_at: at(4 * DAY),
+      agent_id: "ag_research",
+      created_by_type: "agent",
+      requires_approval: false,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Google Sheets"],
+      proposed_actions: 1,
+      impact_score: 40,
+      created_at: at(-50 * MIN),
+      updated_at: at(-6 * MIN),
+      assets: [],
+    },
+
+    /* ------------------------------- NEW -------------------------------- */
+    {
+      id: "t_receipts",
+      workspace_id: workspace.id,
+      category: "admin",
+      title: "Sort 28 receipts into expense categories",
+      description:
+        "28 receipts landed in your inbox this month. The agent can categorize them and push the summary to your bookkeeping sheet.",
+      rationale:
+        "Receipt sorting is set to auto-run within guardrails — surfaced here so you can glance before it files.",
+      status: "new",
+      risk_level: "low",
+      priority: "low",
+      due_at: at(5 * DAY),
+      agent_id: "ag_admin",
+      created_by_type: "agent",
+      requires_approval: false,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Google Sheets"],
+      proposed_actions: 28,
+      impact_score: 28,
+      created_at: at(-2 * HOUR),
+      updated_at: at(-2 * HOUR),
+      assets: [],
+    },
+    {
+      id: "t_stripe_reconcile",
+      workspace_id: workspace.id,
+      category: "finance",
+      title: "Reconcile 18 Stripe payouts from May",
+      description:
+        "Match 18 May payouts to invoices and flag any mismatches before you close the month.",
+      rationale:
+        "Month-end close is cleaner when payouts are matched while they're fresh. Two payouts look short — worth a glance.",
+      status: "new",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(3 * DAY),
+      agent_id: "ag_finance",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Stripe", "Google Sheets"],
+      proposed_actions: 18,
+      impact_score: 44,
+      created_at: at(-95 * MIN),
+      updated_at: at(-95 * MIN),
+      assets: [],
+    },
+    {
+      id: "t_competitor_watch",
+      workspace_id: workspace.id,
+      category: "research",
+      title: "Track 3 competitors' new pricing pages",
+      description:
+        "Two of the three studios you watch updated their pricing pages this week. The agent can summarize what changed.",
+      rationale:
+        "Set to suggest-only — flagged for you to decide whether a deeper competitive brief is worth it.",
+      status: "new",
+      risk_level: "low",
+      priority: "low",
+      due_at: null,
+      agent_id: "ag_research",
+      created_by_type: "agent",
+      requires_approval: false,
+      approval_status: "pending",
+      execution_status: "none",
+      affected_systems: ["Notion"],
+      proposed_actions: 2,
+      impact_score: 22,
+      created_at: at(-6 * HOUR),
+      updated_at: at(-6 * HOUR),
+      assets: [],
+    },
+
+    /* ------------------------- CHANGES REQUESTED ------------------------ */
+    {
+      id: "t_newsletter_salesy",
+      workspace_id: workspace.id,
+      category: "content",
+      title: "Weekly newsletter — “Why your homepage isn't converting”",
+      description:
+        "Educational newsletter on the three most common homepage mistakes. You sent it back to soften the tone.",
+      rationale:
+        "Drafted for this week's send. You asked for a less salesy tone and no countdown CTA — the agent is revising.",
+      status: "changes_requested",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(28 * HOUR),
+      agent_id: "ag_content",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "changes_requested",
+      execution_status: "none",
+      affected_systems: ["Gmail"],
+      proposed_actions: 1,
+      impact_score: 50,
+      created_at: at(-2 * DAY),
+      updated_at: at(-3 * HOUR),
+      assets: [
+        {
+          id: "as_news_1",
+          task_id: "t_newsletter_salesy",
+          asset_type: "document",
+          title: "Newsletter draft v1 (being revised)",
+          content:
+            "Subject: Your homepage is costing you clients (here's the fix)\n\nHi {{first_name}},\n\nLet's be honest — most homepages are quietly losing business. Don't let yours be one of them! This week only, here are the three mistakes killing your conversions...\n\n[1] No clear outcome above the fold\n[2] A 'Contact us' button instead of a real next step\n[3] Slow load times on mobile\n\nBook your free audit before Friday — spots are limited!\n\n— Alex\n\n---\nYour note: “Make the tone less salesy and cut the countdown/urgency CTA. Keep it genuinely useful — we teach, we don't pressure.”",
+        },
+      ],
+    },
+
+    /* ----------------------------- APPROVED ----------------------------- */
+    {
+      id: "t_review_requests",
+      workspace_id: workspace.id,
+      category: "growth",
+      title: "Send 8 review requests to recent customers",
+      description:
+        "Eight clients whose projects wrapped in the last two weeks — a good moment to ask for a Google review.",
+      rationale:
+        "Approved 3 minutes ago. Operator is sending the requests now and will log each one to HubSpot.",
+      status: "approved",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(8 * HOUR),
+      agent_id: "ag_growth",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "approved",
+      execution_status: "executing",
+      affected_systems: ["Gmail", "HubSpot"],
+      proposed_actions: 8,
+      impact_score: 60,
+      created_at: at(-3 * HOUR),
+      updated_at: at(-3 * MIN),
+      assets: [
+        {
+          id: "as_rev_1",
+          task_id: "t_review_requests",
+          asset_type: "email_batch",
+          title: "8 review-request emails",
+          content:
+            "A short, warm ask sent to each client a few days after their project went live, with a direct link to your Google review page.",
+        },
+      ],
+    },
+
+    /* ------------------------- FAILED (error state) --------------------- */
+    {
+      id: "t_linkedin",
+      workspace_id: workspace.id,
+      category: "content",
+      title: "Publish launch post for Brightsmile case study to LinkedIn",
+      description:
+        "A LinkedIn post celebrating the Brightsmile site launch, with a link to the new case study.",
+      rationale:
+        "Approved this morning, but execution failed: LinkedIn isn't connected yet, so Operator couldn't post.",
+      status: "approved",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(-1 * HOUR),
+      agent_id: "ag_content",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "approved",
+      execution_status: "failed",
+      affected_systems: ["LinkedIn"],
+      proposed_actions: 1,
+      impact_score: 38,
+      created_at: at(-5 * HOUR),
+      updated_at: at(-90 * MIN),
+      assets: [
+        {
+          id: "as_li_1",
+          task_id: "t_linkedin",
+          asset_type: "social_post",
+          title: "LinkedIn post draft",
+          content:
+            "New site day for Brightsmile Clinic 🦷\n\nDr. Patel's patients used to land on a page that didn't explain what made the practice different. Now the homepage leads with the thing they care about most: a calmer first visit — and booking takes one click.\n\nProud of how this one turned out. Full case study in the comments.\n\n#webdesign #smallbusiness #branding",
+        },
+      ],
+    },
+
+    /* ------------------------------- DONE ------------------------------- */
+    {
+      id: "t_done_crm",
+      workspace_id: workspace.id,
+      category: "growth",
+      title: "Update 14 HubSpot records after last week's calls",
+      description:
+        "Logged call notes, next steps, and deal stages for 14 contacts from last week's discovery calls.",
+      rationale:
+        "CRM updates are auto-run within guardrails. Completed cleanly — no conflicts.",
+      status: "done",
+      risk_level: "low",
+      priority: "low",
+      due_at: at(-1 * DAY),
+      agent_id: "ag_growth",
+      created_by_type: "agent",
+      requires_approval: false,
+      approval_status: "approved",
+      execution_status: "completed",
+      affected_systems: ["HubSpot"],
+      proposed_actions: 14,
+      impact_score: 35,
+      created_at: at(-2 * DAY),
+      updated_at: at(-26 * HOUR),
+      assets: [],
+    },
+    {
+      id: "t_done_invites",
+      workspace_id: workspace.id,
+      category: "admin",
+      title: "Send calendar invites for 4 discovery calls",
+      description:
+        "Confirmed times with four prospects and sent Google Calendar invites with your video link.",
+      rationale: "Approved yesterday. All four invites accepted.",
+      status: "done",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(-1 * DAY),
+      agent_id: "ag_admin",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "approved",
+      execution_status: "completed",
+      affected_systems: ["Google Calendar", "Gmail"],
+      proposed_actions: 4,
+      impact_score: 42,
+      created_at: at(-30 * HOUR),
+      updated_at: at(-23 * HOUR),
+      assets: [],
+    },
+    {
+      id: "t_done_invoices",
+      workspace_id: workspace.id,
+      category: "finance",
+      title: "Email May invoices to 9 clients",
+      description:
+        "Generated and sent nine May invoices via Stripe, each with a payment link and your standard terms.",
+      rationale: "Approved Monday. Three already paid within a day.",
+      status: "done",
+      risk_level: "low",
+      priority: "medium",
+      due_at: at(-2 * DAY),
+      agent_id: "ag_finance",
+      created_by_type: "agent",
+      requires_approval: true,
+      approval_status: "approved",
+      execution_status: "completed",
+      affected_systems: ["Stripe", "Gmail"],
+      proposed_actions: 9,
+      impact_score: 46,
+      created_at: at(-3 * DAY),
+      updated_at: at(-2 * DAY),
+      assets: [],
+    },
+  ];
+
+  /* ------------------------- approval decisions ------------------------ */
+  const decisions: ApprovalDecision[] = [
+    {
+      id: "dec_news_1",
+      task_id: "t_newsletter_salesy",
+      decided_by: "Alex Rivera",
+      decision_type: "request_changes",
+      comment:
+        "Make the tone less salesy and cut the countdown/urgency CTA. Keep it genuinely useful — we teach, we don't pressure.",
+      created_at: at(-3 * HOUR),
+    },
+    {
+      id: "dec_rev_1",
+      task_id: "t_review_requests",
+      decided_by: "Alex Rivera",
+      decision_type: "approve",
+      comment: "Looks great — send them.",
+      created_at: at(-4 * MIN),
+    },
+    {
+      id: "dec_li_1",
+      task_id: "t_linkedin",
+      decided_by: "Alex Rivera",
+      decision_type: "approve",
+      created_at: at(-95 * MIN),
+    },
+    {
+      id: "dec_crm_1",
+      task_id: "t_done_crm",
+      decided_by: "Auto-run",
+      decision_type: "approve",
+      created_at: at(-26 * HOUR),
+    },
+    {
+      id: "dec_inv_1",
+      task_id: "t_done_invoices",
+      decided_by: "Alex Rivera",
+      decision_type: "approve",
+      created_at: at(-2 * DAY),
+    },
+    {
+      id: "dec_invites_1",
+      task_id: "t_done_invites",
+      decided_by: "Alex Rivera",
+      decision_type: "approve",
+      created_at: at(-23 * HOUR),
+    },
+  ];
+
+  /* ---------------------------- execution runs ------------------------- */
+  const runs: ExecutionRun[] = [
+    {
+      id: "run_rev_1",
+      task_id: "t_review_requests",
+      started_at: at(-3 * MIN),
+      status: "executing",
+      affected_systems: ["Gmail", "HubSpot"],
+      steps: [
+        { label: "Verify recipients still eligible", status: "done" },
+        { label: "Send 8 review-request emails", status: "running" },
+        { label: "Log activity to HubSpot", status: "pending" },
+      ],
+    },
+    {
+      id: "run_li_1",
+      task_id: "t_linkedin",
+      started_at: at(-92 * MIN),
+      completed_at: at(-90 * MIN),
+      status: "failed",
+      error_message:
+        "LinkedIn is not connected. Operator couldn't authenticate to post. Connect LinkedIn in Integrations, then retry.",
+      affected_systems: ["LinkedIn"],
+      steps: [
+        { label: "Compose post", status: "done" },
+        { label: "Authenticate with LinkedIn", status: "failed" },
+        { label: "Publish post", status: "pending" },
+      ],
+    },
+    {
+      id: "run_crm_1",
+      task_id: "t_done_crm",
+      started_at: at(-26 * HOUR),
+      completed_at: at(-26 * HOUR + 4 * MIN),
+      status: "completed",
+      affected_systems: ["HubSpot"],
+      result_summary: "Updated 14 contacts: notes, next steps, and deal stages. No conflicts.",
+      steps: [
+        { label: "Match calls to contacts", status: "done" },
+        { label: "Write notes & next steps", status: "done" },
+        { label: "Update deal stages", status: "done" },
+      ],
+    },
+    {
+      id: "run_invites_1",
+      task_id: "t_done_invites",
+      started_at: at(-23 * HOUR),
+      completed_at: at(-23 * HOUR + 3 * MIN),
+      status: "completed",
+      affected_systems: ["Google Calendar", "Gmail"],
+      result_summary: "Sent 4 calendar invites with video links. All accepted.",
+      steps: [
+        { label: "Confirm times", status: "done" },
+        { label: "Create calendar events", status: "done" },
+        { label: "Send invites", status: "done" },
+      ],
+    },
+    {
+      id: "run_inv_done_1",
+      task_id: "t_done_invoices",
+      started_at: at(-2 * DAY),
+      completed_at: at(-2 * DAY + 5 * MIN),
+      status: "completed",
+      affected_systems: ["Stripe", "Gmail"],
+      result_summary: "Generated and emailed 9 invoices. 3 paid within 24h.",
+      steps: [
+        { label: "Generate invoices in Stripe", status: "done" },
+        { label: "Attach payment links", status: "done" },
+        { label: "Email clients", status: "done" },
+      ],
+    },
+  ];
+
+  /* ----------------------------- activity ------------------------------ */
+  const activity: ActivityEvent[] = [
+    ev("ae_1", "t_leads", "agent_updated_draft", "agent", "ag_growth", "Growth Agent drafted 12 personalized follow-ups and moved the task to Ready for Approval.", at(-18 * MIN)),
+    ev("ae_2", "t_leads", "task_created", "agent", "ag_growth", "Growth Agent detected 12 warm leads with no contact in 4+ days.", at(-22 * MIN)),
+    ev("ae_3", "t_reschedule", "agent_updated_draft", "agent", "ag_admin", "Admin Agent drafted a reschedule reply and two calendar holds.", at(-35 * MIN)),
+    ev("ae_4", "t_reschedule", "task_created", "agent", "ag_admin", "Admin Agent picked up a reschedule request from Dr. Patel.", at(-38 * MIN)),
+    ev("ae_5", "t_invoices", "agent_updated_draft", "agent", "ag_finance", "Finance Agent drafted 3 invoice reminders ($11,400 outstanding).", at(-70 * MIN)),
+    ev("ae_6", "t_review_requests", "execution_started", "system", "sys", "Execution started: sending 8 review requests.", at(-3 * MIN)),
+    ev("ae_7", "t_review_requests", "approved", "human", "u_alex", "Alex approved “Send 8 review requests to recent customers”.", at(-4 * MIN)),
+    ev("ae_8", "t_linkedin", "execution_failed", "system", "sys", "Execution failed: LinkedIn is not connected.", at(-90 * MIN)),
+    ev("ae_9", "t_linkedin", "approved", "human", "u_alex", "Alex approved the LinkedIn launch post.", at(-95 * MIN)),
+    ev("ae_10", "t_newsletter_salesy", "changes_requested", "human", "u_alex", "Alex requested changes: tone less salesy, cut the urgency CTA.", at(-3 * HOUR)),
+    ev("ae_11", "t_hero_copy", "agent_updated_draft", "agent", "ag_content", "Content Agent flagged 2 restricted phrases in the live hero and proposed a rewrite.", at(-2 * HOUR)),
+    ev("ae_12", "t_done_crm", "execution_completed", "system", "sys", "Execution completed: 14 HubSpot records updated.", at(-26 * HOUR + 4 * MIN)),
+    ev("ae_13", "t_done_invites", "execution_completed", "system", "sys", "Execution completed: 4 calendar invites sent and accepted.", at(-23 * HOUR + 3 * MIN)),
+    ev("ae_14", "t_done_invoices", "execution_completed", "system", "sys", "Execution completed: 9 May invoices emailed.", at(-2 * DAY + 5 * MIN)),
+    ev("ae_15", "t_competitor", "agent_updated_draft", "agent", "ag_research", "Research Agent prepared a 1-page competitor pricing summary.", at(-4 * HOUR)),
+  ];
+
+  return {
+    workspace,
+    brief,
+    agents,
+    tasks,
+    integrations,
+    decisions,
+    runs,
+    activity,
+    session: {
+      authenticated: false,
+      onboarded: false,
+      user_name: "Alex Rivera",
+      user_email: "alex@northwindstudio.com",
+    },
+  };
+
+  function ev(
+    id: string,
+    task_id: string | null,
+    event_type: ActivityEvent["event_type"],
+    actor_type: ActivityEvent["actor_type"],
+    actor_id: string,
+    summary: string,
+    created_at: string,
+  ): ActivityEvent {
+    return {
+      id,
+      workspace_id: workspace.id,
+      task_id,
+      event_type,
+      actor_type,
+      actor_id,
+      summary,
+      created_at,
+    };
+  }
+}
