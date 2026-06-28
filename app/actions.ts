@@ -8,9 +8,18 @@ import {
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
+  workspaceIdForUser,
 } from "@/lib/db/queries";
 import { draftWithClaude } from "@/lib/ai/draft";
-import type { AppState, DraftRequest } from "@/lib/types";
+import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
+import {
+  clearIntegration,
+  markApiKeyConnected,
+  setIntegrationPermissionMode,
+} from "@/lib/integrations/tokens";
+import { getStripeAccount } from "@/lib/integrations/stripe";
+import { runTaskExecution } from "@/lib/integrations/execute";
+import type { AppState, DraftRequest, PermissionMode } from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
@@ -48,6 +57,58 @@ export async function resetWorkspace(): Promise<AppState | null> {
   const user = await getCurrentUser();
   if (!user) return null;
   return resetBundleForUser(user.id, user.email ?? "", displayName(user));
+}
+
+/* ------------------------ integrations (Phase 3) ------------------- */
+
+export async function disconnectIntegrationAction(
+  integrationId: string,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  await clearIntegration(ws, integrationId);
+  return { ok: true };
+}
+
+export async function setIntegrationModeAction(
+  integrationId: string,
+  mode: PermissionMode,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  await setIntegrationPermissionMode(ws, integrationId, mode);
+  return { ok: true };
+}
+
+/** Stripe connects via a server-side secret key (no OAuth). Validates + marks connected. */
+export async function connectStripeAction(): Promise<{ ok: boolean; account?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const provider = providerByKey("stripe");
+  if (!provider || !isProviderConfigured(provider)) {
+    return { ok: false, error: "STRIPE_SECRET_KEY is not configured on the server." };
+  }
+  const account = await getStripeAccount(process.env.STRIPE_SECRET_KEY ?? "");
+  if (!account) return { ok: false, error: "Stripe key appears invalid." };
+  await markApiKeyConnected(ws, provider, account);
+  return { ok: true, account };
+}
+
+/** Approve + execute a task for real (server-side provider calls). */
+export async function runTaskExecutionAction(
+  taskId: string,
+): Promise<{ ok: boolean; summary?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runTaskExecution(ws, taskId, { name: displayName(user), email: user.email ?? "" });
 }
 
 /* --------------------------- AI drafting --------------------------- */

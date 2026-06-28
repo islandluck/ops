@@ -1,0 +1,225 @@
+import "server-only";
+
+import { randomUUID } from "node:crypto";
+import { and, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import {
+  activityEvents,
+  approvalDecisions,
+  businessBriefs,
+  executionRuns,
+  integrations,
+  taskAssets,
+  tasks,
+} from "@/lib/db/schema";
+import { isProviderConfigured, providerForIntegrationName } from "./registry";
+import { getValidAccessToken } from "./tokens";
+import { createCalendarEvent, sendGmail } from "./google";
+import { upsertContact } from "./hubspot";
+import { createDraftInvoice } from "./stripe";
+import type { ExecutionStep } from "@/lib/types";
+
+export interface ExecResult {
+  ok: boolean;
+  summary?: string;
+  error?: string;
+}
+
+function parseSubject(content: string): string {
+  const m = content.match(/Subject:\s*(.+)/i);
+  return m ? m[1].trim() : "Operator — message";
+}
+
+/**
+ * Approve + execute a task entirely server-side, performing REAL provider
+ * actions for connected integrations and recording an auditable run. Safe by
+ * design: Gmail sends to the operator's own address, Stripe creates a draft
+ * (never charges), HubSpot upserts a single demo contact.
+ */
+export async function runTaskExecution(
+  workspaceId: string,
+  taskId: string,
+  actor: { name: string; email: string },
+): Promise<ExecResult> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId)))
+    .limit(1);
+  if (!task) return { ok: false, error: "Task not found." };
+
+  const assets = await db.select().from(taskAssets).where(eq(taskAssets.task_id, taskId));
+  const draft = assets[0]?.content ?? "";
+  const integrationRows = await db
+    .select()
+    .from(integrations)
+    .where(eq(integrations.workspace_id, workspaceId));
+  const connectedByName = new Map(integrationRows.map((i) => [i.name, i]));
+
+  const now = new Date();
+
+  // Record the approval + start.
+  await db.insert(approvalDecisions).values({
+    id: randomUUID(),
+    task_id: taskId,
+    decided_by: actor.name,
+    decision_type: "approve",
+    created_at: now,
+  });
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: taskId,
+    event_type: "approved",
+    actor_type: "human",
+    actor_id: actor.name,
+    summary: `${actor.name} approved “${task.title}”.`,
+    created_at: now,
+  });
+  await db
+    .update(tasks)
+    .set({ approval_status: "approved", status: "approved", execution_status: "executing", updated_at: now })
+    .where(eq(tasks.id, taskId));
+
+  const runId = randomUUID();
+  const steps: ExecutionStep[] = [];
+  const touched: string[] = [];
+  let failure: string | null = null;
+
+  await db.insert(executionRuns).values({
+    id: runId,
+    task_id: taskId,
+    started_at: now,
+    status: "executing",
+    affected_systems: task.affected_systems,
+    steps: [],
+  });
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: taskId,
+    event_type: "execution_started",
+    actor_type: "system",
+    actor_id: "sys",
+    summary: `Execution started: ${task.title}.`,
+    created_at: now,
+  });
+
+  for (const name of task.affected_systems) {
+    const provider = providerForIntegrationName(name);
+    const integ = connectedByName.get(name);
+    const live = provider && isProviderConfigured(provider) && integ?.connected;
+
+    if (!live) {
+      steps.push({ label: `Simulated: update ${name} (not connected)`, status: "done" });
+      continue;
+    }
+
+    try {
+      if (name === "Gmail") {
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No Gmail token");
+        await sendGmail(token, {
+          to: actor.email, // safe self-send (verifiable); production targets the real recipient
+          subject: `[Operator approved] ${parseSubject(draft)}`,
+          body: `This email was sent by Operator after you approved "${task.title}".\n\n— — —\n${draft || task.description}`,
+        });
+        steps.push({ label: `Sent via Gmail (to ${actor.email})`, status: "done" });
+        touched.push("Gmail");
+      } else if (name === "Google Calendar") {
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No Calendar token");
+        const start = task.due_at ? new Date(task.due_at) : new Date(Date.now() + 3600_000);
+        const end = new Date(start.getTime() + 30 * 60_000);
+        await createCalendarEvent(token, {
+          summary: task.title,
+          description: task.description,
+          startISO: start.toISOString(),
+          endISO: end.toISOString(),
+        });
+        steps.push({ label: "Created Google Calendar event", status: "done" });
+        touched.push("Google Calendar");
+      } else if (name === "HubSpot") {
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No HubSpot token");
+        const r = await upsertContact(token, {
+          email: "operator-demo@example.com",
+          firstname: "Operator",
+          lastname: "Demo Contact",
+        });
+        steps.push({ label: `${r.created ? "Created" : "Updated"} HubSpot contact`, status: "done" });
+        touched.push("HubSpot");
+      } else if (name === "Stripe") {
+        const key = process.env.STRIPE_SECRET_KEY ?? "";
+        await createDraftInvoice(key, {
+          customerEmail: "operator-demo@example.com",
+          amountCents: 5000,
+          description: task.title,
+        });
+        steps.push({ label: "Created Stripe draft invoice (test)", status: "done" });
+        touched.push("Stripe");
+      } else {
+        steps.push({ label: `Simulated: update ${name}`, status: "done" });
+      }
+    } catch (e) {
+      failure = e instanceof Error ? e.message : `Failed updating ${name}`;
+      steps.push({ label: `${name}: ${failure}`, status: "failed" });
+      break;
+    }
+  }
+
+  const done = new Date();
+  if (failure) {
+    await db
+      .update(executionRuns)
+      .set({ status: "failed", error_message: failure, completed_at: done, steps })
+      .where(eq(executionRuns.id, runId));
+    await db.update(tasks).set({ execution_status: "failed", updated_at: done }).where(eq(tasks.id, taskId));
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: taskId,
+      event_type: "execution_failed",
+      actor_type: "system",
+      actor_id: "sys",
+      summary: `Execution failed: ${failure}`,
+      created_at: done,
+    });
+    return { ok: false, error: failure };
+  }
+
+  const summary = touched.length
+    ? `Executed live: ${touched.join(", ")}.`
+    : "Completed (no connected systems — simulated).";
+  await db
+    .update(executionRuns)
+    .set({ status: "completed", completed_at: done, result_summary: summary, steps })
+    .where(eq(executionRuns.id, runId));
+  await db
+    .update(tasks)
+    .set({ status: "done", execution_status: "completed", updated_at: done })
+    .where(eq(tasks.id, taskId));
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: taskId,
+    event_type: "execution_completed",
+    actor_type: "system",
+    actor_id: "sys",
+    summary: `Execution completed: ${task.title}. ${summary}`,
+    created_at: done,
+  });
+  if (touched.length) {
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: taskId,
+      event_type: "integration_touched",
+      actor_type: "system",
+      actor_id: "sys",
+      summary: `Touched ${touched.join(", ")}.`,
+      created_at: new Date(done.getTime() + 1),
+    });
+  }
+  return { ok: true, summary };
+}

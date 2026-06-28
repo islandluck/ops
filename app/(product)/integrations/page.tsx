@@ -1,11 +1,13 @@
 "use client";
 
-import { Check, Plug, ShieldCheck } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Check, Plug, ShieldCheck, Wand2, Zap } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
 import { useStore } from "@/lib/store";
+import { hasSupabaseClientEnv } from "@/lib/config";
 import { PERMISSION_META } from "@/lib/constants";
 import { cn } from "@/lib/cn";
 import type { Integration, PermissionMode } from "@/lib/types";
@@ -22,9 +24,33 @@ const PROVIDER_COLOR: Record<string, string> = {
   Notion: "bg-slate-100 text-slate-700",
 };
 
+const ERROR_LABELS: Record<string, string> = {
+  not_configured: "That provider isn't configured on the server yet (see PHASE3.md).",
+  no_encryption_key: "TOKEN_ENCRYPTION_KEY is missing on the server.",
+  state_mismatch: "The connection request expired or didn't match. Please try again.",
+  bad_state: "Invalid connection state. Please try again.",
+  invalid_callback: "The provider returned an unexpected response.",
+  no_workspace: "No workspace found for your account.",
+  access_denied: "You declined the permission request.",
+};
+
 export default function IntegrationsPage() {
-  const { state, connectIntegration, disconnectIntegration, setIntegrationMode } =
-    useStore();
+  const { state, connectIntegration, disconnectIntegration, setIntegrationMode } = useStore();
+  const serverMode = hasSupabaseClientEnv;
+  const [banner, setBanner] = useState<{ tone: "success" | "error"; msg: string } | null>(null);
+
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const connected = p.get("connected");
+    const error = p.get("error");
+    if (connected) {
+      setBanner({ tone: "success", msg: `${cap(connected)} connected successfully.` });
+    } else if (error) {
+      setBanner({ tone: "error", msg: ERROR_LABELS[error] ?? decodeURIComponent(error) });
+    }
+    if (connected || error) window.history.replaceState({}, "", "/integrations");
+  }, []);
+
   if (!state) return null;
 
   const core = state.integrations.filter((i) => !i.optional);
@@ -35,7 +61,7 @@ export default function IntegrationsPage() {
     <>
       <PageHeader
         title="Integrations"
-        description="Connect the tools your agents work across. No infrastructure to set up."
+        description="Connect the tools your agents work across. Approved tasks execute against the real APIs."
         actions={
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-[12px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
             <Plug className="h-3.5 w-3.5" />
@@ -44,6 +70,24 @@ export default function IntegrationsPage() {
         }
       />
       <PageBody>
+        {banner && (
+          <div
+            className={cn(
+              "mb-5 flex items-start gap-3 rounded-xl border p-4",
+              banner.tone === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-red-200 bg-red-50 text-red-700",
+            )}
+          >
+            {banner.tone === "success" ? (
+              <Check className="mt-0.5 h-5 w-5 shrink-0" />
+            ) : (
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            )}
+            <p className="text-[13.5px]">{banner.msg}</p>
+          </div>
+        )}
+
         <div className="mb-6 flex items-start gap-3 rounded-xl border border-border bg-card p-4">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <div>
@@ -52,7 +96,7 @@ export default function IntegrationsPage() {
             </p>
             <p className="mt-0.5 text-[13px] text-muted-foreground">
               Set every connection to <strong>Suggest only</strong>, <strong>Approval required</strong>, or
-              <strong> Auto-run within guardrails</strong>. Money and paid media never auto-run.
+              <strong> Auto-run within guardrails</strong>. Tokens are encrypted at rest and never leave the server.
             </p>
           </div>
         </div>
@@ -62,6 +106,7 @@ export default function IntegrationsPage() {
             <IntegrationCard
               key={i.id}
               integration={i}
+              serverMode={serverMode}
               onConnect={() => connectIntegration(i.id)}
               onDisconnect={() => disconnectIntegration(i.id)}
               onMode={(m) => setIntegrationMode(i.id, m)}
@@ -74,6 +119,7 @@ export default function IntegrationsPage() {
             <IntegrationCard
               key={i.id}
               integration={i}
+              serverMode={serverMode}
               onConnect={() => connectIntegration(i.id)}
               onDisconnect={() => disconnectIntegration(i.id)}
               onMode={(m) => setIntegrationMode(i.id, m)}
@@ -83,6 +129,10 @@ export default function IntegrationsPage() {
       </PageBody>
     </>
   );
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function Section({
@@ -107,15 +157,21 @@ function Section({
 
 function IntegrationCard({
   integration: i,
+  serverMode,
   onConnect,
   onDisconnect,
   onMode,
 }: {
   integration: Integration;
+  serverMode: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onMode: (m: PermissionMode) => void;
 }) {
+  // In server mode, only registry-backed providers (Gmail/Calendar/HubSpot/Stripe) are live.
+  const wired = !serverMode || Boolean(i.oauth_provider);
+  const needsSetup = serverMode && Boolean(i.oauth_provider) && !i.configured;
+
   return (
     <Card className="flex flex-col p-4">
       <div className="flex items-start gap-3">
@@ -128,17 +184,30 @@ function IntegrationCard({
           {i.name[0]}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-[14px] font-semibold">{i.name}</h3>
-            {i.connected && (
+            {i.connected ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-700">
                 <Check className="h-3 w-3" /> Connected
               </span>
-            )}
+            ) : needsSetup ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-700">
+                Setup required
+              </span>
+            ) : !wired ? (
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-semibold text-slate-500">
+                Coming soon
+              </span>
+            ) : null}
           </div>
           <p className="mt-0.5 truncate text-[12px] text-muted-foreground">
             {i.connected ? i.account : `Connect your ${i.provider} account`}
           </p>
+          {i.action_label && (
+            <p className="mt-1 inline-flex items-center gap-1 text-[11.5px] text-muted-foreground">
+              <Zap className="h-3 w-3" /> {i.action_label}
+            </p>
+          )}
         </div>
       </div>
 
@@ -171,9 +240,15 @@ function IntegrationCard({
         </div>
       ) : (
         <div className="mt-4">
-          <Button size="sm" variant="outline" className="w-full" onClick={onConnect}>
-            <Plug className="h-4 w-4" />
-            Connect {i.name}
+          <Button
+            size="sm"
+            variant={needsSetup || !wired ? "outline" : "primary"}
+            className="w-full"
+            disabled={!wired}
+            onClick={onConnect}
+          >
+            {needsSetup ? <Wand2 className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
+            {!wired ? "Not yet available" : needsSetup ? "Set up to connect" : `Connect ${i.name}`}
           </Button>
         </div>
       )}

@@ -202,6 +202,12 @@ export interface Integration {
   account?: string;
   permission_mode: PermissionMode;
   optional: boolean;
+  /** Phase 3 (computed at load, never stored): the real OAuth/API provider key. */
+  oauth_provider?: string;
+  /** Phase 3: whether the backend has this provider's credentials configured. */
+  configured?: boolean;
+  /** Phase 3: one-line description of what executing this provider does. */
+  action_label?: string;
 }
 
 export interface ActivityEvent {

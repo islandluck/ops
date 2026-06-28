@@ -77,6 +77,7 @@ export function TaskDrawer() {
     retry,
     snooze,
     setAgentMode,
+    busyTaskId,
   } = useStore();
 
   const [mode, setMode] = useState<"idle" | "changes" | "reject">("idle");
@@ -131,6 +132,7 @@ export function TaskDrawer() {
     .filter((d) => d.task_id === task.id && d.decision_type === "request_changes")
     .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))[0];
 
+  const busy = busyTaskId === task.id;
   const executing = task.execution_status === "executing";
   const failed = task.execution_status === "failed";
   const completed = task.status === "done" && task.execution_status === "completed";
@@ -189,6 +191,13 @@ export function TaskDrawer() {
       {/* Body --------------------------------------------------------- */}
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
         {/* Execution banners */}
+        {busy && (
+          <Banner tone="info" icon={Loader2} spin title="Executing live on the server…">
+            <p className="text-[13px] text-primary/90">
+              Operator is performing the real actions on your connected tools. This may take a few seconds.
+            </p>
+          </Banner>
+        )}
         {executing && run && (
           <Banner tone="info" icon={Loader2} spin title="Executing now">
             <ExecutionSteps run={run} />
@@ -426,7 +435,7 @@ export function TaskDrawer() {
               </Button>
             </div>
           </div>
-        ) : executing ? (
+        ) : executing || busy ? (
           <Button size="lg" className="w-full" disabled>
             <Loader2 className="h-4 w-4 animate-spin" />
             Executing…

@@ -17,6 +17,7 @@ import {
 } from "./schema";
 import { buildSeedRows } from "./seed-workspace";
 import { hasAnthropicKey } from "@/lib/config";
+import { isProviderConfigured, providerForIntegrationName } from "@/lib/integrations/registry";
 import type {
   ActivityEvent,
   Agent,
@@ -36,6 +37,10 @@ const uid = () => crypto.randomUUID();
 /* ------------------------------------------------------------------ */
 /* Provisioning + load                                                 */
 /* ------------------------------------------------------------------ */
+
+export async function workspaceIdForUser(userId: string): Promise<string | null> {
+  return getWorkspaceId(userId);
+}
 
 async function getWorkspaceId(userId: string): Promise<string | null> {
   const rows = await db
@@ -177,16 +182,23 @@ async function readBundle(
     tasks_prepared: a.tasks_prepared,
   }));
 
-  const mappedIntegrations: Integration[] = integrationRows.map((i) => ({
-    id: i.id,
-    name: i.name,
-    provider: i.provider,
-    category: i.category,
-    connected: i.connected,
-    account: i.account ?? undefined,
-    permission_mode: i.permission_mode,
-    optional: i.optional,
-  }));
+  const mappedIntegrations: Integration[] = integrationRows.map((i) => {
+    const prov = providerForIntegrationName(i.name);
+    return {
+      id: i.id,
+      name: i.name,
+      provider: i.provider,
+      category: i.category,
+      connected: i.connected,
+      account: i.account ?? undefined,
+      permission_mode: i.permission_mode,
+      optional: i.optional,
+      // Phase 3 display flags (tokens are never sent to the client).
+      oauth_provider: prov?.key,
+      configured: prov ? isProviderConfigured(prov) : false,
+      action_label: prov?.actionLabel,
+    };
+  });
 
   const mappedTasks: Task[] = taskRows.map((t) => ({
     id: t.id,
@@ -294,8 +306,10 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
       .where(eq(workspaces.id, wsId));
 
     // Replace child rows (delete in FK-safe order, then reinsert).
+    // NOTE: integrations are intentionally excluded — they hold server-only OAuth
+    // tokens + connection state managed by the OAuth callback and dedicated
+    // actions, and must never be clobbered by a client-driven bundle save.
     await tx.delete(activityEvents).where(eq(activityEvents.workspace_id, wsId));
-    await tx.delete(integrations).where(eq(integrations.workspace_id, wsId));
     await tx.delete(agents).where(eq(agents.workspace_id, wsId));
     const wsTasks = await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.workspace_id, wsId));
     for (const { id } of wsTasks) {
@@ -341,20 +355,7 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
         })),
       );
 
-    if (state.integrations.length)
-      await tx.insert(integrations).values(
-        state.integrations.map((i) => ({
-          id: i.id,
-          workspace_id: wsId,
-          name: i.name,
-          provider: i.provider,
-          category: i.category,
-          connected: i.connected,
-          account: i.account ?? null,
-          permission_mode: i.permission_mode,
-          optional: i.optional,
-        })),
-      );
+    // (integrations deliberately not re-inserted here — see note above)
 
     if (state.tasks.length)
       await tx.insert(tasks).values(

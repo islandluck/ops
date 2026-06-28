@@ -15,10 +15,14 @@ import { createSeedState } from "./seed";
 import { makeId } from "./format";
 import { hasSupabaseClientEnv } from "./config";
 import {
+  connectStripeAction,
+  disconnectIntegrationAction,
   generateDraft,
   loadWorkspace,
   resetWorkspace,
+  runTaskExecutionAction,
   saveWorkspace,
+  setIntegrationModeAction,
   signOutAction,
 } from "@/app/actions";
 import type {
@@ -99,6 +103,8 @@ interface StoreContext {
   state: AppState | null;
   loadError: boolean;
   reloadWorkspace: () => void;
+  /** Task currently executing live on the server (transient). */
+  busyTaskId: string | null;
 
   // selection / drawer
   selectedTaskId: string | null;
@@ -153,6 +159,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [filters, setFiltersState] = useState<BoardFilters>(DEFAULT_FILTERS);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [loadError, setLoadError] = useState(false);
+  // Transient (not persisted): a task running real server-side execution.
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Server mode (Supabase configured) persists to Postgres via server actions;
@@ -316,12 +324,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         task = prev.tasks.find((t) => t.id === taskId);
         if (!task) return prev;
 
-        // Which affected system, if any, is not connected?
-        disconnected =
-          task.affected_systems.find((name) => {
-            const integ = prev.integrations.find((i) => i.name === name);
-            return integ ? !integ.connected : false;
-          }) ?? null;
+        // Demo only: surface a disconnected system as a failure (the LinkedIn
+        // story). In server mode this simulated path runs only for tasks with no
+        // live integration, and should simply succeed.
+        disconnected = serverMode
+          ? null
+          : (task.affected_systems.find((name) => {
+              const integ = prev.integrations.find((i) => i.name === name);
+              return integ ? !integ.connected : false;
+            }) ?? null);
 
         const steps: ExecutionStep[] = buildSteps(task);
         steps[0].status = "running";
@@ -442,8 +453,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   /* ----------------------- task actions ---------------------------- */
 
+  // Approve + execute for real on the server when a connected integration is
+  // involved (no client bundle writes — the server owns the execution audit).
+  const executeLive = useCallback(
+    (id: string, working: string) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current); // don't clobber server writes
+      setBusyTaskId(id);
+      pushToast({ tone: "working", title: working });
+      void runTaskExecutionAction(id)
+        .then(async (res) => {
+          await loadServer();
+          setBusyTaskId(null);
+          if (res.ok) {
+            pushToast({ tone: "success", title: "Task completed", description: res.summary });
+          } else {
+            pushToast({ tone: "error", title: "Execution failed", description: res.error });
+          }
+        })
+        .catch(() => {
+          setBusyTaskId(null);
+          pushToast({ tone: "error", title: "Execution failed" });
+        });
+    },
+    [pushToast, loadServer],
+  );
+
   const approve = useCallback(
     (id: string, comment?: string, withEdits = false) => {
+      const snap = latest.current;
+      if (serverMode && snap && taskUsesLiveIntegration(snap, id)) {
+        executeLive(id, "Approved — executing live…");
+        return;
+      }
       patchState((prev) => {
         const decision: ApprovalDecision = {
           id: makeId("dec"),
@@ -474,7 +515,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Kick off execution on the next tick so state has settled.
       schedule(() => runExecution(id), 350);
     },
-    [patchState, updateTask, logEvent, schedule, runExecution],
+    [serverMode, executeLive, patchState, updateTask, logEvent, schedule, runExecution],
   );
 
   /* ---------------- AI drafting (Phase 2, server mode) ------------- */
@@ -807,6 +848,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const retry = useCallback(
     (id: string) => {
+      const snap = latest.current;
+      if (serverMode && snap && taskUsesLiveIntegration(snap, id)) {
+        executeLive(id, "Retrying execution…");
+        return;
+      }
       // Reset to a clean approved state and run execution again.
       patchState((prev) => ({
         ...prev,
@@ -822,47 +868,88 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }));
       schedule(() => runExecution(id), 250);
     },
-    [patchState, updateTask, logEvent, schedule, runExecution],
+    [serverMode, executeLive, patchState, updateTask, logEvent, schedule, runExecution],
   );
 
   /* ----------------- integrations / agents / brief ---------------- */
 
   const connectIntegration = useCallback(
     (id: string) => {
-      patchState((prev) => {
-        const integ = prev.integrations.find((i) => i.id === id);
-        return {
-          ...prev,
-          integrations: prev.integrations.map((i) =>
-            i.id === id
-              ? { ...i, connected: true, account: i.account ?? "Connected account" }
-              : i,
-          ),
-          activity: logEvent(
-            prev,
-            null,
-            "integration_touched",
-            "human",
-            prev.session.user_name,
-            `${prev.session.user_name} connected ${integ?.name ?? "an integration"}.`,
-          ),
-        };
-      });
+      const s = latest.current;
+      const integ = s?.integrations.find((i) => i.id === id);
+      if (serverMode && integ) {
+        const provider = integ.oauth_provider;
+        if (provider === "google" || provider === "hubspot") {
+          if (!integ.configured) {
+            pushToast({
+              tone: "error",
+              title: `${integ.name} needs setup`,
+              description: "Add this provider's OAuth credentials to the server env (see PHASE3.md).",
+            });
+            return;
+          }
+          // Full-page redirect into the OAuth consent flow.
+          window.location.href = `/api/integrations/${provider}/connect`;
+          return;
+        }
+        if (provider === "stripe") {
+          if (!integ.configured) {
+            pushToast({ tone: "error", title: "Stripe needs setup", description: "Set STRIPE_SECRET_KEY on the server (see PHASE3.md)." });
+            return;
+          }
+          pushToast({ tone: "working", title: "Connecting Stripe…" });
+          void connectStripeAction().then((res) => {
+            if (res.ok) {
+              void loadServer();
+              pushToast({ tone: "success", title: "Stripe connected", description: res.account });
+            } else {
+              pushToast({ tone: "error", title: "Couldn't connect Stripe", description: res.error });
+            }
+          });
+          return;
+        }
+        pushToast({ tone: "info", title: `${integ.name} isn't wired yet`, description: "This connector is coming in a future update." });
+        return;
+      }
+      // Demo mode: local mock connect.
+      patchState((prev) => ({
+        ...prev,
+        integrations: prev.integrations.map((i) =>
+          i.id === id ? { ...i, connected: true, account: i.account ?? "Connected account" } : i,
+        ),
+        activity: logEvent(
+          prev,
+          null,
+          "integration_touched",
+          "human",
+          prev.session.user_name,
+          `${prev.session.user_name} connected ${integ?.name ?? "an integration"}.`,
+        ),
+      }));
       pushToast({ tone: "success", title: "Integration connected" });
     },
-    [patchState, logEvent, pushToast],
+    [serverMode, patchState, logEvent, pushToast, loadServer],
   );
 
   const disconnectIntegration = useCallback(
     (id: string) => {
-      patchState((prev) => ({
-        ...prev,
-        integrations: prev.integrations.map((i) =>
-          i.id === id ? { ...i, connected: false } : i,
-        ),
-      }));
+      patchState((prev) => {
+        const provider = prev.integrations.find((i) => i.id === id)?.oauth_provider;
+        return {
+          ...prev,
+          integrations: prev.integrations.map((i) =>
+            i.id === id || (provider && i.oauth_provider === provider)
+              ? { ...i, connected: false, account: undefined }
+              : i,
+          ),
+        };
+      });
+      if (serverMode) {
+        void disconnectIntegrationAction(id);
+        pushToast({ tone: "info", title: "Disconnected" });
+      }
     },
-    [patchState],
+    [serverMode, patchState, pushToast],
   );
 
   const setIntegrationMode = useCallback(
@@ -873,8 +960,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           i.id === id ? { ...i, permission_mode: mode } : i,
         ),
       }));
+      if (serverMode) void setIntegrationModeAction(id, mode);
     },
-    [patchState],
+    [serverMode, patchState],
   );
 
   const setAgentMode = useCallback(
@@ -1022,6 +1110,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       state,
       loadError,
       reloadWorkspace: loadServer,
+      busyTaskId,
       selectedTaskId,
       selectTask: setSelectedTaskId,
       filters,
@@ -1051,7 +1140,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetDemo,
     }),
     [
-      hydrated, state, loadError, loadServer, selectedTaskId, filters, toasts, setFilters, resetFilters,
+      hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
       applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, updateBrief, login, logout, enterDemo,
@@ -1164,6 +1253,16 @@ function labelForStatus(status: TaskStatus): string {
     done: "Done",
   };
   return map[status];
+}
+
+/** Does the task touch an integration that is connected AND provider-configured? */
+function taskUsesLiveIntegration(s: AppState, taskId: string): boolean {
+  const task = s.tasks.find((t) => t.id === taskId);
+  if (!task) return false;
+  return task.affected_systems.some((name) => {
+    const integ = s.integrations.find((i) => i.name === name);
+    return Boolean(integ?.connected && integ?.configured);
+  });
 }
 
 function assetTypeFor(category: Category): AssetType {

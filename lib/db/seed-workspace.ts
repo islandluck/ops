@@ -81,14 +81,16 @@ export function buildSeedRows(
     tasks_prepared: a.tasks_prepared,
   }));
 
+  // A real (server) workspace starts with NO integrations connected — connection
+  // reflects a genuine OAuth grant / API key (Phase 3), not the demo's cosmetic state.
   const integrations: InsertIntegration[] = seed.integrations.map((i) => ({
     id: uid(),
     workspace_id: workspaceId,
     name: i.name,
     provider: i.provider,
     category: i.category,
-    connected: i.connected,
-    account: i.account ?? null,
+    connected: false,
+    account: null,
     permission_mode: i.permission_mode,
     optional: i.optional,
   }));
