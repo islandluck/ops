@@ -17,6 +17,7 @@ import {
 import type {
   ApprovalRule,
   AgentStatus,
+  AgentTier,
   ApprovalStatus,
   AssetType,
   Category,
@@ -97,6 +98,18 @@ export const agents = pgTable("agents", {
   description: text("description").notNull().default(""),
   last_run_at: timestamp("last_run_at", { withTimezone: true }).defaultNow().notNull(),
   tasks_prepared: integer("tasks_prepared").notNull().default(0),
+  // Editable persona + capabilities (agent personas / build-an-agent).
+  instructions: text("instructions").notNull().default(""),
+  folder: text("folder").notNull().default(""),
+  background_enabled: boolean("background_enabled").notNull().default(false),
+  allowed_integrations: text("allowed_integrations").array().notNull().default([]),
+  log_activity: boolean("log_activity").notNull().default(true),
+  tier: text("tier").$type<AgentTier>().notNull().default("worker"),
+  premium: boolean("premium").notNull().default(false),
+  created_by_type: text("created_by_type").$type<"system" | "user">().notNull().default("system"),
+  emoji: text("emoji").notNull().default(""),
+  accent: text("accent").notNull().default("indigo"),
+  archived: boolean("archived").notNull().default(false),
 });
 
 export const integrations = pgTable("integrations", {

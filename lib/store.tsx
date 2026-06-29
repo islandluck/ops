@@ -20,6 +20,7 @@ import {
   generateDraft,
   loadWorkspace,
   resetWorkspace,
+  runAgentAction,
   runTaskExecutionAction,
   saveWorkspace,
   setIntegrationModeAction,
@@ -85,6 +86,20 @@ export interface CreateTaskInput {
   requires_approval?: boolean;
 }
 
+export interface CreateAgentInput {
+  name: string;
+  description: string;
+  instructions: string;
+  category: Category;
+  permissions_mode?: PermissionMode;
+  background_enabled?: boolean;
+  allowed_integrations?: string[];
+  folder?: string;
+  log_activity?: boolean;
+  emoji?: string;
+  accent?: string;
+}
+
 export interface OnboardingPayload {
   company_name: string;
   website_url: string;
@@ -136,6 +151,10 @@ interface StoreContext {
   disconnectIntegration: (id: string) => void;
   setIntegrationMode: (id: string, mode: PermissionMode) => void;
   setAgentMode: (id: string, mode: PermissionMode) => void;
+  createAgent: (input: CreateAgentInput) => void;
+  updateAgent: (id: string, patch: Partial<Agent>) => void;
+  deleteAgent: (id: string) => void;
+  runAgent: (id: string) => Promise<void>;
   updateBrief: (patch: Partial<BusinessBrief>) => void;
 
   // session
@@ -978,6 +997,124 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [patchState, pushToast],
   );
 
+  /* ------------------- agent personas (build / edit) -------------- */
+
+  const createAgent = useCallback(
+    (input: CreateAgentInput) => {
+      patchState((prev) => {
+        const agent: Agent = {
+          id: makeId(),
+          workspace_id: prev.workspace.id,
+          name: input.name.trim() || "New Agent",
+          category: input.category,
+          status: "idle",
+          permissions_mode: input.permissions_mode ?? "approval",
+          description: input.description,
+          last_run_at: new Date().toISOString(),
+          tasks_prepared: 0,
+          instructions: input.instructions,
+          folder: input.folder?.trim() || input.name.trim() || "General",
+          background_enabled: input.background_enabled ?? false,
+          allowed_integrations: input.allowed_integrations ?? [],
+          log_activity: input.log_activity ?? true,
+          tier: "worker",
+          premium: false,
+          created_by_type: "user",
+          emoji: input.emoji || "🤖",
+          accent: input.accent || "indigo",
+          archived: false,
+        };
+        return { ...prev, agents: [...prev.agents, agent] };
+      });
+      pushToast({ tone: "success", title: "Agent created", description: input.name });
+    },
+    [patchState, pushToast],
+  );
+
+  const updateAgent = useCallback(
+    (id: string, patch: Partial<Agent>) => {
+      patchState((prev) => ({
+        ...prev,
+        agents: prev.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+      }));
+    },
+    [patchState],
+  );
+
+  const deleteAgent = useCallback(
+    (id: string) => {
+      patchState((prev) => {
+        const a = prev.agents.find((x) => x.id === id);
+        if (!a || a.created_by_type !== "user") return prev; // only custom agents
+        return { ...prev, agents: prev.agents.filter((x) => x.id !== id) };
+      });
+      pushToast({ tone: "info", title: "Agent removed" });
+    },
+    [patchState, pushToast],
+  );
+
+  const runAgent = useCallback(
+    async (id: string) => {
+      const s = latest.current;
+      const agent = s?.agents.find((a) => a.id === id);
+      if (!agent || agent.premium) {
+        pushToast({ tone: "info", title: "Premium agent", description: "Manager & Executive are coming soon." });
+        return;
+      }
+      if (!serverMode) {
+        // Demo: create a local placeholder task so the flow is visible.
+        patchState((prev) => {
+          const taskId = makeId();
+          const task: Task = {
+            id: taskId,
+            workspace_id: prev.workspace.id,
+            category: agent.category,
+            title: `${agent.name}: prepared a new task`,
+            description: "A task this agent would prepare. Connect the backend + AI to generate real work.",
+            rationale: "Generated on demand from this agent.",
+            status: "ready",
+            risk_level: "low",
+            priority: "medium",
+            due_at: new Date(Date.now() + 2 * 86400000).toISOString(),
+            agent_id: agent.id,
+            created_by_type: "agent",
+            requires_approval: agent.permissions_mode !== "auto",
+            approval_status: "pending",
+            execution_status: "none",
+            affected_systems: agent.allowed_integrations,
+            proposed_actions: 1,
+            impact_score: 40,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            assets: [],
+          };
+          return { ...prev, tasks: [task, ...prev.tasks] };
+        });
+        pushToast({ tone: "success", title: `${agent.name} prepared a task` });
+        return;
+      }
+      // Server: real AI generation + persistence.
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      pushToast({ tone: "working", title: `${agent.name} is working…` });
+      try {
+        const res = await runAgentAction(id);
+        await loadServer();
+        if (res.ok) {
+          pushToast({
+            tone: "success",
+            title: `${agent.name} prepared a task`,
+            description: res.shipped ? `${res.taskTitle} — shipped automatically.` : res.taskTitle,
+          });
+        } else {
+          pushToast({ tone: "error", title: "Agent couldn't run", description: res.error });
+        }
+      } catch {
+        pushToast({ tone: "error", title: "Agent couldn't run" });
+      }
+    },
+    [serverMode, patchState, pushToast, loadServer],
+  );
+
   const updateBrief = useCallback(
     (patch: Partial<BusinessBrief>) => {
       patchState((prev) => ({
@@ -1132,6 +1269,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       disconnectIntegration,
       setIntegrationMode,
       setAgentMode,
+      createAgent,
+      updateAgent,
+      deleteAgent,
+      runAgent,
       updateBrief,
       login,
       logout,
@@ -1143,7 +1284,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
       applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
-      setIntegrationMode, setAgentMode, updateBrief, login, logout, enterDemo,
+      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
     ],
   );
@@ -1277,6 +1418,7 @@ function buildDraftRequest(
   instruction?: string,
   existingDraft?: string,
 ): DraftRequest {
+  const agent = s.agents.find((a) => a.id === task.agent_id);
   return {
     category: task.category,
     title: task.title,
@@ -1289,5 +1431,7 @@ function buildDraftRequest(
     idealCustomer: s.brief.ideal_customer_profile,
     voiceRules: s.brief.voice_rules,
     restrictedPhrases: s.brief.restricted_phrases,
+    agentName: agent?.name,
+    agentInstructions: agent?.instructions,
   };
 }

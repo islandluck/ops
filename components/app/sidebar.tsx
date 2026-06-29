@@ -15,6 +15,7 @@ import {
   Settings,
   ShieldAlert,
   SquareKanban,
+  Users,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
 import { CATEGORY_ICONS } from "@/components/badges";
@@ -28,6 +29,7 @@ import type { Category } from "@/lib/types";
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/approvals", label: "Approval Center", icon: SquareKanban },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/agents", label: "Agents", icon: Users },
   { href: "/activity", label: "Activity log", icon: ScrollText },
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/brief", label: "Business brief", icon: FileText },
@@ -199,7 +201,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
         {/* Agents */}
         <Section title="Agents">
-          {state?.agents.map((agent) => {
+          {state?.agents
+            .filter((agent) => agent.tier === "worker" && !agent.archived)
+            .map((agent) => {
             const active = filters.agentId === agent.id && pathname === "/approvals";
             return (
               <button

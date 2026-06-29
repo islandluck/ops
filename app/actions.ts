@@ -19,6 +19,7 @@ import {
 } from "@/lib/integrations/tokens";
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { runAgentForWorkspace, type RunAgentResult } from "@/lib/agents/run";
 import type { AppState, DraftRequest, PermissionMode } from "@/lib/types";
 
 function displayName(user: User): string {
@@ -109,6 +110,15 @@ export async function runTaskExecutionAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runTaskExecution(ws, taskId, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Run an agent now — it prepares a fresh task (and ships it if on auto). */
+export async function runAgentAction(agentId: string): Promise<RunAgentResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runAgentForWorkspace(ws, agentId, { name: displayName(user), email: user.email ?? "" });
 }
 
 /* --------------------------- AI drafting --------------------------- */

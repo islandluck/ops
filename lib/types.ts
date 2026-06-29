@@ -47,6 +47,9 @@ export type PermissionMode = "suggest" | "approval" | "auto";
 
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
+/** Role in the agent hierarchy. Manager/Executive are premium. */
+export type AgentTier = "worker" | "manager" | "executive";
+
 export type AssetType =
   | "email"
   | "email_batch"
@@ -124,10 +127,30 @@ export interface Agent {
   name: string;
   category: Category;
   status: AgentStatus;
+  /** Autonomy: suggest (ideas only) · approval (prepare + wait) · auto (ship). */
   permissions_mode: PermissionMode;
   description: string;
   last_run_at: string;
   tasks_prepared: number;
+  /** Editable persona prompt — injected into this agent's Claude calls. */
+  instructions: string;
+  /** Named workspace this agent documents to. */
+  folder: string;
+  /** Whether this agent may run on a schedule / in the background. */
+  background_enabled: boolean;
+  /** Integration display-names this agent is allowed to use ([] = any connected). */
+  allowed_integrations: string[];
+  /** Whether the agent records its actions to the activity log. */
+  log_activity: boolean;
+  tier: AgentTier;
+  /** Premium (paywalled) — Manager/Executive and, later, custom team agents. */
+  premium: boolean;
+  /** Built-in vs user-created. */
+  created_by_type: "system" | "user";
+  /** Identity. */
+  emoji: string;
+  accent: string;
+  archived: boolean;
 }
 
 export interface TaskAsset {
@@ -255,4 +278,7 @@ export interface DraftRequest {
   idealCustomer: string;
   voiceRules: string[];
   restrictedPhrases: string[];
+  /** The acting agent's persona (Phase 4 — editable agents). */
+  agentName?: string;
+  agentInstructions?: string;
 }

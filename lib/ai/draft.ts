@@ -27,8 +27,13 @@ function systemPrompt(r: DraftRequest): string {
     ? r.restrictedPhrases.join(", ")
     : "(none specified)";
 
+  const persona =
+    r.agentInstructions?.trim() ||
+    `You are the ${CATEGORY_AGENT[r.category]} Agent, an operations assistant that prepares business content for the owner to review and approve.`;
+
   return [
-    `You are the ${CATEGORY_AGENT[r.category]} Agent for ${r.companyName}, an operations assistant that prepares business content for the owner to review and approve.`,
+    `${persona}`,
+    `You work for ${r.companyName}.`,
     "",
     `About the business: ${r.companyContext}`,
     r.idealCustomer ? `Ideal customer: ${r.idealCustomer}` : "",

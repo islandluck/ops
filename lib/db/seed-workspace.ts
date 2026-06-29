@@ -79,6 +79,17 @@ export function buildSeedRows(
     description: a.description,
     last_run_at: new Date(a.last_run_at),
     tasks_prepared: a.tasks_prepared,
+    instructions: a.instructions,
+    folder: a.folder,
+    background_enabled: a.background_enabled,
+    allowed_integrations: a.allowed_integrations,
+    log_activity: a.log_activity,
+    tier: a.tier,
+    premium: a.premium,
+    created_by_type: a.created_by_type,
+    emoji: a.emoji,
+    accent: a.accent,
+    archived: a.archived,
   }));
 
   // A real (server) workspace starts with NO integrations connected — connection

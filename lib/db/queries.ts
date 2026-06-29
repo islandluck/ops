@@ -170,17 +170,30 @@ async function readBundle(
     updated_at: iso(briefRow.updated_at),
   };
 
-  const mappedAgents: Agent[] = agentRows.map((a) => ({
-    id: a.id,
-    workspace_id: wsId,
-    name: a.name,
-    category: a.category,
-    status: a.status,
-    permissions_mode: a.permissions_mode,
-    description: a.description,
-    last_run_at: iso(a.last_run_at),
-    tasks_prepared: a.tasks_prepared,
-  }));
+  const mappedAgents: Agent[] = agentRows
+    .filter((a) => !a.archived)
+    .map((a) => ({
+      id: a.id,
+      workspace_id: wsId,
+      name: a.name,
+      category: a.category,
+      status: a.status,
+      permissions_mode: a.permissions_mode,
+      description: a.description,
+      last_run_at: iso(a.last_run_at),
+      tasks_prepared: a.tasks_prepared,
+      instructions: a.instructions,
+      folder: a.folder,
+      background_enabled: a.background_enabled,
+      allowed_integrations: a.allowed_integrations,
+      log_activity: a.log_activity,
+      tier: a.tier,
+      premium: a.premium,
+      created_by_type: a.created_by_type,
+      emoji: a.emoji,
+      accent: a.accent,
+      archived: a.archived,
+    }));
 
   const mappedIntegrations: Integration[] = integrationRows.map((i) => {
     const prov = providerForIntegrationName(i.name);
@@ -352,6 +365,17 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
           description: a.description,
           last_run_at: d(a.last_run_at) ?? new Date(),
           tasks_prepared: a.tasks_prepared,
+          instructions: a.instructions,
+          folder: a.folder,
+          background_enabled: a.background_enabled,
+          allowed_integrations: a.allowed_integrations,
+          log_activity: a.log_activity,
+          tier: a.tier,
+          premium: a.premium,
+          created_by_type: a.created_by_type,
+          emoji: a.emoji,
+          accent: a.accent,
+          archived: a.archived,
         })),
       );
 

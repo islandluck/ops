@@ -73,67 +73,135 @@ export function createSeedState(now: number): AppState {
     updated_at: at(-9 * DAY),
   };
 
+  const worker = (
+    o: Partial<Agent> & Pick<Agent, "id" | "name" | "category" | "description" | "instructions">,
+  ): Agent => ({
+    workspace_id: workspace.id,
+    status: "idle",
+    permissions_mode: "approval",
+    last_run_at: at(-1 * HOUR),
+    tasks_prepared: 0,
+    folder: o.name.replace(/ Agent$/, ""),
+    background_enabled: false,
+    allowed_integrations: [],
+    log_activity: true,
+    tier: "worker",
+    premium: false,
+    created_by_type: "system",
+    emoji: "",
+    accent: "indigo",
+    archived: false,
+    ...o,
+  });
+
   const agents: Agent[] = [
-    {
+    worker({
       id: "ag_growth",
-      workspace_id: workspace.id,
       name: "Growth Agent",
       category: "growth",
       status: "working",
-      permissions_mode: "approval",
-      description:
-        "Watches your inbox and CRM for warm leads, drafts follow-ups, and keeps the pipeline moving.",
+      description: "Finds warm leads going cold, drafts personal follow-ups, and keeps the pipeline moving.",
+      instructions:
+        "You are the Growth Agent — a proactive, friendly business-development teammate. You find warm leads that are going quiet, write short, personal follow-ups that lead with the customer's outcome, and make the next step obvious and easy. Never over-promise or sound salesy.",
       last_run_at: at(-18 * MIN),
       tasks_prepared: 34,
-    },
-    {
+      allowed_integrations: ["Gmail", "HubSpot"],
+      emoji: "📈",
+      accent: "emerald",
+    }),
+    worker({
       id: "ag_admin",
-      workspace_id: workspace.id,
       name: "Admin Agent",
       category: "admin",
       status: "waiting",
-      permissions_mode: "approval",
-      description:
-        "Handles scheduling, reschedules, receipts, and the small inbox chores that pile up.",
+      description: "Handles scheduling, reschedules, receipts, and the inbox chores that pile up.",
+      instructions:
+        "You are the Admin Agent — calm and organized. You handle scheduling, reschedules, receipts, and inbox logistics. Write brief, polite, logistics-focused messages and keep everything tidy and on time.",
       last_run_at: at(-52 * MIN),
       tasks_prepared: 41,
-    },
-    {
+      allowed_integrations: ["Gmail", "Google Calendar"],
+      emoji: "🗂️",
+      accent: "sky",
+    }),
+    worker({
       id: "ag_content",
-      workspace_id: workspace.id,
       name: "Content Agent",
       category: "content",
       status: "working",
-      permissions_mode: "approval",
-      description:
-        "Drafts newsletters, website copy, and social posts in your brand voice — then waits for sign-off.",
+      description: "Drafts newsletters, website copy, and social posts in your brand voice.",
+      instructions:
+        "You are the Content Agent — a sharp brand writer. You draft newsletters, website copy, and social posts in the company's voice, lead with the reader's benefit, and never use restricted phrases. Favor clarity and short sentences over hype.",
       last_run_at: at(-8 * MIN),
       tasks_prepared: 27,
-    },
-    {
+      allowed_integrations: ["Gmail", "Webflow"],
+      emoji: "✍️",
+      accent: "violet",
+    }),
+    worker({
       id: "ag_research",
-      workspace_id: workspace.id,
       name: "Research Agent",
       category: "research",
       status: "idle",
       permissions_mode: "suggest",
-      description:
-        "Tracks competitors, summarizes calls, and turns scattered notes into briefs you can act on.",
+      description: "Tracks competitors, summarizes calls, and turns notes into decision-ready briefs.",
+      instructions:
+        "You are the Research Agent — curious and rigorous. You track competitors, summarize calls, and turn scattered notes into clear, decision-ready briefs. Cite specifics, flag what matters, and skip the fluff.",
       last_run_at: at(-3 * HOUR),
       tasks_prepared: 19,
-    },
-    {
+      allowed_integrations: ["Notion", "Google Sheets"],
+      emoji: "🔭",
+      accent: "amber",
+    }),
+    worker({
       id: "ag_finance",
-      workspace_id: workspace.id,
       name: "Finance Agent",
       category: "finance",
       status: "waiting",
-      permissions_mode: "approval",
-      description:
-        "Chases overdue invoices, reconciles payouts, and keeps the books tidy — never moves money on its own.",
+      description: "Chases overdue invoices, reconciles payouts, and keeps the books tidy.",
+      instructions:
+        "You are the Finance Agent — careful and trustworthy. You chase overdue invoices with friendly, no-pressure reminders, reconcile payouts, and keep the books tidy. Never move money on your own.",
       last_run_at: at(-40 * MIN),
       tasks_prepared: 23,
-    },
+      allowed_integrations: ["Stripe", "Gmail"],
+      emoji: "🧾",
+      accent: "rose",
+    }),
+    worker({
+      id: "ag_manager",
+      name: "Manager Agent",
+      category: "admin",
+      status: "idle",
+      permissions_mode: "auto",
+      description:
+        "Oversees your worker agents — assigns and prioritizes work, reviews and approves it, and keeps the team moving.",
+      instructions:
+        "You are the Manager Agent. You coordinate the worker agents: assign and prioritize tasks, review and approve their prepared work against the business brief, redirect when something's off, and keep the team productive without bottlenecks.",
+      last_run_at: at(-2 * HOUR),
+      tasks_prepared: 0,
+      tier: "manager",
+      premium: true,
+      background_enabled: true,
+      emoji: "🧭",
+      accent: "indigo",
+    }),
+    worker({
+      id: "ag_executive",
+      name: "Executive Agent",
+      category: "research",
+      status: "idle",
+      permissions_mode: "auto",
+      description:
+        "Your chief of staff — runs the Manager Agent, gives final review, and takes higher-risk approvals within your limits.",
+      instructions:
+        "You are the Executive Agent. You supervise the Manager Agent, provide final review on high-stakes work, and approve higher-risk actions strictly within the guardrails and budgets the owner has configured.",
+      last_run_at: at(-1 * DAY),
+      tasks_prepared: 0,
+      tier: "executive",
+      premium: true,
+      background_enabled: true,
+      emoji: "👔",
+      accent: "slate",
+    }),
   ];
 
   const integrations: Integration[] = [
