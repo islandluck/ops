@@ -6,7 +6,7 @@
  * bundle-load time and passed to the client for display.
  */
 
-export type ProviderKey = "google" | "hubspot" | "stripe";
+export type ProviderKey = "google" | "hubspot" | "stripe" | "notion";
 
 export interface ProviderDef {
   key: ProviderKey;
@@ -20,6 +20,12 @@ export interface ProviderDef {
   clientIdEnv?: string;
   clientSecretEnv?: string;
   apiKeyEnv?: string;
+  /** Google-style offline access (access_type=offline & prompt=consent) for refresh tokens. */
+  offlineAccess?: boolean;
+  /** Exchange the code with HTTP Basic auth + JSON body (Notion) instead of a form body. */
+  basicAuth?: boolean;
+  /** Extra params appended to the authorize URL (e.g. Notion's owner=user). */
+  authorizeParams?: Record<string, string>;
   /** What approving a task does, in plain English (shown in the UI). */
   actionLabel: string;
 }
@@ -28,19 +34,21 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
   google: {
     key: "google",
     label: "Google",
-    integrationNames: ["Gmail", "Google Calendar"],
+    integrationNames: ["Gmail", "Google Calendar", "Google Sheets"],
     auth: "oauth",
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
     scopes: [
       "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/spreadsheets",
       "openid",
       "email",
     ],
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
-    actionLabel: "Send approved emails & create calendar events",
+    offlineAccess: true,
+    actionLabel: "Send approved emails, create calendar events & log to Sheets",
   },
   hubspot: {
     key: "hubspot",
@@ -61,6 +69,19 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     auth: "api_key",
     apiKeyEnv: "STRIPE_SECRET_KEY",
     actionLabel: "Create draft invoices (test mode)",
+  },
+  notion: {
+    key: "notion",
+    label: "Notion",
+    integrationNames: ["Notion"],
+    auth: "oauth",
+    authorizeUrl: "https://api.notion.com/v1/oauth/authorize",
+    tokenUrl: "https://api.notion.com/v1/oauth/token",
+    clientIdEnv: "NOTION_CLIENT_ID",
+    clientSecretEnv: "NOTION_CLIENT_SECRET",
+    basicAuth: true,
+    authorizeParams: { owner: "user" },
+    actionLabel: "Create pages in your Notion workspace",
   },
 };
 

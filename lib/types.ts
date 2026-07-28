@@ -45,6 +45,18 @@ export type ExecutionStatus =
 /** Permission tiers per agent / integration. */
 export type PermissionMode = "suggest" | "approval" | "auto";
 
+/** Payload persisted when a user completes guided onboarding (server mode). */
+export interface OnboardingInput {
+  user_name: string;
+  company_name: string;
+  website_url: string;
+  business_description: string;
+  ideal_customer_profile: string;
+  goals: string[];
+  voice_rules: string[];
+  approvalDefault: PermissionMode;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */

@@ -50,11 +50,12 @@ export async function GET(
     const redirectUri = `${origin}/api/integrations/${providerKey}/callback`;
     const tokens = await exchangeCodeForTokens(provider, code, redirectUri);
     const account =
-      providerKey === "google"
+      tokens.account ??
+      (providerKey === "google"
         ? await getGoogleEmail(tokens.access)
         : providerKey === "hubspot"
           ? await getHubSpotAccount(tokens.access)
-          : null;
+          : null);
     await storeProviderTokens(wsId, provider, tokens, account);
     return back(`?connected=${providerKey}`);
   } catch (e) {

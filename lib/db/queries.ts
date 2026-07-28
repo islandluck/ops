@@ -15,7 +15,7 @@ import {
   workspaceMembers,
   workspaces,
 } from "./schema";
-import { buildSeedRows } from "./seed-workspace";
+import { buildCleanSlateRows } from "./seed-workspace";
 import { hasAnthropicKey } from "@/lib/config";
 import { isProviderConfigured, providerForIntegrationName } from "@/lib/integrations/registry";
 import type {
@@ -26,6 +26,7 @@ import type {
   BusinessBrief,
   ExecutionRun,
   Integration,
+  OnboardingInput,
   Task,
   Workspace,
 } from "@/lib/types";
@@ -68,9 +69,11 @@ async function getOrCreateWorkspace(userId: string): Promise<string> {
     if (existing[0]) return existing[0].id;
 
     const wsId = uid();
-    await tx.insert(workspaces).values({ id: wsId, name: "Northwind Studio", owner_id: userId });
+    // Brand-new real workspaces start clean + neutrally named; guided onboarding
+    // personalises the name + brief. (The rich demo seed is demo-mode only.)
+    await tx.insert(workspaces).values({ id: wsId, name: "My workspace", owner_id: userId });
     await tx.insert(workspaceMembers).values({ workspace_id: wsId, user_id: userId, role: "owner" });
-    const rows = buildSeedRows(wsId, "", Date.now());
+    const rows = buildCleanSlateRows(wsId, Date.now());
     await tx.insert(businessBriefs).values(rows.brief);
     if (rows.agents.length) await tx.insert(agents).values(rows.agents);
     if (rows.integrations.length) await tx.insert(integrations).values(rows.integrations);
@@ -98,16 +101,18 @@ export async function loadBundleForUser(
   userId: string,
   email: string,
   fullName: string,
+  onboarded: boolean,
 ): Promise<AppState> {
   await ensureProfile(userId, email, fullName);
   const wsId = await getOrCreateWorkspace(userId);
-  return readBundle(wsId, fullName, email);
+  return readBundle(wsId, fullName, email, onboarded);
 }
 
 async function readBundle(
   wsId: string,
   fullName: string,
   email: string,
+  onboarded: boolean,
 ): Promise<AppState> {
   const [wsRow] = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
   const [briefRow] = await db
@@ -294,7 +299,7 @@ async function readBundle(
     activity: mappedActivity,
     session: {
       authenticated: true,
-      onboarded: true,
+      onboarded,
       user_name: fullName || workspace.name,
       user_email: email,
       ai_enabled: hasAnthropicKey(),
@@ -468,9 +473,10 @@ export async function resetBundleForUser(
   userId: string,
   email: string,
   fullName: string,
+  onboarded: boolean,
 ): Promise<AppState> {
   const wsId = await getWorkspaceId(userId);
-  if (!wsId) return loadBundleForUser(userId, email, fullName);
+  if (!wsId) return loadBundleForUser(userId, email, fullName, onboarded);
 
   await db.transaction(async (tx) => {
     await tx.delete(activityEvents).where(eq(activityEvents.workspace_id, wsId));
@@ -485,7 +491,7 @@ export async function resetBundleForUser(
     await tx.delete(agents).where(eq(agents.workspace_id, wsId));
     await tx.delete(businessBriefs).where(eq(businessBriefs.workspace_id, wsId));
 
-    const rows = buildSeedRows(wsId, "", Date.now());
+    const rows = buildCleanSlateRows(wsId, Date.now());
     await tx.insert(businessBriefs).values(rows.brief);
     if (rows.agents.length) await tx.insert(agents).values(rows.agents);
     if (rows.integrations.length) await tx.insert(integrations).values(rows.integrations);
@@ -496,5 +502,58 @@ export async function resetBundleForUser(
     if (rows.activity.length) await tx.insert(activityEvents).values(rows.activity);
   });
 
-  return readBundle(wsId, fullName, email);
+  return readBundle(wsId, fullName, email, onboarded);
+}
+
+/**
+ * Persist guided-onboarding answers: set the brief + workspace name, apply the
+ * chosen default permission mode to all agents, and clear any lingering seed
+ * content so the board starts genuinely empty.
+ */
+export async function applyOnboardingForUser(
+  userId: string,
+  input: OnboardingInput,
+): Promise<void> {
+  const wsId = await getWorkspaceId(userId);
+  if (!wsId) throw new Error("No workspace for user");
+
+  await db.transaction(async (tx) => {
+    // Clear any seed/demo board content (FK children first).
+    const wsTasks = await tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(eq(tasks.workspace_id, wsId));
+    for (const { id } of wsTasks) {
+      await tx.delete(executionRuns).where(eq(executionRuns.task_id, id));
+      await tx.delete(approvalDecisions).where(eq(approvalDecisions.task_id, id));
+      await tx.delete(taskAssets).where(eq(taskAssets.task_id, id));
+    }
+    await tx.delete(tasks).where(eq(tasks.workspace_id, wsId));
+    await tx.delete(activityEvents).where(eq(activityEvents.workspace_id, wsId));
+
+    if (input.company_name) {
+      await tx
+        .update(workspaces)
+        .set({ name: input.company_name, updated_at: new Date() })
+        .where(eq(workspaces.id, wsId));
+    }
+
+    await tx
+      .update(businessBriefs)
+      .set({
+        company_name: input.company_name,
+        website_url: input.website_url,
+        business_description: input.business_description,
+        ideal_customer_profile: input.ideal_customer_profile,
+        goals: input.goals,
+        voice_rules: input.voice_rules,
+        updated_at: new Date(),
+      })
+      .where(eq(businessBriefs.workspace_id, wsId));
+
+    await tx
+      .update(agents)
+      .set({ permissions_mode: input.approvalDefault })
+      .where(eq(agents.workspace_id, wsId));
+  });
 }

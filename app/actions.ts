@@ -5,6 +5,7 @@ import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/server";
 import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import {
+  applyOnboardingForUser,
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
@@ -20,11 +21,17 @@ import {
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { runAgentForWorkspace, type RunAgentResult } from "@/lib/agents/run";
-import type { AppState, DraftRequest, PermissionMode } from "@/lib/types";
+import type { AppState, DraftRequest, OnboardingInput, PermissionMode } from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
   return meta?.full_name || user.email?.split("@")[0] || "You";
+}
+
+/** True once the user has completed guided onboarding (tracked in auth metadata). */
+function isOnboarded(user: User): boolean {
+  const meta = user.user_metadata as { onboarded?: boolean } | undefined;
+  return Boolean(meta?.onboarded);
 }
 
 /* --------------------------- workspace ----------------------------- */
@@ -34,7 +41,7 @@ export async function loadWorkspace(): Promise<AppState | null> {
   const user = await getCurrentUser();
   if (!user) return null;
   try {
-    return await loadBundleForUser(user.id, user.email ?? "", displayName(user));
+    return await loadBundleForUser(user.id, user.email ?? "", displayName(user), isOnboarded(user));
   } catch (e) {
     console.error("[loadWorkspace] failed:", e instanceof Error ? e.message : e);
     throw e;
@@ -57,7 +64,7 @@ export async function resetWorkspace(): Promise<AppState | null> {
   if (!isBackendConfigured()) return null;
   const user = await getCurrentUser();
   if (!user) return null;
-  return resetBundleForUser(user.id, user.email ?? "", displayName(user));
+  return resetBundleForUser(user.id, user.email ?? "", displayName(user), isOnboarded(user));
 }
 
 /* ------------------------ integrations (Phase 3) ------------------- */
@@ -162,8 +169,56 @@ export async function signUpAction(
     options: { data: { full_name: name } },
   });
   if (error) return { error: error.message };
-  if (!data.session) return { needsConfirmation: true };
-  redirect("/onboarding");
+
+  // Session present → email confirmation is off; go straight to guided setup.
+  if (data.session) redirect("/onboarding");
+
+  // No session → Supabase requires email confirmation. For local/dev testing
+  // (AUTH_AUTOCONFIRM=true) confirm immediately via the service role and sign in,
+  // so signup is exercisable end-to-end without waiting on email delivery.
+  // In production this stays off — real confirmation (custom SMTP) is required.
+  let autoConfirmed = false;
+  if (process.env.AUTH_AUTOCONFIRM === "true" && data.user) {
+    try {
+      const { createSupabaseAdminClient } = await import("@/lib/supabase/admin");
+      const admin = createSupabaseAdminClient();
+      await admin.auth.admin.updateUserById(data.user.id, { email_confirm: true });
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) return { error: signInError.message };
+      autoConfirmed = true;
+    } catch (e) {
+      console.error("[signUp autoconfirm] failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  if (autoConfirmed) redirect("/onboarding");
+
+  return { needsConfirmation: true };
+}
+
+/**
+ * Persist guided onboarding: write the brief + workspace name + default
+ * permission mode, then mark the user onboarded (auth metadata) so middleware
+ * lets them into the app on the next request.
+ */
+export async function completeOnboardingAction(
+  input: OnboardingInput,
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  try {
+    await applyOnboardingForUser(user.id, input);
+    const prevName = (user.user_metadata as { full_name?: string } | undefined)?.full_name ?? "";
+    await supabase.auth.updateUser({
+      data: { onboarded: true, full_name: input.user_name || prevName },
+    });
+    return { ok: true };
+  } catch (e) {
+    console.error("[completeOnboarding] failed:", e instanceof Error ? e.message : e);
+    return { ok: false, error: e instanceof Error ? e.message : "Onboarding failed." };
+  }
 }
 
 export async function signOutAction(): Promise<void> {

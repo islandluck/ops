@@ -14,8 +14,9 @@ import {
 } from "@/lib/db/schema";
 import { isProviderConfigured, providerForIntegrationName } from "./registry";
 import { getValidAccessToken } from "./tokens";
-import { createCalendarEvent, sendGmail } from "./google";
+import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { upsertContact } from "./hubspot";
+import { createNotionPage } from "./notion";
 import { createDraftInvoice } from "./stripe";
 import type { ExecutionStep } from "@/lib/types";
 
@@ -149,6 +150,28 @@ export async function runTaskExecution(
         });
         steps.push({ label: `${r.created ? "Created" : "Updated"} HubSpot contact`, status: "done" });
         touched.push("HubSpot");
+      } else if (name === "Google Sheets") {
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No Google Sheets token");
+        const when = new Date().toISOString();
+        const r = await createSpreadsheet(token, {
+          title: `Operator — ${task.title}`.slice(0, 90),
+          rows: [
+            ["Task", "Category", "Approved by", "When", "Details"],
+            [task.title, task.category, actor.name, when, (draft || task.description).slice(0, 400)],
+          ],
+        });
+        steps.push({ label: `Logged to Google Sheets${r.url ? ` — ${r.url}` : ""}`, status: "done" });
+        touched.push("Google Sheets");
+      } else if (name === "Notion") {
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No Notion token");
+        const r = await createNotionPage(token, {
+          title: `[Operator] ${task.title}`.slice(0, 100),
+          content: draft || task.description,
+        });
+        steps.push({ label: `Created Notion page${r.url ? ` — ${r.url}` : ""}`, status: "done" });
+        touched.push("Notion");
       } else if (name === "Stripe") {
         const key = process.env.STRIPE_SECRET_KEY ?? "";
         await createDraftInvoice(key, {

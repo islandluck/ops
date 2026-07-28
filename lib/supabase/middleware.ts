@@ -48,7 +48,14 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isProtected = PROTECTED_PREFIXES.some((p) => path.startsWith(p));
   const isAuthPage = AUTH_PAGES.some((p) => path.startsWith(p));
+  const isOnboarding = path.startsWith("/onboarding");
+  // Onboarding state lives in the Supabase user's metadata so it's readable here
+  // (getUser() returns fresh metadata) without a per-request DB round-trip.
+  const onboarded = Boolean(
+    (user?.user_metadata as { onboarded?: boolean } | undefined)?.onboarded,
+  );
 
+  // Not signed in → gate protected routes.
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
@@ -56,9 +63,18 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (user && isAuthPage) {
+  // Signed in but hasn't finished guided setup → send to onboarding.
+  if (user && !onboarded && isProtected && !isOnboarding) {
     const url = request.nextUrl.clone();
-    url.pathname = "/approvals";
+    url.pathname = "/onboarding";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  // Signed in on an auth page, or an onboarded user revisiting onboarding → home.
+  if (user && (isAuthPage || (onboarded && isOnboarding))) {
+    const url = request.nextUrl.clone();
+    url.pathname = onboarded ? "/approvals" : "/onboarding";
     url.search = "";
     return NextResponse.redirect(url);
   }

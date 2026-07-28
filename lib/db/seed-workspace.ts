@@ -175,3 +175,69 @@ export function buildSeedRows(
 
   return { brief, agents, integrations, tasks, assets, decisions, runs, activity };
 }
+
+/**
+ * Build a CLEAN-SLATE workspace for a brand-new real sign-up: the standard
+ * agent roster (reset to idle, zero stats) + the standard integrations (all
+ * disconnected) + a blank business brief. No demo tasks, activity, or history —
+ * the board starts empty and is personalised during guided onboarding.
+ */
+export function buildCleanSlateRows(workspaceId: string, now: number): SeedRows {
+  const seed = createSeedState(now);
+
+  const brief: InsertBrief = {
+    id: uid(),
+    workspace_id: workspaceId,
+    company_name: "",
+    website_url: "",
+    business_description: "",
+    core_offer: "",
+    ideal_customer_profile: "",
+    goals: [],
+    voice_rules: [],
+    restricted_phrases: [],
+    approval_rules: [],
+    budget_limits: [],
+    working_hours: "",
+    timezone: "",
+    connected_systems: [],
+    updated_at: new Date(now),
+  };
+
+  const agents: InsertAgent[] = seed.agents.map((a) => ({
+    id: uid(),
+    workspace_id: workspaceId,
+    name: a.name,
+    category: a.category,
+    status: "idle",
+    permissions_mode: a.permissions_mode,
+    description: a.description,
+    last_run_at: new Date(now),
+    tasks_prepared: 0,
+    instructions: a.instructions,
+    folder: a.folder,
+    background_enabled: a.background_enabled,
+    allowed_integrations: a.allowed_integrations,
+    log_activity: a.log_activity,
+    tier: a.tier,
+    premium: a.premium,
+    created_by_type: a.created_by_type,
+    emoji: a.emoji,
+    accent: a.accent,
+    archived: a.archived,
+  }));
+
+  const integrations: InsertIntegration[] = seed.integrations.map((i) => ({
+    id: uid(),
+    workspace_id: workspaceId,
+    name: i.name,
+    provider: i.provider,
+    category: i.category,
+    connected: false,
+    account: null,
+    permission_mode: i.permission_mode,
+    optional: i.optional,
+  }));
+
+  return { brief, agents, integrations, tasks: [], assets: [], decisions: [], runs: [], activity: [] };
+}

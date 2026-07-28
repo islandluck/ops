@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, Rocket, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Loader2, Rocket, ShieldCheck } from "lucide-react";
 import { Logo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useStore, type OnboardingPayload } from "@/lib/store";
+import { completeOnboardingAction } from "@/app/actions";
+import { hasSupabaseClientEnv } from "@/lib/config";
 import { PERMISSION_META } from "@/lib/constants";
 import { cn } from "@/lib/cn";
 import type { PermissionMode } from "@/lib/types";
@@ -50,23 +52,41 @@ const TOOLS = [
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { completeOnboarding, hydrated } = useStore();
+  const { completeOnboarding, hydrated, state, reloadWorkspace } = useStore();
+  const configured = hasSupabaseClientEnv;
   const [step, setStep] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [data, setData] = useState({
-    user_name: "Alex Rivera",
-    user_email: "alex@northwindstudio.com",
-    company_name: "Northwind Studio",
-    website_url: "https://northwindstudio.com",
-    business_description:
-      "A three-person studio that designs websites and brand identities for small, owner-run service businesses.",
-    ideal_customer_profile:
-      "Owner-operated service businesses with 2–25 staff who need a credible, converting web presence.",
-    goals: new Set([GOAL_OPTIONS[0], GOAL_OPTIONS[1]]),
-    voice: new Set([VOICE_OPTIONS[0], VOICE_OPTIONS[1], VOICE_OPTIONS[2], VOICE_OPTIONS[3]]),
-    connected: new Set(["Gmail", "Google Calendar"]),
+    user_name: configured ? "" : "Alex Rivera",
+    user_email: configured ? "" : "alex@northwindstudio.com",
+    company_name: configured ? "" : "Northwind Studio",
+    website_url: configured ? "" : "https://northwindstudio.com",
+    business_description: configured
+      ? ""
+      : "A three-person studio that designs websites and brand identities for small, owner-run service businesses.",
+    ideal_customer_profile: configured
+      ? ""
+      : "Owner-operated service businesses with 2–25 staff who need a credible, converting web presence.",
+    goals: new Set<string>(configured ? [] : [GOAL_OPTIONS[0], GOAL_OPTIONS[1]]),
+    voice: new Set<string>(
+      configured ? [] : [VOICE_OPTIONS[0], VOICE_OPTIONS[1], VOICE_OPTIONS[2], VOICE_OPTIONS[3]],
+    ),
+    connected: new Set<string>(configured ? [] : ["Gmail", "Google Calendar"]),
     approvalDefault: "approval" as PermissionMode,
   });
+
+  // In server mode, prefill the real signed-in identity once the bundle loads.
+  useEffect(() => {
+    const session = state?.session;
+    if (!configured || !session) return;
+    setData((d) => ({
+      ...d,
+      user_name: d.user_name || session.user_name || "",
+      user_email: d.user_email || session.user_email || "",
+    }));
+  }, [configured, state?.session?.user_name, state?.session?.user_email]);
 
   const total = STEPS.length;
   const isLast = step === total - 1;
@@ -79,7 +99,32 @@ export default function OnboardingPage() {
     });
   }
 
-  function launch() {
+  async function launch() {
+    // Server mode: persist to Postgres + mark onboarded, then load the clean board.
+    if (configured) {
+      setSubmitting(true);
+      setError(null);
+      const res = await completeOnboardingAction({
+        user_name: data.user_name.trim(),
+        company_name: data.company_name.trim(),
+        website_url: data.website_url.trim(),
+        business_description: data.business_description.trim(),
+        ideal_customer_profile: data.ideal_customer_profile.trim(),
+        goals: [...data.goals],
+        voice_rules: [...data.voice],
+        approvalDefault: data.approvalDefault,
+      });
+      if (!res.ok) {
+        setSubmitting(false);
+        setError(res.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      await reloadWorkspace();
+      router.push("/approvals");
+      return;
+    }
+
+    // Demo mode: local-only onboarding.
     const payload: OnboardingPayload = {
       company_name: data.company_name,
       website_url: data.website_url,
@@ -209,7 +254,9 @@ export default function OnboardingPage() {
             {step === 3 && (
               <div className="space-y-2.5">
                 <p className="mb-1 text-[13.5px] text-muted-foreground">
-                  Connect the tools your agents work across. Nothing is hosted by you.
+                  {configured
+                    ? "Pick the tools you use — you'll connect them securely from Integrations after setup."
+                    : "Connect the tools your agents work across. Nothing is hosted by you."}
                 </p>
                 {TOOLS.map((t) => {
                   const on = data.connected.has(t.name);
@@ -292,13 +339,17 @@ export default function OnboardingPage() {
                 <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                   <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
                   <p className="text-[13px] text-emerald-900">
-                    Your five agents are ready and a seeded set of real tasks is waiting in your
-                    Approval Center. Nothing risky runs without your sign-off.
+                    Your agents are ready and your Approval Center starts clean — run an agent
+                    whenever you like. Nothing risky runs without your sign-off.
                   </p>
                 </div>
               </div>
             )}
           </div>
+
+          {error && (
+            <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</p>
+          )}
 
           {/* Footer nav */}
           <div className="mt-8 flex items-center justify-between">
@@ -314,9 +365,13 @@ export default function OnboardingPage() {
             )}
 
             {isLast ? (
-              <Button size="lg" onClick={launch} disabled={!hydrated}>
-                <Rocket className="h-4 w-4" />
-                Launch workspace
+              <Button size="lg" onClick={launch} disabled={!hydrated || submitting}>
+                {submitting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Rocket className="h-4 w-4" />
+                )}
+                {submitting ? "Setting up…" : "Launch workspace"}
               </Button>
             ) : (
               <Button size="lg" onClick={() => setStep((s) => s + 1)}>

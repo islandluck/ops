@@ -9,6 +9,8 @@ export interface OAuthTokens {
   refresh?: string;
   expiresAt?: Date;
   scope?: string;
+  /** Human-readable connected-account label (e.g. Notion workspace name). */
+  account?: string;
 }
 
 export function buildAuthorizeUrl(
@@ -21,11 +23,17 @@ export function buildAuthorizeUrl(
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: (provider.scopes ?? []).join(" "),
     state,
-    access_type: "offline", // Google: returns a refresh_token
-    prompt: "consent",
   });
+  if (provider.scopes?.length) params.set("scope", provider.scopes.join(" "));
+  if (provider.offlineAccess) {
+    // Google: request a refresh_token and force the consent screen.
+    params.set("access_type", "offline");
+    params.set("prompt", "consent");
+  }
+  for (const [k, v] of Object.entries(provider.authorizeParams ?? {})) {
+    params.set(k, v);
+  }
   return `${provider.authorizeUrl}?${params.toString()}`;
 }
 
@@ -34,18 +42,32 @@ export async function exchangeCodeForTokens(
   code: string,
   redirectUri: string,
 ): Promise<OAuthTokens> {
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: redirectUri,
-    client_id: process.env[provider.clientIdEnv ?? ""] ?? "",
-    client_secret: process.env[provider.clientSecretEnv ?? ""] ?? "",
-  });
-  const res = await fetch(provider.tokenUrl ?? "", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
+  const clientId = process.env[provider.clientIdEnv ?? ""] ?? "";
+  const clientSecret = process.env[provider.clientSecretEnv ?? ""] ?? "";
+
+  const res = provider.basicAuth
+    ? // Notion: HTTP Basic auth + JSON body.
+      await fetch(provider.tokenUrl ?? "", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ grant_type: "authorization_code", code, redirect_uri: redirectUri }),
+      })
+    : // Standard OAuth 2.0: form-encoded body carrying the client credentials.
+      await fetch(provider.tokenUrl ?? "", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+          client_id: clientId,
+          client_secret: clientSecret,
+        }),
+      });
+
   const json = (await res.json()) as Record<string, unknown>;
   if (!res.ok) {
     throw new Error(
@@ -57,6 +79,7 @@ export async function exchangeCodeForTokens(
     refresh: json.refresh_token ? String(json.refresh_token) : undefined,
     expiresAt: json.expires_in ? new Date(Date.now() + Number(json.expires_in) * 1000) : undefined,
     scope: json.scope ? String(json.scope) : undefined,
+    account: json.workspace_name ? String(json.workspace_name) : undefined,
   };
 }
 

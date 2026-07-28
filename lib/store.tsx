@@ -898,7 +898,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const integ = s?.integrations.find((i) => i.id === id);
       if (serverMode && integ) {
         const provider = integ.oauth_provider;
-        if (provider === "google" || provider === "hubspot") {
+        // All OAuth providers (Google, HubSpot, Notion) use the same connect route;
+        // Stripe (api key) is handled separately below.
+        if (provider && provider !== "stripe") {
           if (!integ.configured) {
             pushToast({
               tone: "error",

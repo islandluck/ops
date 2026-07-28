@@ -6,7 +6,9 @@ Approving a task can now perform **real actions** on connected tools:
 |---|---|---|---|
 | **Gmail** | Google OAuth | Sends the approved draft via the Gmail API | Sends to **your own address** (verifiable test); production targets the real recipient |
 | **Google Calendar** | Google OAuth (same app) | Creates a calendar event from the task | Event on your primary calendar |
+| **Google Sheets** | Google OAuth (same app) | Logs the approved task to a new spreadsheet | Creates a sheet in your Drive |
 | **HubSpot** | HubSpot OAuth | Creates/updates a CRM contact | A single `operator-demo@example.com` contact |
+| **Notion** | Notion OAuth | Creates a page under a shared page | Only pages you share with the integration |
 | **Stripe** | Secret key | Creates a **draft** invoice | Test mode (`sk_test_…`); never finalized/charged |
 
 Each is **off until configured + connected**. Until then, approving simulates as before — your
@@ -30,10 +32,10 @@ URIs are derived from the request origin.
 
 ---
 
-## 1. Google (Gmail + Calendar)
+## 1. Google (Gmail + Calendar + Sheets)
 
 1. **console.cloud.google.com** → create/select a project.
-2. **APIs & Services → Enable APIs** → enable **Gmail API** and **Google Calendar API**.
+2. **APIs & Services → Enable APIs** → enable **Gmail API**, **Google Calendar API**, and **Google Sheets API**.
 3. **OAuth consent screen** → External → fill the basics → **Add yourself as a Test user**
    (lets you use sensitive scopes without full verification while testing).
 4. **Credentials → Create Credentials → OAuth client ID → Web application**.
@@ -44,8 +46,9 @@ URIs are derived from the request origin.
    GOOGLE_CLIENT_ID=...
    GOOGLE_CLIENT_SECRET=...
    ```
-6. Restart, open **Integrations → Connect Gmail**, approve consent. Gmail **and** Calendar
-   flip to Connected. Approve a Growth/Admin task → you'll receive the email / see the event.
+6. Restart, open **Integrations → Connect Gmail**, approve consent. Gmail, Calendar **and**
+   Sheets flip to Connected (one Google grant). Approve a Growth/Admin task → you'll receive
+   the email / see the event; approving a Research task logs it to a new spreadsheet.
 
 > Sending mail to *external* recipients at scale needs Google's app verification (can take
 > weeks). Test users + your own address work immediately.
@@ -71,6 +74,21 @@ URIs are derived from the request origin.
    ```
 3. Restart → **Connect Stripe** (validates the key) → approving a Finance task creates a
    **draft** invoice in your test dashboard.
+
+## 4. Notion
+
+1. **notion.so/my-integrations** → **New integration** → type **Public** (required for OAuth).
+2. Fill the basics, then set the **Redirect URI:** `<APP_URL>/api/integrations/notion/callback`.
+3. Copy the OAuth **Client ID** and **Client secret**:
+   ```
+   NOTION_CLIENT_ID=...
+   NOTION_CLIENT_SECRET=...
+   ```
+4. Restart → **Connect Notion** → approve, and **select the page(s)** Operator may use.
+5. Approving a Research/Content task creates a page (with the draft) under a shared page.
+
+> Notion grants access per selected page. If you share none, execution returns a clear
+> "share a page with the Operator integration" message — just share one and retry.
 
 ---
 
