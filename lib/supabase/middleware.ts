@@ -5,6 +5,7 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, hasSupabaseClientEnv } from "@/lib/con
 const PROTECTED_PREFIXES = [
   "/approvals",
   "/dashboard",
+  "/agents",
   "/activity",
   "/integrations",
   "/brief",
