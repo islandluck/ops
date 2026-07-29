@@ -13,10 +13,11 @@ import {
   workspaces,
 } from "@/lib/db/schema";
 import { generateAgentTask } from "@/lib/ai/agent";
+import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { saveDocument } from "@/lib/db/queries";
 import { runEmailTriage } from "./triage";
-import type { Agent, AssetType, BusinessBrief, Category } from "@/lib/types";
+import type { Agent, AssetType, BusinessBrief, Category, DraftRequest } from "@/lib/types";
 
 function assetTypeFor(category: Category): AssetType {
   if (category === "content") return "document";
@@ -159,4 +160,116 @@ export async function runBackgroundAgents(limit = 25): Promise<{ ran: number }> 
     }
   }
   return { ran };
+}
+
+function deliverableType(category: Category): AssetType {
+  if (category === "growth") return "email";
+  if (category === "research") return "summary";
+  return "document";
+}
+
+export interface RunTaskResult {
+  ok: boolean;
+  title?: string;
+  error?: string;
+}
+
+/**
+ * Have a task's assigned agent produce the deliverable draft — grounded in the
+ * task's context (description + any attached context assets) + the business
+ * brief + the agent's persona. Attaches it, files it as a document, and moves
+ * the task to Ready for the owner's approval. This is how an action task gets
+ * "done by an agent" before you review it.
+ */
+export async function runTaskWithAgent(
+  workspaceId: string,
+  taskId: string,
+): Promise<RunTaskResult> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId)))
+    .limit(1);
+  if (!task) return { ok: false, error: "Task not found." };
+
+  const [agent] = task.agent_id
+    ? await db.select().from(agents).where(eq(agents.id, task.agent_id)).limit(1)
+    : [];
+  const [briefRow] = await db
+    .select()
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  const assetRows = await db.select().from(taskAssets).where(eq(taskAssets.task_id, taskId));
+  const context = assetRows
+    .map((a) => a.content)
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, 4000);
+
+  const req: DraftRequest = {
+    category: task.category,
+    title: task.title,
+    description: [task.description, context].filter(Boolean).join("\n\n"),
+    rationale: task.rationale,
+    companyName: briefRow?.company_name ?? "",
+    companyContext: `${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(),
+    idealCustomer: briefRow?.ideal_customer_profile ?? "",
+    voiceRules: briefRow?.voice_rules ?? [],
+    restrictedPhrases: briefRow?.restricted_phrases ?? [],
+    agentName: agent?.name,
+    agentInstructions: agent?.instructions,
+  };
+
+  let draft: string;
+  try {
+    draft = await draftWithClaude(req);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Drafting failed." };
+  }
+
+  const now = new Date();
+  const authorName = agent?.name ?? "Operator";
+  const type = deliverableType(task.category);
+
+  await db.insert(taskAssets).values({
+    id: randomUUID(),
+    task_id: taskId,
+    asset_type: type,
+    title: `Drafted by ${authorName}`,
+    content: draft,
+    metadata: null,
+  });
+  await saveDocument({
+    workspaceId,
+    agentId: agent?.id ?? null,
+    authorName,
+    taskId,
+    taskTitle: task.title,
+    name: task.title,
+    content: draft,
+    folder: agent?.folder ?? "",
+    docType: type,
+  });
+  await db
+    .update(tasks)
+    .set({ status: "ready", requires_approval: true, updated_at: now })
+    .where(eq(tasks.id, taskId));
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: taskId,
+    event_type: "agent_updated_draft",
+    actor_type: "agent",
+    actor_id: agent?.id ?? "sys",
+    summary: `${authorName} drafted “${task.title}”.`,
+    created_at: now,
+  });
+  if (agent) {
+    await db
+      .update(agents)
+      .set({ last_run_at: now, tasks_prepared: agent.tasks_prepared + 1, status: "waiting" })
+      .where(eq(agents.id, agent.id));
+  }
+  return { ok: true, title: task.title };
 }

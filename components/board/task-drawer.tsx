@@ -72,7 +72,7 @@ export function TaskDrawer() {
     selectTask,
     approve,
     requestChanges,
-    draftTask,
+    workTask,
     reject,
     retry,
     snooze,
@@ -94,11 +94,6 @@ export function TaskDrawer() {
     setNote("");
     setDrafting(false);
   }, [selectedTaskId]);
-
-  // Clear the drafting spinner once a draft arrives.
-  useEffect(() => {
-    if (task && task.assets.length > 0) setDrafting(false);
-  }, [task]);
 
   // Keyboard shortcuts: A = approve, R = request changes.
   useEffect(() => {
@@ -125,6 +120,7 @@ export function TaskDrawer() {
   if (!state || !task) return <Drawer open={false} onClose={() => selectTask(null)}>{null}</Drawer>;
 
   const agent = state.agents.find((a) => a.id === task.agent_id);
+  const hasDeliverable = task.assets.some((a) => /^(Drafted by|Suggested reply)/i.test(a.title));
   const cat = CATEGORY_META[task.category];
   const run = state.runs.find((r) => r.task_id === task.id);
   const taskActivity = state.activity.filter((a) => a.task_id === task.id);
@@ -337,39 +333,13 @@ export function TaskDrawer() {
             ))}
           </div>
         )}
-        {task.assets.length === 0 && !completed && !rejected && (
+        {!hasDeliverable && !completed && !rejected && (
           <div className="rounded-lg border border-dashed border-border p-4 text-center">
-            {aiEnabled ? (
-              <>
-                <p className="text-[13px] text-muted-foreground">
-                  No draft yet. Have {agent?.name ?? "the agent"} write one with Claude,
-                  grounded in your business brief.
-                </p>
-                <Button
-                  size="sm"
-                  className="mt-3"
-                  disabled={drafting}
-                  onClick={() => {
-                    setDrafting(true);
-                    draftTask(task.id);
-                  }}
-                >
-                  {drafting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-4 w-4" />
-                  )}
-                  {drafting ? "Drafting…" : "Draft with Claude"}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Loader2 className="mx-auto h-4 w-4 animate-spin text-muted-foreground" />
-                <p className="mt-2 text-[13px] text-muted-foreground">
-                  {agent?.name ?? "The agent"} is still preparing the draft for this task.
-                </p>
-              </>
-            )}
+            <p className="text-[13px] text-muted-foreground">
+              {aiEnabled
+                ? `No deliverable yet — have ${agent?.name ?? "the agent"} draft it (button below), grounded in the task context and your business brief.`
+                : `${agent?.name ?? "The agent"} is preparing the draft for this task.`}
+            </p>
           </div>
         )}
 
@@ -464,6 +434,24 @@ export function TaskDrawer() {
         ) : rejected ? (
           <Button variant="outline" size="lg" className="w-full" onClick={() => approve(task.id)}>
             Reopen &amp; approve
+          </Button>
+        ) : actionable && !hasDeliverable && agent && aiEnabled ? (
+          <Button
+            variant="primary"
+            size="lg"
+            className="w-full"
+            disabled={drafting}
+            onClick={async () => {
+              setDrafting(true);
+              try {
+                await workTask(task.id);
+              } finally {
+                setDrafting(false);
+              }
+            }}
+          >
+            {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {drafting ? `${agent.name} is drafting…` : `Have ${agent.name} do this`}
           </Button>
         ) : actionable && task.requires_approval ? (
           <div className="flex items-center gap-2">

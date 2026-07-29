@@ -27,7 +27,12 @@ import {
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
-import { runAgentForWorkspace, type RunAgentResult } from "@/lib/agents/run";
+import {
+  runAgentForWorkspace,
+  runTaskWithAgent,
+  type RunAgentResult,
+  type RunTaskResult,
+} from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
 import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask } from "@/lib/types";
 
@@ -175,6 +180,15 @@ export async function runAgentAction(agentId: string): Promise<RunAgentResult> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runAgentForWorkspace(ws, agentId, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Have a task's assigned agent draft the deliverable (then it awaits approval). */
+export async function runTaskAction(taskId: string): Promise<RunTaskResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runTaskWithAgent(ws, taskId);
 }
 
 /** Run email triage now — the Admin agent reads + prioritizes your unread inbox. */

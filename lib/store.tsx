@@ -23,6 +23,7 @@ import {
   resetWorkspace,
   runAgentAction,
   runEmailTriageAction,
+  runTaskAction,
   runTaskExecutionAction,
   saveWorkspace,
   sendDocumentToNotionAction,
@@ -142,6 +143,7 @@ interface StoreContext {
   approve: (id: string, comment?: string, withEdits?: boolean) => void;
   requestChanges: (id: string, comment: string) => void;
   draftTask: (id: string) => void;
+  workTask: (id: string) => Promise<void>;
   reject: (id: string, comment?: string) => void;
   snooze: (id: string) => void;
   reassign: (id: string, agentId: string) => void;
@@ -623,6 +625,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
     },
     [pushToast, patchState, applyAiDraft],
+  );
+
+  // Server-side "agent does the task": drafts the deliverable, files it as a
+  // document, and moves the task to Ready. Falls back to the client draft in demo.
+  const workTask = useCallback(
+    async (id: string): Promise<void> => {
+      const s = latest.current;
+      const task = s?.tasks.find((t) => t.id === id);
+      const who = s?.agents.find((a) => a.id === task?.agent_id)?.name ?? "The agent";
+      if (!serverMode) {
+        draftTask(id);
+        return;
+      }
+      pushToast({ tone: "working", title: `${who} is drafting this…`, description: task?.title });
+      try {
+        const res = await runTaskAction(id);
+        if (res.ok) {
+          await loadServer();
+          pushToast({ tone: "success", title: "Draft ready to review", description: res.title });
+        } else {
+          pushToast({ tone: "error", title: "Couldn't draft this", description: res.error });
+        }
+      } catch {
+        pushToast({ tone: "error", title: "Couldn't draft this" });
+      }
+    },
+    [serverMode, draftTask, pushToast, loadServer],
   );
 
   const requestChanges = useCallback(
@@ -1341,6 +1370,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       approve,
       requestChanges,
       draftTask,
+      workTask,
       reject,
       snooze,
       reassign,
@@ -1366,7 +1396,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
-      applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
+      applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, sendToNotion, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
