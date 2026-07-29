@@ -208,6 +208,7 @@ async function readBundle(
       emoji: a.emoji,
       accent: a.accent,
       archived: a.archived,
+      kind: a.kind,
     }));
 
   const mappedIntegrations: Integration[] = integrationRows.map((i) => {
@@ -408,6 +409,7 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
           emoji: a.emoji,
           accent: a.accent,
           archived: a.archived,
+          kind: a.kind ?? null,
         })),
       );
 

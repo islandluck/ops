@@ -111,6 +111,8 @@ export const agents = pgTable("agents", {
   emoji: text("emoji").notNull().default(""),
   accent: text("accent").notNull().default("indigo"),
   archived: boolean("archived").notNull().default(false),
+  /** Special agent workflow: null (standard) | "social" (social media manager). */
+  kind: text("kind"),
 });
 
 export const integrations = pgTable("integrations", {

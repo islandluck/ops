@@ -90,6 +90,7 @@ export function buildSeedRows(
     emoji: a.emoji,
     accent: a.accent,
     archived: a.archived,
+    kind: a.kind ?? null,
   }));
 
   // A real (server) workspace starts with NO integrations connected — connection
@@ -225,6 +226,7 @@ export function buildCleanSlateRows(workspaceId: string, now: number): SeedRows 
     emoji: a.emoji,
     accent: a.accent,
     archived: a.archived,
+    kind: a.kind ?? null,
   }));
 
   const integrations: InsertIntegration[] = seed.integrations.map((i) => ({

@@ -178,6 +178,8 @@ export interface Agent {
   emoji: string;
   accent: string;
   archived: boolean;
+  /** Special workflow: undefined/null (standard) | "social" (social media manager). */
+  kind?: string | null;
 }
 
 export interface TaskAsset {

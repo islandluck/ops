@@ -167,6 +167,20 @@ export function createSeedState(now: number): AppState {
       accent: "rose",
     }),
     worker({
+      id: "ag_social",
+      name: "Social Media Agent",
+      category: "content",
+      description: "Researches your industry and drafts on-brand X posts and blog content for your approval.",
+      instructions:
+        "You are the Social Media Agent — the company's social media manager. You research current, relevant industry topics and turn them into on-brand X/Twitter posts and blog drafts that inform and engage the target audience. Match the brand voice exactly, lead with value (not hype), and never publish unverified claims or numbers. Everything you produce goes to the owner for approval before it ships.",
+      tasks_prepared: 0,
+      folder: "Social",
+      background_enabled: true,
+      kind: "social",
+      emoji: "📣",
+      accent: "violet",
+    }),
+    worker({
       id: "ag_manager",
       name: "Manager Agent",
       category: "admin",

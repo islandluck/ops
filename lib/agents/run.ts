@@ -17,6 +17,7 @@ import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { saveDocument } from "@/lib/db/queries";
 import { runEmailTriage } from "./triage";
+import { runSocialMediaAgent } from "./social";
 import type { Agent, AssetType, BusinessBrief, Category, DraftRequest } from "@/lib/types";
 
 function assetTypeFor(category: Category): AssetType {
@@ -46,6 +47,16 @@ export async function runAgentForWorkspace(
   if (!a) return { ok: false, error: "Agent not found." };
   if (a.premium) return { ok: false, error: "This is a premium agent (Manager/Executive)." };
   if (a.archived) return { ok: false, error: "This agent is archived." };
+
+  // The Social Media Agent has its own research → draft workflow.
+  if (a.kind === "social") {
+    const res = await runSocialMediaAgent(workspaceId, a.id);
+    return {
+      ok: res.ok,
+      taskTitle: res.ok ? `${res.drafted ?? 0} draft${res.drafted === 1 ? "" : "s"} ready to review` : undefined,
+      error: res.error,
+    };
+  }
 
   const [briefRow] = await db
     .select()
