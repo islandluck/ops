@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/supabase/server";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
-import { buildAuthorizeUrl } from "@/lib/integrations/oauth";
+import { buildAuthorizeUrl, createPkcePair } from "@/lib/integrations/oauth";
 import { encryptSecret, hasEncryptionKey } from "@/lib/crypto";
 
 /** Start the OAuth flow: redirect the user to the provider's consent screen. */
@@ -23,7 +23,12 @@ export async function GET(
   const user = await getCurrentUser();
   if (!user) return NextResponse.redirect(`${origin}/login`);
 
-  const state = encryptSecret(JSON.stringify({ u: user.id, p: providerKey, t: Date.now() }));
+  // PKCE (X): the verifier rides along inside the encrypted state, so the
+  // callback can complete the exchange without server-side session storage.
+  const pkce = provider.pkce ? createPkcePair() : null;
+  const state = encryptSecret(
+    JSON.stringify({ u: user.id, p: providerKey, t: Date.now(), ...(pkce ? { v: pkce.verifier } : {}) }),
+  );
   const redirectUri = `${origin}/api/integrations/${providerKey}/callback`;
-  return NextResponse.redirect(buildAuthorizeUrl(provider, redirectUri, state));
+  return NextResponse.redirect(buildAuthorizeUrl(provider, redirectUri, state, pkce?.challenge));
 }

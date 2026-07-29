@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   activityEvents,
@@ -18,6 +18,7 @@ import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice } from "./stripe";
+import { postTweet } from "./x";
 import type { ExecutionStep } from "@/lib/types";
 
 export interface ExecResult {
@@ -29,6 +30,27 @@ export interface ExecResult {
 function parseSubject(content: string): string {
   const m = content.match(/Subject:\s*(.+)/i);
   return m ? m[1].trim() : "Operator — message";
+}
+
+/** Guardrail: cap posts published to X per workspace per day (anti-spam). */
+const X_DAILY_CAP = 10;
+
+async function xPostsToday(workspaceId: string): Promise<number> {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const rows = await db
+    .select({ id: executionRuns.id })
+    .from(executionRuns)
+    .innerJoin(tasks, eq(tasks.id, executionRuns.task_id))
+    .where(
+      and(
+        eq(tasks.workspace_id, workspaceId),
+        eq(executionRuns.status, "completed"),
+        gte(executionRuns.started_at, startOfDay),
+        sql`${"X (Twitter)"} = any(${executionRuns.affected_systems})`,
+      ),
+    );
+  return rows.length;
 }
 
 /**
@@ -185,6 +207,28 @@ export async function runTaskExecution(
         });
         steps.push({ label: `Created Notion page${r.url ? ` — ${r.url}` : ""}`, status: "done" });
         touched.push("Notion");
+      } else if (name === "X (Twitter)") {
+        const posted = await xPostsToday(workspaceId);
+        if (posted >= X_DAILY_CAP) {
+          throw new Error(
+            `Daily limit reached — ${posted} posts already published to X today (cap ${X_DAILY_CAP}). Approve this tomorrow.`,
+          );
+        }
+        const token = await getValidAccessToken(workspaceId, name);
+        if (!token) throw new Error("No X token");
+        // Publish the composed X post specifically — the `social_post` asset the
+        // agent wrote and clamped for X — never some other draft asset (e.g. a
+        // longer "Drafted by …" document) that may also be attached to the task.
+        const xText =
+          assets.find((a) => a.asset_type === "social_post")?.content?.trim() ||
+          draft ||
+          task.description;
+        const r = await postTweet(token, xText);
+        steps.push({
+          label: `Published to X — ${r.url}${r.truncated ? " (trimmed to fit 280)" : ""}`,
+          status: "done",
+        });
+        touched.push("X (Twitter)");
       } else if (name === "Stripe") {
         const key = process.env.STRIPE_SECRET_KEY ?? "";
         await createDraftInvoice(key, {

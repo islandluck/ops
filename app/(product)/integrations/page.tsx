@@ -22,6 +22,7 @@ const PROVIDER_COLOR: Record<string, string> = {
   LinkedIn: "bg-sky-50 text-sky-700",
   Slack: "bg-fuchsia-50 text-fuchsia-600",
   Notion: "bg-slate-100 text-slate-700",
+  "X (Twitter)": "bg-slate-900 text-white",
 };
 
 const ERROR_LABELS: Record<string, string> = {

@@ -120,7 +120,11 @@ export function TaskDrawer() {
   if (!state || !task) return <Drawer open={false} onClose={() => selectTask(null)}>{null}</Drawer>;
 
   const agent = state.agents.find((a) => a.id === task.agent_id);
-  const hasDeliverable = task.assets.some((a) => /^(Drafted by|Suggested reply)/i.test(a.title));
+  // A task already has a deliverable if it carries any content asset that isn't
+  // a pure "Context —" reference (which is all a triage action task starts with).
+  const hasDeliverable = task.assets.some(
+    (a) => a.content.trim().length > 0 && !/^context\b/i.test(a.title),
+  );
   const cat = CATEGORY_META[task.category];
   const run = state.runs.find((r) => r.task_id === task.id);
   const taskActivity = state.activity.filter((a) => a.task_id === task.id);

@@ -7,6 +7,7 @@ import { storeProviderTokens } from "@/lib/integrations/tokens";
 import { decryptSecret } from "@/lib/crypto";
 import { getGoogleEmail } from "@/lib/integrations/google";
 import { getHubSpotAccount } from "@/lib/integrations/hubspot";
+import { getXAccount } from "@/lib/integrations/x";
 
 /** OAuth callback: verify state, exchange the code, store encrypted tokens. */
 export async function GET(
@@ -26,7 +27,7 @@ export async function GET(
   if (oauthError) return back(`?error=${encodeURIComponent(oauthError)}`);
   if (!provider || !code || !stateRaw) return back("?error=invalid_callback");
 
-  let state: { u: string; p: string; t: number };
+  let state: { u: string; p: string; t: number; v?: string };
   try {
     state = JSON.parse(decryptSecret(stateRaw));
   } catch {
@@ -48,14 +49,16 @@ export async function GET(
 
   try {
     const redirectUri = `${origin}/api/integrations/${providerKey}/callback`;
-    const tokens = await exchangeCodeForTokens(provider, code, redirectUri);
+    const tokens = await exchangeCodeForTokens(provider, code, redirectUri, state.v);
     const account =
       tokens.account ??
       (providerKey === "google"
         ? await getGoogleEmail(tokens.access)
         : providerKey === "hubspot"
           ? await getHubSpotAccount(tokens.access)
-          : null);
+          : providerKey === "x"
+            ? await getXAccount(tokens.access)
+            : null);
     await storeProviderTokens(wsId, provider, tokens, account);
     return back(`?connected=${providerKey}`);
   } catch (e) {

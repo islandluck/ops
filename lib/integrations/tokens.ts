@@ -106,13 +106,16 @@ export async function getValidAccessToken(
     const refreshed = await refreshOAuthToken(provider, decryptSecret(row.refresh_token));
     if (refreshed) {
       access = refreshed.access;
-      // Persist the rotated access token across all sibling rows.
+      // Persist the rotated access token across all sibling rows. Some providers
+      // (X) also rotate the refresh token on every refresh — store it or the next
+      // refresh will fail with an invalid_grant.
       for (const name of provider.integrationNames) {
         await db
           .update(integrations)
           .set({
             access_token: encryptSecret(refreshed.access),
             token_expires_at: refreshed.expiresAt ?? null,
+            ...(refreshed.refresh ? { refresh_token: encryptSecret(refreshed.refresh) } : {}),
           })
           .where(and(eq(integrations.workspace_id, workspaceId), eq(integrations.name, name)));
       }

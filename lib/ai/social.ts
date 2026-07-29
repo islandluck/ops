@@ -42,7 +42,7 @@ export async function generateSocialBatch(
     brief.restricted_phrases.length ? `Never use / never claim: ${brief.restricted_phrases.join(", ")}` : "",
     "",
     `Create ${config.x} X/Twitter post(s) and ${config.blog} blog draft(s) — on-brand and genuinely useful to the audience.`,
-    "X posts: ≤ 260 characters of body text (NO hashtags in the body), punchy and specific; give 2–3 relevant lowercase hashtags separately. Blog drafts: a title + 3–5 short paragraphs.",
+    "X posts: ≤ 200 characters of body text (NO hashtags in the body — they're appended separately and must fit X's 280-character limit), punchy and specific; give 2–3 relevant lowercase hashtags separately. Blog drafts: a title + 3–5 short paragraphs.",
     "Ground everything in the company's industry and the current topics provided. Never fabricate statistics, quotes, or unverifiable claims.",
     "",
     "Respond with ONLY a JSON array — no markdown or code fences:",

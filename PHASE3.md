@@ -9,6 +9,7 @@ Approving a task can now perform **real actions** on connected tools:
 | **Google Sheets** | Google OAuth (same app) | Logs the approved task to a new spreadsheet | Creates a sheet in your Drive |
 | **HubSpot** | HubSpot OAuth | Creates/updates a CRM contact | A single `operator-demo@example.com` contact |
 | **Notion** | Notion OAuth | Creates a page under a shared page | Only pages you share with the integration |
+| **X (Twitter)** | X OAuth 2.0 (PKCE) | Publishes the approved post | Text only; capped at 10 posts/day |
 | **Stripe** | Secret key | Creates a **draft** invoice | Test mode (`sk_test_…`); never finalized/charged |
 
 Each is **off until configured + connected**. Until then, approving simulates as before — your
@@ -89,6 +90,28 @@ URIs are derived from the request origin.
 
 > Notion grants access per selected page. If you share none, execution returns a clear
 > "share a page with the Operator integration" message — just share one and retry.
+
+## 5. X / Twitter (publish social posts)
+
+1. **developer.x.com** → sign up for a developer account (the **Free** tier allows posting).
+2. Create a **Project + App**, then open the app's **User authentication settings**:
+   - **App permissions:** **Read and write** (required to post)
+   - **Type of App:** **Web App, Automated App or Bot** (a confidential client)
+   - **Callback URI / Redirect URL:** `<APP_URL>/api/integrations/x/callback`
+     (e.g. `http://localhost:3000/api/integrations/x/callback`)
+   - **Website URL:** your site
+3. From **Keys and tokens → OAuth 2.0 Client ID and Client Secret**:
+   ```
+   X_CLIENT_ID=...
+   X_CLIENT_SECRET=...
+   ```
+4. Restart → **Integrations → Connect X (Twitter)** → authorize. Approving an X post
+   from the Social Media Agent publishes it for real.
+
+> Uses OAuth 2.0 with PKCE and the least-privilege scopes `tweet.read tweet.write
+> users.read offline.access`. Access tokens last ~2h and are auto-refreshed (X rotates
+> the refresh token each time, which we persist). Posting is **text-only** for now —
+> images are a later phase. A **10 posts/day** cap guards against spam flags.
 
 ---
 

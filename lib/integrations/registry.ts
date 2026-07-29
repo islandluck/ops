@@ -6,7 +6,7 @@
  * bundle-load time and passed to the client for display.
  */
 
-export type ProviderKey = "google" | "hubspot" | "stripe" | "notion";
+export type ProviderKey = "google" | "hubspot" | "stripe" | "notion" | "x";
 
 export interface ProviderDef {
   key: ProviderKey;
@@ -22,8 +22,12 @@ export interface ProviderDef {
   apiKeyEnv?: string;
   /** Google-style offline access (access_type=offline & prompt=consent) for refresh tokens. */
   offlineAccess?: boolean;
-  /** Exchange the code with HTTP Basic auth + JSON body (Notion) instead of a form body. */
+  /** Send client credentials as an HTTP Basic auth header (Notion, X). */
   basicAuth?: boolean;
+  /** Send the token-exchange body as JSON instead of form-encoded (Notion). */
+  jsonTokenBody?: boolean;
+  /** Requires PKCE (S256 code challenge/verifier) — X/Twitter OAuth 2.0. */
+  pkce?: boolean;
   /** Extra params appended to the authorize URL (e.g. Notion's owner=user). */
   authorizeParams?: Record<string, string>;
   /** What approving a task does, in plain English (shown in the UI). */
@@ -81,8 +85,24 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     clientIdEnv: "NOTION_CLIENT_ID",
     clientSecretEnv: "NOTION_CLIENT_SECRET",
     basicAuth: true,
+    jsonTokenBody: true,
     authorizeParams: { owner: "user" },
     actionLabel: "Create pages in your Notion workspace",
+  },
+  x: {
+    key: "x",
+    label: "X (Twitter)",
+    integrationNames: ["X (Twitter)"],
+    auth: "oauth",
+    authorizeUrl: "https://x.com/i/oauth2/authorize",
+    tokenUrl: "https://api.x.com/2/oauth2/token",
+    // offline.access returns a refresh token (X access tokens expire in ~2h).
+    scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
+    clientIdEnv: "X_CLIENT_ID",
+    clientSecretEnv: "X_CLIENT_SECRET",
+    basicAuth: true,
+    pkce: true,
+    actionLabel: "Publish approved posts to X",
   },
 };
 

@@ -306,6 +306,15 @@ export function createSeedState(now: number): AppState {
       permission_mode: "suggest",
       optional: true,
     },
+    {
+      id: "int_x",
+      name: "X (Twitter)",
+      provider: "X",
+      category: "other",
+      connected: false,
+      permission_mode: "approval",
+      optional: true,
+    },
   ];
 
   const tasks: Task[] = [

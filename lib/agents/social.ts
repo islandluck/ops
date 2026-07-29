@@ -24,6 +24,24 @@ export interface SocialRunResult {
 /** How many pieces one run produces (rate cap). */
 const CONFIG = { x: 3, blog: 1 };
 
+/** X's hard post limit. */
+const X_LIMIT = 280;
+
+/**
+ * Compose an X post that fits the character limit: append as many hashtags as
+ * fit, dropping the rest. Guarantees the draft is publishable as-is.
+ */
+function composeXPost(body: string, hashtags: string[]): string {
+  let text = body.trim();
+  if (text.length > X_LIMIT) text = `${text.slice(0, X_LIMIT - 1).trimEnd()}…`;
+  const kept: string[] = [];
+  for (const tag of hashtags) {
+    const candidate = `${text}\n\n${[...kept, `#${tag}`].join(" ")}`;
+    if (candidate.length <= X_LIMIT) kept.push(`#${tag}`);
+  }
+  return kept.length ? `${text}\n\n${kept.join(" ")}` : text;
+}
+
 export async function runSocialMediaAgent(
   workspaceId: string,
   agentId: string | null,
@@ -63,8 +81,7 @@ export async function runSocialMediaAgent(
 
   for (const p of pieces) {
     const isX = p.channel === "x";
-    const finalContent =
-      isX && p.hashtags.length ? `${p.content}\n\n${p.hashtags.map((h) => `#${h}`).join(" ")}` : p.content;
+    const finalContent = isX ? composeXPost(p.content, p.hashtags) : p.content;
     const label = isX ? "X post" : "Blog draft";
     const heading = `${label}: ${p.title}`.slice(0, 120);
     const taskId = randomUUID();
@@ -74,7 +91,9 @@ export async function runSocialMediaAgent(
       workspace_id: workspaceId,
       category: "content",
       title: heading,
-      description: isX ? "Ready-to-post X/Twitter draft for your review." : "Blog draft for your review.",
+      description: isX
+        ? "Ready-to-post X/Twitter draft. Approving publishes it to X (once connected)."
+        : "Blog draft for your review.",
       rationale: research?.sources.length
         ? "Drafted from current industry topics."
         : "Drafted from your business brief.",
@@ -87,7 +106,9 @@ export async function runSocialMediaAgent(
       requires_approval: true,
       approval_status: "pending",
       execution_status: "none",
-      affected_systems: [],
+      // X posts publish for real on approval once X is connected; blog drafts
+      // have no publish target yet (they land in the file manager).
+      affected_systems: isX ? ["X (Twitter)"] : [],
       proposed_actions: 1,
       impact_score: 40,
       created_at: now,
