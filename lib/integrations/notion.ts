@@ -12,20 +12,41 @@ function notionHeaders(accessToken: string): Record<string, string> {
   };
 }
 
-/** Find a page the integration can write to (the user shares pages at consent time). */
+/**
+ * Find the page to create under. Targets the page(s) the user actually SHARED —
+ * a top-level page whose parent is the workspace — chosen deterministically so
+ * it's the same every time.
+ *
+ * Pages Operator creates are always children of another page (parent.type
+ * "page_id"), so they're never selected here. The previous implementation
+ * picked the most-recently-edited page, which meant each new page nested inside
+ * the one just created (a cascade), since creating a page makes it the newest.
+ */
 async function findParentPageId(accessToken: string): Promise<string | null> {
   const res = await fetch("https://api.notion.com/v1/search", {
     method: "POST",
     headers: notionHeaders(accessToken),
     body: JSON.stringify({
       filter: { property: "object", value: "page" },
-      page_size: 5,
-      sort: { direction: "descending", timestamp: "last_edited_time" },
+      page_size: 100,
     }),
   });
   if (!res.ok) return null;
-  const json = (await res.json()) as { results?: Array<{ id: string; object: string }> };
-  return (json.results ?? []).find((r) => r.object === "page")?.id ?? null;
+  const json = (await res.json()) as {
+    results?: Array<{ id: string; object: string; created_time?: string; parent?: { type?: string } }>;
+  };
+  const pages = (json.results ?? []).filter((r) => r.object === "page");
+  if (!pages.length) return null;
+
+  // Prefer top-level (workspace-parented) pages the user shared; fall back to
+  // all accessible pages if they only shared a sub-page.
+  const shared = pages.filter((p) => p.parent?.type === "workspace");
+  const pool = shared.length ? shared : pages;
+
+  // Stable target across sends: the earliest-created page in the pool (always
+  // older than anything Operator generated).
+  pool.sort((a, b) => new Date(a.created_time ?? 0).getTime() - new Date(b.created_time ?? 0).getTime());
+  return pool[0]?.id ?? null;
 }
 
 /** Split plain text into Notion paragraph blocks (≤1900 chars each, capped). */
