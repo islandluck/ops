@@ -7,10 +7,12 @@ import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import {
   applyOnboardingForUser,
   createPlannedTask,
+  getDocumentById,
   getPlanningContext,
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
+  setDocumentNotionUrl,
   workspaceIdForUser,
 } from "@/lib/db/queries";
 import { draftWithClaude } from "@/lib/ai/draft";
@@ -18,10 +20,12 @@ import { planTask } from "@/lib/ai/plan";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
 import {
   clearIntegration,
+  getValidAccessToken,
   markApiKeyConnected,
   setIntegrationPermissionMode,
 } from "@/lib/integrations/tokens";
 import { getStripeAccount } from "@/lib/integrations/stripe";
+import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { runAgentForWorkspace, type RunAgentResult } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
@@ -180,6 +184,27 @@ export async function runEmailTriageAction(): Promise<TriageResult> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runEmailTriage(ws, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Export a document to Notion (creates a page under a shared Notion page). */
+export async function sendDocumentToNotionAction(
+  documentId: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const doc = await getDocumentById(ws, documentId);
+  if (!doc) return { ok: false, error: "Document not found." };
+  const token = await getValidAccessToken(ws, "Notion");
+  if (!token) return { ok: false, error: "Connect Notion in Integrations first." };
+  try {
+    const page = await createNotionPage(token, { title: doc.name, content: doc.content });
+    if (page.url) await setDocumentNotionUrl(ws, documentId, page.url);
+    return { ok: true, url: page.url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't send to Notion." };
+  }
 }
 
 /* --------------------------- AI drafting --------------------------- */

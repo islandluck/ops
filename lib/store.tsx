@@ -25,6 +25,7 @@ import {
   runEmailTriageAction,
   runTaskExecutionAction,
   saveWorkspace,
+  sendDocumentToNotionAction,
   setIntegrationModeAction,
   signOutAction,
 } from "@/app/actions";
@@ -158,6 +159,7 @@ interface StoreContext {
   deleteAgent: (id: string) => void;
   runAgent: (id: string) => Promise<void>;
   runTriage: () => Promise<void>;
+  sendToNotion: (id: string) => Promise<void>;
   updateBrief: (patch: Partial<BusinessBrief>) => void;
 
   // session
@@ -1173,6 +1175,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [serverMode, pushToast, loadServer]);
 
+  const sendToNotion = useCallback(
+    async (id: string): Promise<void> => {
+      if (!serverMode) {
+        pushToast({ tone: "info", title: "Send to Notion needs the live backend." });
+        return;
+      }
+      pushToast({ tone: "working", title: "Sending to Notion…" });
+      try {
+        const res = await sendDocumentToNotionAction(id);
+        if (res.ok) {
+          await loadServer();
+          pushToast({ tone: "success", title: "Sent to Notion", description: "Open it from the document." });
+        } else {
+          pushToast({ tone: "error", title: "Couldn't send to Notion", description: res.error });
+        }
+      } catch {
+        pushToast({ tone: "error", title: "Couldn't send to Notion" });
+      }
+    },
+    [serverMode, pushToast, loadServer],
+  );
+
   const updateBrief = useCallback(
     (patch: Partial<BusinessBrief>) => {
       patchState((prev) => ({
@@ -1332,6 +1356,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteAgent,
       runAgent,
       runTriage,
+      sendToNotion,
       updateBrief,
       login,
       logout,
@@ -1343,7 +1368,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
       applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
-      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, updateBrief, login, logout, enterDemo,
+      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, sendToNotion, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
     ],
   );

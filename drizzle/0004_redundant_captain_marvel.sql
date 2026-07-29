@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "notion_url" text;

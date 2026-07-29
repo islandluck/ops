@@ -223,3 +223,24 @@ export const triagedEmails = pgTable(
   },
   (t) => [uniqueIndex("triaged_emails_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
 );
+
+/** Agent-authored documents/deliverables shown in the file manager. Durable and
+ *  server-authoritative — never part of the client bundle save. */
+export const documents = pgTable("documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  agent_id: uuid("agent_id"),
+  author_name: text("author_name").notNull().default(""),
+  task_id: uuid("task_id"),
+  task_title: text("task_title").notNull().default(""),
+  name: text("name").notNull(),
+  content: text("content").notNull().default(""),
+  folder: text("folder").notNull().default(""),
+  doc_type: text("doc_type").$type<AssetType>().notNull().default("document"),
+  /** Set once the document has been exported to Notion. */
+  notion_url: text("notion_url"),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});

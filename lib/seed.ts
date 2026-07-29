@@ -982,6 +982,7 @@ export function createSeedState(now: number): AppState {
     decisions,
     runs,
     activity,
+    documents: [],
     session: {
       authenticated: false,
       onboarded: false,

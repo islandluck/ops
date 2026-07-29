@@ -1,12 +1,13 @@
 import "server-only";
 
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "./index";
 import {
   activityEvents,
   agents,
   approvalDecisions,
   businessBriefs,
+  documents,
   executionRuns,
   integrations,
   profiles,
@@ -25,6 +26,7 @@ import type {
   ApprovalDecision,
   AssetType,
   BusinessBrief,
+  Document,
   ExecutionRun,
   Integration,
   OnboardingInput,
@@ -140,6 +142,12 @@ async function readBundle(
     .select()
     .from(activityEvents)
     .where(eq(activityEvents.workspace_id, wsId));
+  const documentRows = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.workspace_id, wsId))
+    .orderBy(desc(documents.created_at))
+    .limit(300);
 
   const assetsByTask = new Map<string, typeof assetRows>();
   for (const a of assetRows) {
@@ -290,6 +298,22 @@ async function readBundle(
     }))
     .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
 
+  const mappedDocuments: Document[] = documentRows.map((d) => ({
+    id: d.id,
+    workspace_id: wsId,
+    agent_id: d.agent_id,
+    author_name: d.author_name,
+    task_id: d.task_id,
+    task_title: d.task_title,
+    name: d.name,
+    content: d.content,
+    folder: d.folder,
+    doc_type: d.doc_type,
+    notion_url: d.notion_url,
+    created_at: iso(d.created_at),
+    updated_at: iso(d.updated_at),
+  }));
+
   return {
     workspace,
     brief,
@@ -299,6 +323,7 @@ async function readBundle(
     decisions: mappedDecisions,
     runs: mappedRuns,
     activity: mappedActivity,
+    documents: mappedDocuments,
     session: {
       authenticated: true,
       onboarded,
@@ -605,6 +630,58 @@ function plannedAssetType(affected: string[]): AssetType {
   return "document";
 }
 
+/** Record an agent-authored document for the file manager. No-op on empty content. */
+export async function saveDocument(input: {
+  workspaceId: string;
+  agentId: string | null;
+  authorName: string;
+  taskId: string | null;
+  taskTitle: string;
+  name: string;
+  content: string;
+  folder: string;
+  docType: AssetType;
+}): Promise<void> {
+  if (!input.content.trim()) return;
+  await db.insert(documents).values({
+    id: uid(),
+    workspace_id: input.workspaceId,
+    agent_id: input.agentId,
+    author_name: input.authorName || "Operator",
+    task_id: input.taskId,
+    task_title: input.taskTitle,
+    name: input.name.slice(0, 200) || "Untitled",
+    content: input.content,
+    folder: input.folder,
+    doc_type: input.docType,
+  });
+}
+
+/** Load a single document's exportable fields (scoped to the workspace). */
+export async function getDocumentById(
+  workspaceId: string,
+  documentId: string,
+): Promise<{ name: string; content: string; notion_url: string | null } | null> {
+  const [row] = await db
+    .select({ name: documents.name, content: documents.content, notion_url: documents.notion_url })
+    .from(documents)
+    .where(and(eq(documents.workspace_id, workspaceId), eq(documents.id, documentId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Record the Notion page URL a document was exported to. */
+export async function setDocumentNotionUrl(
+  workspaceId: string,
+  documentId: string,
+  url: string,
+): Promise<void> {
+  await db
+    .update(documents)
+    .set({ notion_url: url, updated_at: new Date() })
+    .where(and(eq(documents.workspace_id, workspaceId), eq(documents.id, documentId)));
+}
+
 /** Persist a planned task (+ its draft asset + an activity event). Returns the id. */
 export async function createPlannedTask(
   wsId: string,
@@ -616,7 +693,14 @@ export async function createPlannedTask(
 
   // Attach to a worker agent in the same category, if one exists.
   const agentRows = await db
-    .select({ id: agents.id, category: agents.category, premium: agents.premium, archived: agents.archived })
+    .select({
+      id: agents.id,
+      name: agents.name,
+      category: agents.category,
+      folder: agents.folder,
+      premium: agents.premium,
+      archived: agents.archived,
+    })
     .from(agents)
     .where(eq(agents.workspace_id, wsId));
   const match = agentRows.find((a) => a.category === planned.category && !a.premium && !a.archived);
@@ -652,6 +736,17 @@ export async function createPlannedTask(
       title: "Draft prepared by Operator",
       content: planned.draft,
       metadata: null,
+    });
+    await saveDocument({
+      workspaceId: wsId,
+      agentId: match?.id ?? null,
+      authorName: match?.name ?? "Operator",
+      taskId,
+      taskTitle: planned.title,
+      name: planned.title,
+      content: planned.draft,
+      folder: match?.folder ?? "",
+      docType: plannedAssetType(planned.affected_systems),
     });
   }
 

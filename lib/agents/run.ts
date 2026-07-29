@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/schema";
 import { generateAgentTask } from "@/lib/ai/agent";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { saveDocument } from "@/lib/db/queries";
 import { runEmailTriage } from "./triage";
 import type { Agent, AssetType, BusinessBrief, Category } from "@/lib/types";
 
@@ -92,6 +93,17 @@ export async function runAgentForWorkspace(
     title: `Drafted by ${a.name}`,
     content: gen.draft,
     metadata: null,
+  });
+  await saveDocument({
+    workspaceId,
+    agentId: a.id,
+    authorName: a.name,
+    taskId,
+    taskTitle: gen.title,
+    name: gen.title,
+    content: gen.draft,
+    folder: a.folder,
+    docType: assetTypeFor(a.category),
   });
   if (a.log_activity) {
     await db.insert(activityEvents).values({

@@ -22,6 +22,20 @@
       "when": 1785287020384,
       "tag": "0002_tiny_harry_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785340862053,
+      "tag": "0003_parallel_meltdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785342207154,
+      "tag": "0004_redundant_captain_marvel",
+      "breakpoints": true
     }
   ]
 }

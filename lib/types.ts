@@ -273,6 +273,26 @@ export interface ActivityEvent {
 }
 
 /** Full client-side application state (the seeded "database"). */
+/** An agent-authored document, surfaced in the file manager. */
+export interface Document {
+  id: string;
+  workspace_id: string;
+  /** Author agent id (null if system-authored). */
+  agent_id: string | null;
+  author_name: string;
+  /** Task it was produced for (null if standalone / task later removed). */
+  task_id: string | null;
+  task_title: string;
+  name: string;
+  content: string;
+  folder: string;
+  doc_type: AssetType;
+  /** Set once exported to Notion. */
+  notion_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AppState {
   workspace: Workspace;
   brief: BusinessBrief;
@@ -282,6 +302,7 @@ export interface AppState {
   decisions: ApprovalDecision[];
   runs: ExecutionRun[];
   activity: ActivityEvent[];
+  documents: Document[];
   session: {
     authenticated: boolean;
     onboarded: boolean;

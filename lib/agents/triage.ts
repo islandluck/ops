@@ -7,7 +7,7 @@ import { activityEvents, agents, taskAssets, tasks, triagedEmails } from "@/lib/
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { getMessageDetail, listInboxMessages, type GmailMessage } from "@/lib/integrations/google";
 import { triageEmails, type TriagedEmail } from "@/lib/ai/triage";
-import { getPlanningContext } from "@/lib/db/queries";
+import { getPlanningContext, saveDocument } from "@/lib/db/queries";
 
 /**
  * Email triage — the Admin agent reads recent unread inbox mail, classifies it,
@@ -124,6 +124,7 @@ export async function runEmailTriage(
       id: agents.id,
       name: agents.name,
       category: agents.category,
+      folder: agents.folder,
       premium: agents.premium,
       archived: agents.archived,
       tasks_prepared: agents.tasks_prepared,
@@ -163,13 +164,26 @@ export async function runEmailTriage(
     created_at: now,
     updated_at: now,
   });
+  const digestContent = buildDigest(emails, triaged, remaining);
+  const digestName = `Inbox triage — ${emails.length} email${emails.length === 1 ? "" : "s"}`;
   await db.insert(taskAssets).values({
     id: randomUUID(),
     task_id: digestId,
     asset_type: "summary",
     title: "Inbox triage digest",
-    content: buildDigest(emails, triaged, remaining),
+    content: digestContent,
     metadata: null,
+  });
+  await saveDocument({
+    workspaceId,
+    agentId: adminId,
+    authorName: adminName,
+    taskId: digestId,
+    taskTitle: digestName,
+    name: digestName,
+    content: digestContent,
+    folder: admin?.folder ?? "Inbox",
+    docType: "summary",
   });
 
   // 2) Reply drafts + action tasks per email, as the agent flagged them.
