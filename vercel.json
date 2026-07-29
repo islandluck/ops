@@ -4,6 +4,10 @@
     {
       "path": "/api/agents/run",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/social/publish",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

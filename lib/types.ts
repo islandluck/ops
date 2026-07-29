@@ -229,6 +229,10 @@ export interface Task {
   risk_level: RiskLevel;
   priority: Priority;
   due_at: string | null;
+  /** When set (with execution_status "queued"), the task auto-executes at this
+   *  instant via the scheduler rather than on the approval click. Optional:
+   *  absent/undefined means "not scheduled" (the common case). */
+  scheduled_at?: string | null;
   agent_id: string;
   created_by_type: CreatedByType;
   requires_approval: boolean;

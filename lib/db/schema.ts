@@ -149,6 +149,9 @@ export const tasks = pgTable("tasks", {
   risk_level: text("risk_level").$type<RiskLevel>().notNull().default("low"),
   priority: text("priority").$type<Priority>().notNull().default("medium"),
   due_at: timestamp("due_at", { withTimezone: true }),
+  /** When set (+ execution_status "queued"), the task auto-executes at this
+   *  instant via the scheduler instead of on the approval click. */
+  scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
   agent_id: uuid("agent_id"),
   created_by_type: text("created_by_type").$type<CreatedByType>().notNull().default("agent"),
   requires_approval: boolean("requires_approval").notNull().default(true),

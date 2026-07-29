@@ -43,6 +43,13 @@
       "when": 1785352487656,
       "tag": "0005_bouncy_kat_farrell",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785362845461,
+      "tag": "0006_chief_weapon_omega",
+      "breakpoints": true
     }
   ]
 }

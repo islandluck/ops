@@ -25,6 +25,8 @@ import {
   runEmailTriageAction,
   runTaskAction,
   runTaskExecutionAction,
+  scheduleTaskAction,
+  unscheduleTaskAction,
   saveWorkspace,
   sendDocumentToNotionAction,
   setIntegrationModeAction,
@@ -146,6 +148,11 @@ interface StoreContext {
   workTask: (id: string) => Promise<void>;
   reject: (id: string, comment?: string) => void;
   snooze: (id: string) => void;
+  /** Approve now, but auto-execute at `whenISO`. `label` is the time shown in
+   *  the user's timezone (for toasts + the activity log). */
+  scheduleTask: (id: string, whenISO: string, label?: string) => void;
+  /** Cancel a scheduled task and return it to the board for review. */
+  unscheduleTask: (id: string) => void;
   reassign: (id: string, agentId: string) => void;
   moveTask: (id: string, status: TaskStatus) => void;
   createTask: (input: CreateTaskInput) => Promise<void>;
@@ -806,6 +813,104 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [patchState, updateTask, logEvent, pushToast],
   );
 
+  const scheduleTask = useCallback(
+    (id: string, whenISO: string, label?: string) => {
+      if (serverMode) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        setBusyTaskId(id);
+        pushToast({ tone: "working", title: "Scheduling…" });
+        void scheduleTaskAction(id, whenISO, label)
+          .then(async (res) => {
+            await loadServer();
+            setBusyTaskId(null);
+            if (res.ok)
+              pushToast({
+                tone: "success",
+                title: "Scheduled",
+                description: label ? `Publishes ${label}.` : "Queued to auto-publish.",
+              });
+            else pushToast({ tone: "error", title: "Couldn't schedule", description: res.error });
+          })
+          .catch(() => {
+            setBusyTaskId(null);
+            pushToast({ tone: "error", title: "Couldn't schedule" });
+          });
+        return;
+      }
+      // Prototype mode (no backend): optimistic only.
+      patchState((prev) => {
+        const task = prev.tasks.find((t) => t.id === id);
+        return {
+          ...prev,
+          tasks: updateTask(prev, id, {
+            approval_status: "approved",
+            status: "approved",
+            execution_status: "queued",
+            scheduled_at: whenISO,
+          }),
+          activity: logEvent(
+            prev,
+            id,
+            "approved",
+            "human",
+            prev.session.user_name,
+            `${prev.session.user_name} scheduled “${task?.title ?? "task"}”${label ? ` to publish ${label}` : ""}.`,
+          ),
+        };
+      });
+      pushToast({
+        tone: "success",
+        title: "Scheduled",
+        description: label ? `Publishes ${label}.` : undefined,
+      });
+    },
+    [serverMode, pushToast, loadServer, patchState, updateTask, logEvent],
+  );
+
+  const unscheduleTask = useCallback(
+    (id: string) => {
+      if (serverMode) {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        setBusyTaskId(id);
+        void unscheduleTaskAction(id)
+          .then(async (res) => {
+            await loadServer();
+            setBusyTaskId(null);
+            if (res.ok)
+              pushToast({ tone: "info", title: "Unscheduled", description: "Back on the board." });
+            else pushToast({ tone: "error", title: "Couldn't unschedule", description: res.error });
+          })
+          .catch(() => {
+            setBusyTaskId(null);
+            pushToast({ tone: "error", title: "Couldn't unschedule" });
+          });
+        return;
+      }
+      patchState((prev) => {
+        const task = prev.tasks.find((t) => t.id === id);
+        return {
+          ...prev,
+          tasks: updateTask(prev, id, {
+            approval_status: "pending",
+            status: "ready",
+            execution_status: "none",
+            scheduled_at: null,
+          }),
+          activity: logEvent(
+            prev,
+            id,
+            "status_changed",
+            "human",
+            prev.session.user_name,
+            `${prev.session.user_name} unscheduled “${task?.title ?? "task"}”.`,
+          ),
+        };
+      });
+      pushToast({ tone: "info", title: "Unscheduled" });
+    },
+    [serverMode, pushToast, loadServer, patchState, updateTask, logEvent],
+  );
+
   const reassign = useCallback(
     (id: string, agentId: string) => {
       patchState((prev) => {
@@ -1373,6 +1478,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       workTask,
       reject,
       snooze,
+      scheduleTask,
+      unscheduleTask,
       reassign,
       moveTask,
       createTask,
@@ -1396,7 +1503,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
-      applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject, snooze, reassign,
+      applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject, snooze,
+      scheduleTask, unscheduleTask, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, sendToNotion, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,

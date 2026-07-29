@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   Layers,
   Loader2,
@@ -42,6 +43,7 @@ export function TaskCard({
   const due = dueLabel(task.due_at);
   const isReady = task.status === "ready";
   const executing = task.execution_status === "executing";
+  const scheduled = task.execution_status === "queued";
   const failed = task.execution_status === "failed";
   const rejected = task.approval_status === "rejected";
   const completed = task.status === "done" && task.execution_status === "completed";
@@ -106,6 +108,12 @@ export function TaskCard({
         <div className="mt-2.5 flex items-center gap-1.5 rounded-md bg-primary/5 px-2 py-1.5 text-[11.5px] font-medium text-primary">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Executing…
+        </div>
+      )}
+      {scheduled && (
+        <div className="mt-2.5 flex items-center gap-1.5 rounded-md bg-primary/5 px-2 py-1.5 text-[11.5px] font-medium text-primary">
+          <CalendarClock className="h-3.5 w-3.5" />
+          Scheduled{task.scheduled_at ? ` · ${dueLabel(task.scheduled_at).text}` : ""}
         </div>
       )}
       {failed && (

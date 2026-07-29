@@ -1,0 +1,35 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { publishDueScheduledPosts } from "@/lib/agents/schedule";
+
+/**
+ * Scheduler entry point — publishes every task whose scheduled time has arrived.
+ * Secure with the CRON_SECRET env var; Vercel Cron sends it as a Bearer token.
+ * Run this frequently (e.g. every 5–15 min) so posts go out near their time.
+ * Manual test: GET /api/social/publish?key=<CRON_SECRET>
+ */
+async function handle(request: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  const auth = request.headers.get("authorization");
+  const key = new URL(request.url).searchParams.get("key");
+
+  if (secret) {
+    if (auth !== `Bearer ${secret}` && key !== secret) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+  } else if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
+  }
+
+  try {
+    const result = await publishDueScheduledPosts();
+    return NextResponse.json({ ok: true, ...result });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : "publish failed" },
+      { status: 500 },
+    );
+  }
+}
+
+export const GET = handle;
+export const POST = handle;

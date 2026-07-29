@@ -65,6 +65,29 @@ const ASSET_LABEL: Record<AssetType, string> = {
   checklist: "Plan",
 };
 
+/** Quick-pick publish times, computed in the viewer's local timezone. */
+function schedulePresets(): { label: string; when: Date }[] {
+  const now = new Date();
+  const inHour = new Date(now.getTime() + 60 * 60 * 1000);
+  const evening = new Date(now);
+  evening.setHours(18, 0, 0, 0);
+  if (evening.getTime() <= now.getTime() + 30 * 60 * 1000) evening.setDate(evening.getDate() + 1);
+  const tomorrow9 = new Date(now);
+  tomorrow9.setDate(now.getDate() + 1);
+  tomorrow9.setHours(9, 0, 0, 0);
+  return [
+    { label: "In 1 hour", when: inHour },
+    { label: "This evening", when: evening },
+    { label: "Tomorrow 9 AM", when: tomorrow9 },
+  ];
+}
+
+/** Format a Date as a `datetime-local` value ("YYYY-MM-DDTHH:mm") in local time. */
+function toLocalInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export function TaskDrawer() {
   const {
     state,
@@ -76,12 +99,15 @@ export function TaskDrawer() {
     reject,
     retry,
     snooze,
+    scheduleTask,
+    unscheduleTask,
     setAgentMode,
     busyTaskId,
   } = useStore();
 
-  const [mode, setMode] = useState<"idle" | "changes" | "reject">("idle");
+  const [mode, setMode] = useState<"idle" | "changes" | "reject" | "schedule">("idle");
   const [note, setNote] = useState("");
+  const [customWhen, setCustomWhen] = useState("");
   const [drafting, setDrafting] = useState(false);
 
   const task = state?.tasks.find((t) => t.id === selectedTaskId) ?? null;
@@ -92,6 +118,7 @@ export function TaskDrawer() {
   useEffect(() => {
     setMode("idle");
     setNote("");
+    setCustomWhen("");
     setDrafting(false);
   }, [selectedTaskId]);
 
@@ -134,6 +161,7 @@ export function TaskDrawer() {
 
   const busy = busyTaskId === task.id;
   const executing = task.execution_status === "executing";
+  const scheduled = task.execution_status === "queued";
   const failed = task.execution_status === "failed";
   const completed = task.status === "done" && task.execution_status === "completed";
   const rejected = task.approval_status === "rejected";
@@ -148,6 +176,12 @@ export function TaskDrawer() {
     approve(task.id);
     if (auto && agent) setAgentMode(agent.id, "auto");
     setMode("idle");
+  }
+  function doSchedule(when: Date) {
+    if (!task) return;
+    scheduleTask(task.id, when.toISOString(), formatDateTime(when.toISOString()));
+    setMode("idle");
+    setCustomWhen("");
   }
   function doRequestChanges() {
     if (!task || !note.trim()) return;
@@ -409,11 +443,94 @@ export function TaskDrawer() {
               </Button>
             </div>
           </div>
+        ) : mode === "schedule" ? (
+          <div className="space-y-2.5">
+            <p className="text-[12px] font-medium text-muted-foreground">
+              When should this publish?
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {schedulePresets().map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => doSchedule(p.when)}
+                  className="rounded-full border border-input bg-background px-3 py-1.5 text-[12px] font-medium hover:bg-accent"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                value={customWhen}
+                min={toLocalInput(new Date())}
+                onChange={(e) => setCustomWhen(e.target.value)}
+                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-[13px] outline-none focus:border-ring"
+              />
+              <Button
+                size="sm"
+                disabled={!customWhen || new Date(customWhen).getTime() <= Date.now()}
+                onClick={() => doSchedule(new Date(customWhen))}
+              >
+                <CalendarClock className="h-4 w-4" />
+                Schedule
+              </Button>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setMode("idle");
+                  setCustomWhen("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
         ) : executing || busy ? (
           <Button size="lg" className="w-full" disabled>
             <Loader2 className="h-4 w-4 animate-spin" />
             Executing…
           </Button>
+        ) : scheduled ? (
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+              <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
+              <p className="min-w-0 text-[13px]">
+                <span className="font-medium">Scheduled</span>
+                {task.scheduled_at && (
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · publishes {formatDateTime(task.scheduled_at)}
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                size="lg"
+                className="flex-1"
+                disabled={busy}
+                onClick={() => approve(task.id)}
+              >
+                <Zap className="h-4.5 w-4.5" />
+                Publish now
+              </Button>
+              <Button
+                variant="outline"
+                size="lg"
+                disabled={busy}
+                onClick={() => unscheduleTask(task.id)}
+              >
+                <X className="h-4 w-4" />
+                Unschedule
+              </Button>
+            </div>
+          </div>
         ) : failed ? (
           <div className="flex gap-2">
             <Button size="lg" className="flex-1" onClick={() => retry(task.id)}>
@@ -483,6 +600,12 @@ export function TaskDrawer() {
             >
               {(closeMenu) => (
                 <div className="min-w-[220px] space-y-0.5">
+                  <MenuItem
+                    icon={CalendarClock}
+                    onClick={() => { setMode("schedule"); closeMenu(); }}
+                    title="Schedule…"
+                    subtitle="Approve now, publish at a set time"
+                  />
                   <MenuItem
                     icon={Zap}
                     onClick={() => { doApprove(true); closeMenu(); }}

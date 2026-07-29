@@ -18,6 +18,7 @@ import { runTaskExecution } from "@/lib/integrations/execute";
 import { saveDocument } from "@/lib/db/queries";
 import { runEmailTriage } from "./triage";
 import { runSocialMediaAgent } from "./social";
+import { publishDueScheduledPosts } from "./schedule";
 import type { Agent, AssetType, BusinessBrief, Category, DraftRequest } from "@/lib/types";
 
 function assetTypeFor(category: Category): AssetType {
@@ -141,8 +142,9 @@ export async function runAgentForWorkspace(
   return { ok: true, taskTitle: gen.title };
 }
 
-/** Cron entry point: run background-enabled agents across all workspaces. */
-export async function runBackgroundAgents(limit = 25): Promise<{ ran: number }> {
+/** Cron entry point: run background-enabled agents across all workspaces, then
+ *  flush any scheduled posts whose time has arrived. */
+export async function runBackgroundAgents(limit = 25): Promise<{ ran: number; published: number }> {
   const eligible = await db
     .select()
     .from(agents)
@@ -170,7 +172,15 @@ export async function runBackgroundAgents(limit = 25): Promise<{ ran: number }> 
       /* skip and continue */
     }
   }
-  return { ran };
+
+  // Publish anything whose scheduled time has arrived (auto-publish).
+  let published = 0;
+  try {
+    ({ published } = await publishDueScheduledPosts());
+  } catch {
+    /* scheduler errors never break the agent run */
+  }
+  return { ran, published };
 }
 
 function deliverableType(category: Category): AssetType {

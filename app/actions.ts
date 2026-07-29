@@ -34,6 +34,7 @@ import {
   type RunTaskResult,
 } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
+import { scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask } from "@/lib/types";
 
 function displayName(user: User): string {
@@ -130,6 +131,31 @@ export async function runTaskExecutionAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runTaskExecution(ws, taskId, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Approve a task now but queue it to auto-execute at `whenISO` (auto-publish).
+ *  `label` is a human-readable time (formatted in the user's tz) for the log. */
+export async function scheduleTaskAction(
+  taskId: string,
+  whenISO: string,
+  label?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return scheduleTask(ws, taskId, whenISO, { name: displayName(user) }, label);
+}
+
+/** Cancel a scheduled task, returning it to the board for review. */
+export async function unscheduleTaskAction(
+  taskId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return unscheduleTask(ws, taskId, { name: displayName(user) });
 }
 
 /**
