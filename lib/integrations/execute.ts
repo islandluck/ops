@@ -120,12 +120,25 @@ export async function runTaskExecution(
       if (name === "Gmail") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No Gmail token");
-        await sendGmail(token, {
-          to: actor.email, // safe self-send (verifiable); production targets the real recipient
-          subject: `[Operator approved] ${parseSubject(draft)}`,
-          body: `This email was sent by Operator after you approved "${task.title}".\n\n— — —\n${draft || task.description}`,
-        });
-        steps.push({ label: `Sent via Gmail (to ${actor.email})`, status: "done" });
+        const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
+        if (meta && meta.kind === "reply" && meta.to) {
+          // Triage reply: send the approved draft back to the original sender, in-thread.
+          await sendGmail(token, {
+            to: String(meta.to),
+            subject: meta.subject ? String(meta.subject) : `Re: ${parseSubject(draft)}`,
+            body: draft || task.description,
+            threadId: meta.thread_id ? String(meta.thread_id) : undefined,
+            inReplyTo: meta.in_reply_to ? String(meta.in_reply_to) : undefined,
+          });
+          steps.push({ label: `Replied via Gmail (to ${String(meta.to)})`, status: "done" });
+        } else {
+          await sendGmail(token, {
+            to: actor.email, // safe self-send (verifiable); production targets the real recipient
+            subject: `[Operator approved] ${parseSubject(draft)}`,
+            body: `This email was sent by Operator after you approved "${task.title}".\n\n— — —\n${draft || task.description}`,
+          });
+          steps.push({ label: `Sent via Gmail (to ${actor.email})`, status: "done" });
+        }
         touched.push("Gmail");
       } else if (name === "Google Calendar") {
         const token = await getValidAccessToken(workspaceId, name);

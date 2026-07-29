@@ -6,12 +6,15 @@ import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/serve
 import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import {
   applyOnboardingForUser,
+  createPlannedTask,
+  getPlanningContext,
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
   workspaceIdForUser,
 } from "@/lib/db/queries";
 import { draftWithClaude } from "@/lib/ai/draft";
+import { planTask } from "@/lib/ai/plan";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
 import {
   clearIntegration,
@@ -21,7 +24,8 @@ import {
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { runAgentForWorkspace, type RunAgentResult } from "@/lib/agents/run";
-import type { AppState, DraftRequest, OnboardingInput, PermissionMode } from "@/lib/types";
+import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
+import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask } from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
@@ -119,6 +123,47 @@ export async function runTaskExecutionAction(
   return runTaskExecution(ws, taskId, { name: displayName(user), email: user.email ?? "" });
 }
 
+/**
+ * Create a task from a plain-language request. Operator plans it first —
+ * interpreting intent, choosing the integrations it needs, and drafting the
+ * actual content — so it lands ready to review and (once approved) execute for
+ * real. Falls back to a bare task when AI drafting isn't configured.
+ */
+export async function createTaskAction(
+  input: { title: string; notes?: string },
+): Promise<{ ok: boolean; taskId?: string; title?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const ctx = await getPlanningContext(ws);
+    let planned: PlannedTask;
+    if (hasAnthropicKey()) {
+      planned = await planTask({ title: input.title, notes: input.notes }, ctx);
+    } else {
+      planned = {
+        title: input.title.slice(0, 120),
+        category: "admin",
+        affected_systems: [],
+        risk_level: "low",
+        requires_approval: true,
+        rationale: input.notes?.trim() || "Created manually.",
+        draft: input.notes?.trim() || "",
+        needs_connection: [],
+      };
+    }
+    // The approval center is human-in-the-loop: anything that touches a real
+    // system must be approved before it runs, regardless of the model's guess.
+    if (planned.affected_systems.length > 0) planned.requires_approval = true;
+    const taskId = await createPlannedTask(ws, planned, { name: displayName(user) });
+    return { ok: true, taskId, title: planned.title };
+  } catch (e) {
+    console.error("[createTask] failed:", e instanceof Error ? e.message : e);
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't create the task." };
+  }
+}
+
 /** Run an agent now — it prepares a fresh task (and ships it if on auto). */
 export async function runAgentAction(agentId: string): Promise<RunAgentResult> {
   const user = await getCurrentUser();
@@ -126,6 +171,15 @@ export async function runAgentAction(agentId: string): Promise<RunAgentResult> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runAgentForWorkspace(ws, agentId, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Run email triage now — the Admin agent reads + prioritizes your unread inbox. */
+export async function runEmailTriageAction(): Promise<TriageResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runEmailTriage(ws, { name: displayName(user), email: user.email ?? "" });
 }
 
 /* --------------------------- AI drafting --------------------------- */

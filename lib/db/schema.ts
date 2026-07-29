@@ -12,6 +12,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
 import type {
@@ -207,3 +208,18 @@ export const activityEvents = pgTable("activity_events", {
   metadata: jsonb("metadata").$type<Record<string, string | number>>(),
   created_at: createdAt,
 });
+
+/** Which Gmail messages have already been triaged (per workspace), so repeat
+ *  and background runs skip seen mail and process only genuinely new email. */
+export const triagedEmails = pgTable(
+  "triaged_emails",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    gmail_message_id: text("gmail_message_id").notNull(),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("triaged_emails_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
+);

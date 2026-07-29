@@ -40,6 +40,7 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     tokenUrl: "https://oauth2.googleapis.com/token",
     scopes: [
       "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/spreadsheets",
       "openid",
@@ -48,7 +49,7 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",
     offlineAccess: true,
-    actionLabel: "Send approved emails, create calendar events & log to Sheets",
+    actionLabel: "Read + triage inbox, send approved emails, calendar & Sheets",
   },
   hubspot: {
     key: "hubspot",

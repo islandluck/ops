@@ -16,11 +16,13 @@ import { makeId } from "./format";
 import { hasSupabaseClientEnv } from "./config";
 import {
   connectStripeAction,
+  createTaskAction,
   disconnectIntegrationAction,
   generateDraft,
   loadWorkspace,
   resetWorkspace,
   runAgentAction,
+  runEmailTriageAction,
   runTaskExecutionAction,
   saveWorkspace,
   setIntegrationModeAction,
@@ -80,7 +82,7 @@ export interface Toast {
 
 export interface CreateTaskInput {
   title: string;
-  category: Category;
+  category?: Category;
   description?: string;
   risk_level?: RiskLevel;
   requires_approval?: boolean;
@@ -143,7 +145,7 @@ interface StoreContext {
   snooze: (id: string) => void;
   reassign: (id: string, agentId: string) => void;
   moveTask: (id: string, status: TaskStatus) => void;
-  createTask: (input: CreateTaskInput) => void;
+  createTask: (input: CreateTaskInput) => Promise<void>;
   retry: (id: string) => void;
 
   // integrations / agents / brief
@@ -155,6 +157,7 @@ interface StoreContext {
   updateAgent: (id: string, patch: Partial<Agent>) => void;
   deleteAgent: (id: string) => void;
   runAgent: (id: string) => Promise<void>;
+  runTriage: () => Promise<void>;
   updateBrief: (patch: Partial<BusinessBrief>) => void;
 
   // session
@@ -820,14 +823,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   const createTask = useCallback(
-    (input: CreateTaskInput) => {
+    async (input: CreateTaskInput): Promise<void> => {
+      // Server mode: Operator plans the task (intent → integrations → draft)
+      // before it lands, so it's ready to review and execute for real.
+      if (serverMode) {
+        pushToast({
+          tone: "working",
+          title: "Operator is planning this task…",
+          description: input.title,
+        });
+        try {
+          const res = await createTaskAction({ title: input.title, notes: input.description });
+          await loadServer();
+          if (res.ok) {
+            pushToast({ tone: "success", title: "Task ready to review", description: res.title });
+          } else {
+            pushToast({ tone: "error", title: "Couldn't create task", description: res.error });
+          }
+        } catch {
+          pushToast({ tone: "error", title: "Couldn't create task" });
+        }
+        return;
+      }
+
+      // Demo mode: local-only task (no server-side planning available).
+      const category = input.category ?? "growth";
       patchState((prev) => {
-        const agent = prev.agents.find((a) => a.category === input.category);
+        const agent = prev.agents.find((a) => a.category === category);
         const id = makeId("t");
         const task: Task = {
           id,
           workspace_id: prev.workspace.id,
-          category: input.category,
+          category,
           title: input.title,
           description: input.description ?? "Created by you.",
           rationale: "Added manually from the Approval Center.",
@@ -862,7 +889,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       });
       pushToast({ tone: "success", title: "Task created" });
     },
-    [patchState, logEvent, pushToast],
+    [serverMode, patchState, logEvent, pushToast, loadServer],
   );
 
   const retry = useCallback(
@@ -1117,6 +1144,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [serverMode, patchState, pushToast, loadServer],
   );
 
+  const runTriage = useCallback(async (): Promise<void> => {
+    if (!serverMode) {
+      pushToast({ tone: "info", title: "Email triage needs the live backend." });
+      return;
+    }
+    pushToast({ tone: "working", title: "Admin agent is triaging your inbox…" });
+    try {
+      const res = await runEmailTriageAction();
+      await loadServer();
+      if (res.ok) {
+        const parts: string[] = [];
+        if (res.replyTasks) parts.push(`${res.replyTasks} reply draft${res.replyTasks === 1 ? "" : "s"}`);
+        if (res.actionTasks) parts.push(`${res.actionTasks} task${res.actionTasks === 1 ? "" : "s"}`);
+        if (res.remaining) parts.push(`${res.remaining} more to triage`);
+        pushToast({
+          tone: "success",
+          title: res.triaged
+            ? `Triaged ${res.triaged} email${res.triaged === 1 ? "" : "s"}`
+            : "No new email to triage",
+          description: parts.join(" · ") || (res.triaged ? "See the triage digest on your board." : undefined),
+        });
+      } else {
+        pushToast({ tone: "error", title: "Triage failed", description: res.error });
+      }
+    } catch {
+      pushToast({ tone: "error", title: "Triage failed" });
+    }
+  }, [serverMode, pushToast, loadServer]);
+
   const updateBrief = useCallback(
     (patch: Partial<BusinessBrief>) => {
       patchState((prev) => ({
@@ -1275,6 +1331,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       updateAgent,
       deleteAgent,
       runAgent,
+      runTriage,
       updateBrief,
       login,
       logout,
@@ -1286,7 +1343,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
       applySavedView, dismissToast, approve, requestChanges, draftTask, reject, snooze, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
-      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, updateBrief, login, logout, enterDemo,
+      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
     ],
   );

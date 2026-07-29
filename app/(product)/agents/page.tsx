@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   Crown,
   Folder,
+  Inbox,
   Lock,
   Play,
   Plus,
@@ -54,9 +55,10 @@ function Avatar({ agent, size = "md" }: { agent: { emoji: string; accent: string
 }
 
 export default function AgentsPage() {
-  const { state, runAgent } = useStore();
+  const { state, runAgent, runTriage } = useStore();
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  const [triaging, setTriaging] = useState(false);
 
   if (!state) return null;
 
@@ -69,6 +71,15 @@ export default function AgentsPage() {
       await runAgent(id);
     } finally {
       setRunning(null);
+    }
+  }
+
+  async function onTriage() {
+    setTriaging(true);
+    try {
+      await runTriage();
+    } finally {
+      setTriaging(false);
     }
   }
 
@@ -118,10 +129,28 @@ export default function AgentsPage() {
                 <span className="text-[11px] text-muted-foreground">
                   {a.tasks_prepared} prepared · ran {relativeTime(a.last_run_at)}
                 </span>
-                <Button size="sm" variant="outline" disabled={running === a.id} onClick={() => onRun(a.id)}>
-                  {running === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                  Run
-                </Button>
+                <div className="flex items-center gap-1.5">
+                  {a.category === "admin" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={triaging}
+                      onClick={onTriage}
+                      title="Read + triage your inbox"
+                    >
+                      {triaging ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Inbox className="h-3.5 w-3.5" />
+                      )}
+                      Triage
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" disabled={running === a.id} onClick={() => onRun(a.id)}>
+                    {running === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                    Run
+                  </Button>
+                </div>
               </div>
             </Card>
           ))}

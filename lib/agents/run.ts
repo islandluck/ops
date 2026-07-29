@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/schema";
 import { generateAgentTask } from "@/lib/ai/agent";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { runEmailTriage } from "./triage";
 import type { Agent, AssetType, BusinessBrief, Category } from "@/lib/types";
 
 function assetTypeFor(category: Category): AssetType {
@@ -132,11 +133,14 @@ export async function runBackgroundAgents(limit = 25): Promise<{ ran: number }> 
     const [owner] = ws
       ? await db.select().from(profiles).where(eq(profiles.id, ws.owner_id)).limit(1)
       : [];
+    const actor = { name: owner?.full_name || "Scheduler", email: owner?.email || "" };
     try {
-      await runAgentForWorkspace(a.workspace_id, a.id, {
-        name: owner?.full_name || "Scheduler",
-        email: owner?.email || "",
-      });
+      // The Admin agent's background job is inbox triage; others prepare a task.
+      if (a.category === "admin") {
+        await runEmailTriage(a.workspace_id, actor);
+      } else {
+        await runAgentForWorkspace(a.workspace_id, a.id, actor);
+      }
       ran += 1;
     } catch {
       /* skip and continue */

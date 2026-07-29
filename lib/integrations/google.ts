@@ -46,24 +46,28 @@ function encodeEmailHeader(value: string): string {
 
 export async function sendGmail(
   accessToken: string,
-  msg: { to: string; subject: string; body: string },
+  msg: { to: string; subject: string; body: string; threadId?: string; inReplyTo?: string },
 ): Promise<{ id: string }> {
-  const raw = base64url(
-    [
-      `To: ${msg.to}`,
-      `Subject: ${encodeEmailHeader(msg.subject)}`,
-      "Content-Type: text/plain; charset=UTF-8",
-      "MIME-Version: 1.0",
-      "",
-      msg.body,
-    ].join("\r\n"),
-  );
+  const headers = [
+    `To: ${msg.to}`,
+    `Subject: ${encodeEmailHeader(msg.subject)}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "MIME-Version: 1.0",
+  ];
+  // Threading: link the reply to the original message so it lands in-thread.
+  if (msg.inReplyTo) {
+    headers.push(`In-Reply-To: ${msg.inReplyTo}`, `References: ${msg.inReplyTo}`);
+  }
+  const raw = base64url([...headers, "", msg.body].join("\r\n"));
+  const payload: Record<string, string> = { raw };
+  if (msg.threadId) payload.threadId = msg.threadId;
+
   const res = await fetch(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
     {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ raw }),
+      body: JSON.stringify(payload),
     },
   );
   const json = (await res.json()) as Record<string, unknown>;
@@ -72,6 +76,101 @@ export async function sendGmail(
     throw new Error(`Gmail send failed: ${err ?? res.status}`);
   }
   return { id: String(json.id) };
+}
+
+/* ------------------------------ Gmail read (triage) ------------------------- */
+
+export interface GmailMessage {
+  id: string;
+  threadId: string;
+  from: { name: string; email: string };
+  to: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  body: string;
+  /** RFC 5322 Message-ID header, used to thread replies. */
+  messageId: string;
+}
+
+/** List recent inbox message ids matching a Gmail search query. */
+export async function listInboxMessages(
+  accessToken: string,
+  opts?: { max?: number; query?: string },
+): Promise<{ id: string; threadId: string }[]> {
+  const q = encodeURIComponent(opts?.query ?? "in:inbox is:unread");
+  const max = opts?.max ?? 15;
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=${max}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.status === 403) {
+    throw new Error("Gmail read access isn't granted. Reconnect Google in Integrations to enable inbox triage.");
+  }
+  const json = (await res.json()) as { messages?: { id: string; threadId: string }[]; error?: { message?: string } };
+  if (!res.ok) throw new Error(`Gmail list failed: ${json.error?.message ?? res.status}`);
+  return (json.messages ?? []).map((m) => ({ id: m.id, threadId: m.threadId }));
+}
+
+type GmailHeader = { name: string; value: string };
+type GmailPart = { mimeType?: string; body?: { data?: string }; parts?: GmailPart[] };
+
+function headerVal(headers: GmailHeader[], name: string): string {
+  return headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+function parseFrom(raw: string): { name: string; email: string } {
+  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (m) return { name: m[1].trim() || m[2].trim(), email: m[2].trim() };
+  return { name: raw.trim(), email: raw.trim() };
+}
+
+function decodeB64Url(data: string): string {
+  return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+}
+
+function extractBody(payload: GmailPart | undefined): string {
+  const find = (p: GmailPart | undefined, mime: string): string | null => {
+    if (!p) return null;
+    if (p.mimeType === mime && p.body?.data) return decodeB64Url(p.body.data);
+    for (const child of p.parts ?? []) {
+      const r = find(child, mime);
+      if (r) return r;
+    }
+    return null;
+  };
+  const plain = find(payload, "text/plain");
+  if (plain) return plain;
+  const html = find(payload, "text/html");
+  return html ? html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ") : "";
+}
+
+/** Fetch a single message's sender, subject, body, and threading headers. */
+export async function getMessageDetail(accessToken: string, id: string): Promise<GmailMessage> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const json = (await res.json()) as {
+    id: string;
+    threadId: string;
+    snippet?: string;
+    payload?: { headers?: GmailHeader[] } & GmailPart;
+    error?: { message?: string };
+  };
+  if (!res.ok) throw new Error(`Gmail get failed: ${json.error?.message ?? res.status}`);
+  const headers = json.payload?.headers ?? [];
+  return {
+    id: json.id,
+    threadId: json.threadId,
+    from: parseFrom(headerVal(headers, "From")),
+    to: headerVal(headers, "To"),
+    subject: headerVal(headers, "Subject") || "(no subject)",
+    date: headerVal(headers, "Date"),
+    snippet: json.snippet ?? "",
+    body: extractBody(json.payload).slice(0, 4000),
+    messageId: headerVal(headers, "Message-ID"),
+  };
 }
 
 /** Create a spreadsheet and write the given rows (starting at A1). Returns its URL. */

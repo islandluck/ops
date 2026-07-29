@@ -23,10 +23,12 @@ import type {
   Agent,
   AppState,
   ApprovalDecision,
+  AssetType,
   BusinessBrief,
   ExecutionRun,
   Integration,
   OnboardingInput,
+  PlannedTask,
   Task,
   Workspace,
 } from "@/lib/types";
@@ -556,4 +558,116 @@ export async function applyOnboardingForUser(
       .set({ permissions_mode: input.approvalDefault })
       .where(eq(agents.workspace_id, wsId));
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* Task planning (manual task creation → Operator plans + drafts)      */
+/* ------------------------------------------------------------------ */
+
+/** Context Operator needs to plan a task: brief fields + integrations. */
+export async function getPlanningContext(wsId: string): Promise<{
+  brief: {
+    company_name: string;
+    business_description: string;
+    core_offer: string;
+    ideal_customer_profile: string;
+    voice_rules: string[];
+    restricted_phrases: string[];
+  };
+  integrations: { name: string; connected: boolean }[];
+}> {
+  const [briefRow] = await db
+    .select()
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, wsId))
+    .limit(1);
+  const integ = await db
+    .select({ name: integrations.name, connected: integrations.connected })
+    .from(integrations)
+    .where(eq(integrations.workspace_id, wsId));
+  return {
+    brief: {
+      company_name: briefRow?.company_name ?? "",
+      business_description: briefRow?.business_description ?? "",
+      core_offer: briefRow?.core_offer ?? "",
+      ideal_customer_profile: briefRow?.ideal_customer_profile ?? "",
+      voice_rules: briefRow?.voice_rules ?? [],
+      restricted_phrases: briefRow?.restricted_phrases ?? [],
+    },
+    integrations: integ,
+  };
+}
+
+function plannedAssetType(affected: string[]): AssetType {
+  if (affected.includes("Gmail")) return "email";
+  if (affected.includes("Notion")) return "document";
+  if (affected.includes("Google Sheets")) return "summary";
+  return "document";
+}
+
+/** Persist a planned task (+ its draft asset + an activity event). Returns the id. */
+export async function createPlannedTask(
+  wsId: string,
+  planned: PlannedTask,
+  actor: { name: string },
+): Promise<string> {
+  const now = new Date();
+  const taskId = uid();
+
+  // Attach to a worker agent in the same category, if one exists.
+  const agentRows = await db
+    .select({ id: agents.id, category: agents.category, premium: agents.premium, archived: agents.archived })
+    .from(agents)
+    .where(eq(agents.workspace_id, wsId));
+  const match = agentRows.find((a) => a.category === planned.category && !a.premium && !a.archived);
+
+  await db.insert(tasks).values({
+    id: taskId,
+    workspace_id: wsId,
+    category: planned.category,
+    title: planned.title,
+    description: planned.rationale,
+    rationale: planned.rationale,
+    status: "ready",
+    risk_level: planned.risk_level,
+    priority: "medium",
+    due_at: null,
+    agent_id: match?.id ?? null,
+    created_by_type: "human",
+    requires_approval: planned.requires_approval,
+    approval_status: "pending",
+    execution_status: "none",
+    affected_systems: planned.affected_systems,
+    proposed_actions: planned.affected_systems.length || 1,
+    impact_score: 45,
+    created_at: now,
+    updated_at: now,
+  });
+
+  if (planned.draft.trim()) {
+    await db.insert(taskAssets).values({
+      id: uid(),
+      task_id: taskId,
+      asset_type: plannedAssetType(planned.affected_systems),
+      title: "Draft prepared by Operator",
+      content: planned.draft,
+      metadata: null,
+    });
+  }
+
+  const systems = planned.affected_systems.length
+    ? ` Systems: ${planned.affected_systems.join(", ")}.`
+    : "";
+  await db.insert(activityEvents).values({
+    id: uid(),
+    workspace_id: wsId,
+    task_id: taskId,
+    event_type: "task_created",
+    actor_type: "human",
+    actor_id: actor.name,
+    summary: `${actor.name} created “${planned.title}”. Operator planned it and drafted the content.${systems}`,
+    created_at: now,
+  });
+
+  return taskId;
 }

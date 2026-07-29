@@ -45,6 +45,21 @@ export type ExecutionStatus =
 /** Permission tiers per agent / integration. */
 export type PermissionMode = "suggest" | "approval" | "auto";
 
+/** Result of Operator "thinking through" a user-created task before it lands. */
+export interface PlannedTask {
+  title: string;
+  category: Category;
+  /** Integration names the task needs (exact workspace integration names). */
+  affected_systems: string[];
+  risk_level: RiskLevel;
+  requires_approval: boolean;
+  rationale: string;
+  /** Ready-to-use content the owner reviews (email, doc, page, etc.). */
+  draft: string;
+  /** Subset of affected_systems that isn't connected yet. */
+  needs_connection: string[];
+}
+
 /** Payload persisted when a user completes guided onboarding (server mode). */
 export interface OnboardingInput {
   user_name: string;
