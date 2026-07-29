@@ -602,6 +602,7 @@ export async function getPlanningContext(wsId: string): Promise<{
     ideal_customer_profile: string;
     voice_rules: string[];
     restricted_phrases: string[];
+    timezone: string;
   };
   integrations: { name: string; connected: boolean }[];
 }> {
@@ -622,6 +623,7 @@ export async function getPlanningContext(wsId: string): Promise<{
       ideal_customer_profile: briefRow?.ideal_customer_profile ?? "",
       voice_rules: briefRow?.voice_rules ?? [],
       restricted_phrases: briefRow?.restricted_phrases ?? [],
+      timezone: briefRow?.timezone ?? "",
     },
     integrations: integ,
   };

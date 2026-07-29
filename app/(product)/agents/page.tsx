@@ -115,7 +115,10 @@ export default function AgentsPage() {
 
               <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
                 <Badge className={cn("border-transparent", a.permissions_mode === "auto" ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground")}>
-                  <Zap className="h-3 w-3" /> {AUTONOMY_LABEL[a.permissions_mode]}
+                  <Zap className="h-3 w-3" />{" "}
+                  {a.kind === "social" && a.permissions_mode === "auto"
+                    ? "Autopilot"
+                    : AUTONOMY_LABEL[a.permissions_mode]}
                 </Badge>
                 {a.background_enabled && (
                   <Badge className="border-transparent bg-sky-50 text-sky-700">Background on</Badge>
@@ -342,6 +345,13 @@ function AgentEditor({
           <p className="text-[11.5px] text-muted-foreground">
             {PERMISSION_META[form.permissions_mode ?? "approval"].description}
           </p>
+          {agent?.kind === "social" && (form.permissions_mode ?? "approval") === "auto" && (
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-[11.5px] leading-snug text-emerald-800">
+              <strong>Autopilot:</strong> drafts, schedules, and auto-publishes to X on a
+              steady cadence — no approval needed. Scheduled posts still appear on your board
+              and can be cancelled any time before they go out.
+            </p>
+          )}
         </div>
 
         <div className="space-y-2 rounded-xl border border-border p-3">
