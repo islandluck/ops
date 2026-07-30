@@ -29,6 +29,8 @@ import type {
   ExecutionStep,
   PermissionMode,
   Priority,
+  ProjectPlan,
+  ProjectStatus,
   RiskLevel,
   TaskStatus,
 } from "@/lib/types";
@@ -152,6 +154,10 @@ export const tasks = pgTable("tasks", {
   /** When set (+ execution_status "queued"), the task auto-executes at this
    *  instant via the scheduler instead of on the approval click. */
   scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
+  /** Project orchestration — set when a task is a materialized project step. */
+  project_id: uuid("project_id"),
+  project_phase: integer("project_phase"),
+  project_step_kind: text("project_step_kind").$type<"deliverable" | "action">(),
   agent_id: uuid("agent_id"),
   created_by_type: text("created_by_type").$type<CreatedByType>().notNull().default("agent"),
   requires_approval: boolean("requires_approval").notNull().default(true),
@@ -267,6 +273,28 @@ export const documents = pgTable("documents", {
   doc_type: text("doc_type").$type<AssetType>().notNull().default("document"),
   /** Set once the document has been exported to Notion. */
   notion_url: text("notion_url"),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
+
+/** A multi-step project a leadership agent (Manager/Executive) plans and runs:
+ *  a goal decomposed into a phased plan whose steps become tasks over time. */
+export const projects = pgTable("projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  title: text("title").notNull().default(""),
+  summary: text("summary").notNull().default(""),
+  status: text("status").$type<ProjectStatus>().notNull().default("planning"),
+  owner_kind: text("owner_kind").$type<"manager" | "executive">().notNull().default("manager"),
+  owner_agent_id: uuid("owner_agent_id"),
+  /** The phased blueprint the leadership agent authored (steps → tasks). */
+  plan: jsonb("plan").$type<ProjectPlan>().notNull().default({ phases: [] }),
+  /** 0-based index of the phase currently being worked. */
+  current_phase: integer("current_phase").notNull().default(0),
+  created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
   created_at: createdAt,
   updated_at: updatedAt,
 });

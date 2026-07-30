@@ -233,6 +233,11 @@ export interface Task {
    *  instant via the scheduler rather than on the approval click. Optional:
    *  absent/undefined means "not scheduled" (the common case). */
   scheduled_at?: string | null;
+  /** Project orchestration: the project this task belongs to (if any), which
+   *  phase it's in, and whether it's an agent deliverable or a human action. */
+  project_id?: string | null;
+  project_phase?: number | null;
+  project_step_kind?: "deliverable" | "action" | null;
   agent_id: string;
   created_by_type: CreatedByType;
   requires_approval: boolean;
@@ -262,6 +267,52 @@ export interface PostImage {
   height: number;
   attribution?: string | null;
   created_at: string;
+}
+
+/* ----------------------------- projects ---------------------------------- */
+
+export type ProjectStatus = "planning" | "active" | "blocked" | "done" | "cancelled";
+
+/** One step in a project plan — either a deliverable a worker agent drafts, or
+ *  an action the owner performs themselves (e.g. "build + publish the site"). */
+export interface ProjectStep {
+  id: string;
+  title: string;
+  /** What to produce (deliverable) or do (action). */
+  brief: string;
+  /** The worker department that owns it, or "human" for an owner action. */
+  assignee: Category | "human";
+  kind: "deliverable" | "action";
+}
+
+export interface ProjectPhase {
+  title: string;
+  summary: string;
+  steps: ProjectStep[];
+}
+
+export interface ProjectPlan {
+  phases: ProjectPhase[];
+}
+
+/** A multi-step project a leadership agent (Manager/Executive) plans and runs. */
+export interface Project {
+  id: string;
+  workspace_id: string;
+  goal: string;
+  title: string;
+  summary: string;
+  status: ProjectStatus;
+  owner_kind: "manager" | "executive";
+  owner_agent_id: string | null;
+  plan: ProjectPlan;
+  /** Index of the phase currently being worked (0-based). */
+  current_phase: number;
+  created_by_type: CreatedByType;
+  created_at: string;
+  updated_at: string;
+  /** Denormalised progress, assembled at load. */
+  progress?: { total: number; done: number };
 }
 
 export interface Integration {

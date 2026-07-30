@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runBackgroundAgents } from "@/lib/agents/run";
+import { advanceActiveProjects } from "@/lib/agents/project";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -21,7 +22,10 @@ async function handle(request: NextRequest) {
 
   try {
     const result = await runBackgroundAgents();
-    return NextResponse.json({ ok: true, ...result });
+    // Advance any active projects whose current phase is complete (the heartbeat
+    // that moves long-running projects forward phase by phase).
+    const projects = await advanceActiveProjects();
+    return NextResponse.json({ ok: true, ...result, projectsAdvanced: projects.advanced });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "run failed" },

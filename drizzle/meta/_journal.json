@@ -57,6 +57,13 @@
       "when": 1785368267951,
       "tag": "0007_lethal_blue_shield",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785397867951,
+      "tag": "0008_minor_clea",
+      "breakpoints": true
     }
   ]
 }

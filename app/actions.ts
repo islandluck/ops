@@ -42,7 +42,23 @@ import {
 } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
 import { scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
-import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask, PostImage } from "@/lib/types";
+import {
+  advanceProject,
+  approveProjectPlan,
+  cancelProject,
+  createProject,
+  getProject,
+  listProjects,
+} from "@/lib/agents/project";
+import type {
+  AppState,
+  DraftRequest,
+  OnboardingInput,
+  PermissionMode,
+  PlannedTask,
+  PostImage,
+  Project,
+} from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
@@ -270,6 +286,69 @@ export async function removePostImageAction(
   await deleteMediaRow(mediaId);
   await deleteImageAt(row.storage_path);
   return { ok: true };
+}
+
+/* ------------------------------- projects -------------------------------- */
+
+/** Have a leadership agent plan a project from a goal (awaits plan approval). */
+export async function createProjectAction(
+  goal: string,
+  ownerKind: "manager" | "executive",
+): Promise<{ ok: boolean; projectId?: string; title?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return createProject(ws, goal, ownerKind);
+}
+
+/** Approve a project's plan and kick off phase 1. */
+export async function approveProjectPlanAction(
+  projectId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return approveProjectPlan(ws, projectId, { name: displayName(user) });
+}
+
+/** Nudge a project to advance if its current phase is complete. */
+export async function advanceProjectAction(
+  projectId: string,
+): Promise<{ ok: boolean; advanced?: boolean; status?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const r = await advanceProject(ws, projectId);
+  return { ok: true, advanced: r.advanced, status: r.status };
+}
+
+export async function cancelProjectAction(
+  projectId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return cancelProject(ws, projectId, { name: displayName(user) });
+}
+
+export async function getProjectsAction(): Promise<Project[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listProjects(ws);
+}
+
+export async function getProjectAction(projectId: string): Promise<Project | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getProject(ws, projectId);
 }
 
 /**
