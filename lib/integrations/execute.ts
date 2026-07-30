@@ -18,7 +18,9 @@ import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice } from "./stripe";
-import { postTweet } from "./x";
+import { postTweet, uploadMediaToX } from "./x";
+import { listMediaRowsForTask } from "@/lib/db/queries";
+import { getImageBytes } from "@/lib/media/storage";
 import type { ExecutionStep } from "@/lib/types";
 
 export interface ExecResult {
@@ -223,9 +225,30 @@ export async function runTaskExecution(
           assets.find((a) => a.asset_type === "social_post")?.content?.trim() ||
           draft ||
           task.description;
-        const r = await postTweet(token, xText);
+
+        // Attach up to 4 images (X's per-post limit). A media failure never
+        // sinks the post — publish text-only and note what was skipped.
+        let mediaIds: string[] = [];
+        let mediaNote = "";
+        const mediaRows = (await listMediaRowsForTask(taskId)).slice(0, 4);
+        if (mediaRows.length) {
+          try {
+            for (const m of mediaRows) {
+              const { bytes, mime } = await getImageBytes(m.storage_path);
+              mediaIds.push(await uploadMediaToX(token, bytes, mime));
+            }
+          } catch (e) {
+            mediaIds = [];
+            mediaNote = ` (image skipped: ${e instanceof Error ? e.message : "media upload failed"})`;
+          }
+        }
+
+        const r = await postTweet(token, xText, mediaIds);
+        const withImgs = mediaIds.length
+          ? ` with ${mediaIds.length} image${mediaIds.length === 1 ? "" : "s"}`
+          : mediaNote;
         steps.push({
-          label: `Published to X — ${r.url}${r.truncated ? " (trimmed to fit 280)" : ""}`,
+          label: `Published to X — ${r.url}${r.truncated ? " (trimmed to fit 280)" : ""}${withImgs}`,
           status: "done",
         });
         touched.push("X (Twitter)");

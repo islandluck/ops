@@ -10,6 +10,7 @@ import {
   documents,
   executionRuns,
   integrations,
+  media,
   profiles,
   taskAssets,
   tasks,
@@ -31,6 +32,7 @@ import type {
   Integration,
   OnboardingInput,
   PlannedTask,
+  PostImage,
   Task,
   Workspace,
 } from "@/lib/types";
@@ -627,6 +629,84 @@ export async function getPlanningContext(wsId: string): Promise<{
     },
     integrations: integ,
   };
+}
+
+/* -------------------------------- media --------------------------------- */
+
+function toPostImage(m: typeof media.$inferSelect): PostImage {
+  return {
+    id: m.id,
+    task_id: m.task_id,
+    source: m.source,
+    url: m.public_url,
+    mime_type: m.mime_type,
+    alt_text: m.alt_text,
+    width: m.width,
+    height: m.height,
+    attribution: m.attribution,
+    created_at: iso(m.created_at),
+  };
+}
+
+export async function insertMedia(row: {
+  workspaceId: string;
+  taskId: string | null;
+  source: "upload" | "stock" | "ai";
+  storagePath: string;
+  publicUrl: string;
+  mimeType: string;
+  altText?: string;
+  width?: number;
+  height?: number;
+  byteSize?: number;
+  attribution?: string | null;
+}): Promise<PostImage> {
+  const [inserted] = await db
+    .insert(media)
+    .values({
+      id: uid(),
+      workspace_id: row.workspaceId,
+      task_id: row.taskId,
+      source: row.source,
+      storage_path: row.storagePath,
+      public_url: row.publicUrl,
+      mime_type: row.mimeType,
+      alt_text: row.altText ?? "",
+      width: row.width ?? 0,
+      height: row.height ?? 0,
+      byte_size: row.byteSize ?? 0,
+      attribution: row.attribution ?? null,
+    })
+    .returning();
+  return toPostImage(inserted);
+}
+
+/** Images attached to a task, oldest first (public URLs only — no storage paths). */
+export async function listMediaForTask(workspaceId: string, taskId: string): Promise<PostImage[]> {
+  const rows = await db
+    .select()
+    .from(media)
+    .where(and(eq(media.workspace_id, workspaceId), eq(media.task_id, taskId)))
+    .orderBy(media.created_at);
+  return rows.map(toPostImage);
+}
+
+/** Raw rows (incl. storage_path) — used by the publish path to fetch binaries. */
+export async function listMediaRowsForTask(taskId: string) {
+  return db.select().from(media).where(eq(media.task_id, taskId)).orderBy(media.created_at);
+}
+
+export async function getMediaRow(workspaceId: string, mediaId: string) {
+  const [row] = await db
+    .select()
+    .from(media)
+    .where(and(eq(media.workspace_id, workspaceId), eq(media.id, mediaId)))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function deleteMediaRow(mediaId: string): Promise<void> {
+  await db.delete(media).where(eq(media.id, mediaId));
 }
 
 function plannedAssetType(affected: string[]): AssetType {

@@ -238,6 +238,7 @@ export async function runTaskWithAgent(
     idealCustomer: briefRow?.ideal_customer_profile ?? "",
     voiceRules: briefRow?.voice_rules ?? [],
     restrictedPhrases: briefRow?.restricted_phrases ?? [],
+    xPost: task.affected_systems.includes("X (Twitter)"),
     agentName: agent?.name,
     agentInstructions: agent?.instructions,
   };

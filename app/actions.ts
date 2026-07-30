@@ -4,17 +4,24 @@ import { redirect } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/server";
 import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
+import { randomUUID } from "node:crypto";
 import {
   applyOnboardingForUser,
   createPlannedTask,
+  deleteMediaRow,
   getDocumentById,
+  getMediaRow,
   getPlanningContext,
+  insertMedia,
+  listMediaForTask,
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
   setDocumentNotionUrl,
   workspaceIdForUser,
 } from "@/lib/db/queries";
+import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } from "@/lib/media/storage";
+import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
@@ -35,7 +42,7 @@ import {
 } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
 import { scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
-import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask } from "@/lib/types";
+import type { AppState, DraftRequest, OnboardingInput, PermissionMode, PlannedTask, PostImage } from "@/lib/types";
 
 function displayName(user: User): string {
   const meta = user.user_metadata as { full_name?: string } | undefined;
@@ -156,6 +163,113 @@ export async function unscheduleTaskAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return unscheduleTask(ws, taskId, { name: displayName(user) });
+}
+
+/* -------------------------- post images (media) -------------------------- */
+
+/** Images attached to a task/post. */
+export async function getPostImagesAction(taskId: string): Promise<PostImage[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listMediaForTask(ws, taskId);
+}
+
+/** Upload an image file and attach it to a task. */
+export async function uploadPostImageAction(
+  taskId: string,
+  formData: FormData,
+): Promise<{ ok: boolean; image?: PostImage; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false, error: "No file provided." };
+  if (!IMAGE_MIME_TYPES.includes(file.type)) {
+    return { ok: false, error: "Unsupported image type — use PNG, JPEG, WebP, or GIF." };
+  }
+  if (file.size > MAX_IMAGE_BYTES) return { ok: false, error: "Image is too large (max 10 MB)." };
+  try {
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const { path, publicUrl } = await uploadImageBytes(ws, randomUUID(), bytes, file.type);
+    const image = await insertMedia({
+      workspaceId: ws,
+      taskId,
+      source: "upload",
+      storagePath: path,
+      publicUrl,
+      mimeType: file.type,
+      byteSize: file.size,
+      altText: file.name.replace(/\.[^.]+$/, "").slice(0, 200),
+    });
+    return { ok: true, image };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Upload failed." };
+  }
+}
+
+/** Search the stock library (Pexels). `configured` is false until a key is set. */
+export async function searchStockAction(
+  query: string,
+): Promise<{ ok: boolean; images: StockImage[]; configured: boolean }> {
+  const user = await getCurrentUser();
+  const configured = stockConfigured();
+  if (!user) return { ok: false, images: [], configured };
+  const images = await searchStockImages(query);
+  return { ok: true, images, configured };
+}
+
+/** Save a chosen stock image into our storage and attach it to a task. */
+export async function attachStockImageAction(
+  taskId: string,
+  stock: { url: string; alt: string; width: number; height: number; attribution: string },
+): Promise<{ ok: boolean; image?: PostImage; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const res = await fetch(stock.url);
+    if (!res.ok) return { ok: false, error: "Couldn't fetch that stock image." };
+    const mime = (res.headers.get("content-type") ?? "image/jpeg").split(";")[0].trim();
+    if (!IMAGE_MIME_TYPES.includes(mime)) return { ok: false, error: "Unsupported image type." };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_BYTES) return { ok: false, error: "Image is too large (max 10 MB)." };
+    const { path, publicUrl } = await uploadImageBytes(ws, randomUUID(), bytes, mime);
+    const image = await insertMedia({
+      workspaceId: ws,
+      taskId,
+      source: "stock",
+      storagePath: path,
+      publicUrl,
+      mimeType: mime,
+      byteSize: bytes.length,
+      altText: stock.alt.slice(0, 200),
+      width: stock.width,
+      height: stock.height,
+      attribution: stock.attribution,
+    });
+    return { ok: true, image };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't attach that image." };
+  }
+}
+
+/** Remove an attached image (deletes the row + the stored binary). */
+export async function removePostImageAction(
+  mediaId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const row = await getMediaRow(ws, mediaId);
+  if (!row) return { ok: false, error: "Image not found." };
+  await deleteMediaRow(mediaId);
+  await deleteImageAt(row.storage_path);
+  return { ok: true };
 }
 
 /**

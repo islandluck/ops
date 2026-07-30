@@ -229,6 +229,27 @@ export const triagedEmails = pgTable(
   (t) => [uniqueIndex("triaged_emails_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
 );
 
+/** Images attached to a post/task. Binaries live in Supabase Storage; this row
+ *  holds the metadata + a public URL. Server-authoritative. */
+export const media = pgTable("media", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  task_id: uuid("task_id"),
+  source: text("source").$type<"upload" | "stock" | "ai">().notNull().default("upload"),
+  storage_path: text("storage_path").notNull(),
+  public_url: text("public_url").notNull().default(""),
+  mime_type: text("mime_type").notNull().default("image/jpeg"),
+  alt_text: text("alt_text").notNull().default(""),
+  width: integer("width").notNull().default(0),
+  height: integer("height").notNull().default(0),
+  byte_size: integer("byte_size").notNull().default(0),
+  /** Attribution string for stock images (e.g. "Photo by … on Pexels"). */
+  attribution: text("attribution"),
+  created_at: createdAt,
+});
+
 /** Agent-authored documents/deliverables shown in the file manager. Durable and
  *  server-authoritative — never part of the client bundle save. */
 export const documents = pgTable("documents", {

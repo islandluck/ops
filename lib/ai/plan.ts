@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { fitToX } from "@/lib/social/x-post";
 import type { Category, PlannedTask, RiskLevel } from "@/lib/types";
 
 /**
@@ -68,6 +69,7 @@ export async function planTask(
     `Categories: ${CATEGORIES.join(", ")}.`,
     "Risk: low (routine/internal), medium (external-facing or money-adjacent), high (irreversible or high-stakes).",
     'If the task sends an email, the draft MUST begin with a "Subject:" line, then a blank line, then the body.',
+    'If the task posts to X (Twitter), the draft MUST be a single post of at most 280 characters — complete and self-contained, with any hashtags inline.',
     "",
     "Respond with ONLY this JSON object (no markdown, no code fences, no commentary):",
     '{"title": string (max ~70 chars), "category": string, "affected_systems": string[], "risk_level": "low"|"medium"|"high", "requires_approval": boolean, "rationale": string (one sentence on what you will do), "draft": string}',
@@ -117,6 +119,9 @@ export async function planTask(
       ? (raw.risk_level as RiskLevel)
       : "low";
 
+  const rawDraft = typeof raw.draft === "string" ? raw.draft : "";
+  const draft = affected.includes("X (Twitter)") ? fitToX(rawDraft) : rawDraft;
+
   return {
     title: String(raw.title || input.title).slice(0, 120),
     category,
@@ -124,7 +129,7 @@ export async function planTask(
     risk_level: risk,
     requires_approval: raw.requires_approval !== false,
     rationale: String(raw.rationale || "Prepared by Operator.").slice(0, 300),
-    draft: typeof raw.draft === "string" ? raw.draft : "",
+    draft,
     needs_connection: affected.filter((n) => !connected.has(n)),
   };
 }

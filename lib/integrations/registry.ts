@@ -96,8 +96,9 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     auth: "oauth",
     authorizeUrl: "https://x.com/i/oauth2/authorize",
     tokenUrl: "https://api.x.com/2/oauth2/token",
-    // offline.access returns a refresh token (X access tokens expire in ~2h).
-    scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
+    // offline.access returns a refresh token (X access tokens expire in ~2h);
+    // media.write is required to attach images to posts.
+    scopes: ["tweet.read", "tweet.write", "users.read", "media.write", "offline.access"],
     clientIdEnv: "X_CLIENT_ID",
     clientSecretEnv: "X_CLIENT_SECRET",
     basicAuth: true,

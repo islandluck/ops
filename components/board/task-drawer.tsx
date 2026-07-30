@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarClock,
@@ -10,6 +10,7 @@ import {
   Clock,
   FileText,
   GitCompare,
+  Image as ImageIcon,
   Layers,
   ListChecks,
   Loader2,
@@ -18,9 +19,11 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   RotateCcw,
+  Search,
   Sparkles,
   Table2,
   Undo2,
+  Upload,
   X,
   Zap,
 } from "lucide-react";
@@ -37,7 +40,15 @@ import {
   PRIORITY_META,
 } from "@/lib/constants";
 import { formatDateTime, relativeTime } from "@/lib/format";
-import type { AssetType, Task, TaskAsset } from "@/lib/types";
+import {
+  attachStockImageAction,
+  getPostImagesAction,
+  removePostImageAction,
+  searchStockAction,
+  uploadPostImageAction,
+} from "@/app/actions";
+import type { AssetType, PostImage, Task, TaskAsset } from "@/lib/types";
+import type { StockImage } from "@/lib/ai/stock";
 
 const ASSET_ICON: Record<AssetType, typeof Mail> = {
   email: Mail,
@@ -381,6 +392,10 @@ export function TaskDrawer() {
           </div>
         )}
 
+        {task.category === "content" && (
+          <PostImages taskId={task.id} isX={task.affected_systems.includes("X (Twitter)")} />
+        )}
+
         {/* History */}
         <div>
           <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
@@ -640,6 +655,193 @@ export function TaskDrawer() {
 }
 
 /* ---------------------------- subcomponents ------------------------- */
+
+/** Images attached to a post — upload your own or pick from the stock library.
+ *  Drawer-local state (fetched per open); mutations go straight to the server. */
+function PostImages({ taskId, isX }: { taskId: string; isX: boolean }) {
+  const [images, setImages] = useState<PostImage[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<StockImage[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [stockOff, setStockOff] = useState(false);
+  const [error, setError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getPostImagesAction(taskId)
+      .then((imgs) => alive && setImages(imgs))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
+
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await uploadPostImageAction(taskId, fd);
+    setBusy(false);
+    if (res.ok && res.image) setImages((p) => [...p, res.image as PostImage]);
+    else setError(res.error ?? "Upload failed.");
+  }
+
+  async function onRemove(id: string) {
+    setImages((p) => p.filter((i) => i.id !== id));
+    await removePostImageAction(id);
+  }
+
+  async function runSearch() {
+    if (!query.trim()) return;
+    setSearching(true);
+    setError("");
+    const res = await searchStockAction(query.trim());
+    setSearching(false);
+    setStockOff(!res.configured);
+    setResults(res.images);
+  }
+
+  async function pickStock(s: StockImage) {
+    setBusy(true);
+    setError("");
+    const res = await attachStockImageAction(taskId, {
+      url: s.url,
+      alt: s.alt,
+      width: s.width,
+      height: s.height,
+      attribution: s.attribution,
+    });
+    setBusy(false);
+    if (res.ok && res.image) {
+      setImages((p) => [...p, res.image as PostImage]);
+      setPicking(false);
+      setResults([]);
+      setQuery("");
+    } else setError(res.error ?? "Couldn't attach that image.");
+  }
+
+  return (
+    <div>
+      <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+        <ImageIcon className="h-3.5 w-3.5" /> Images
+        {isX && (
+          <span className="font-normal normal-case tracking-normal text-muted-foreground/60">
+            · attach to the X post
+          </span>
+        )}
+      </p>
+
+      {images.length > 0 && (
+        <div className="mb-2 grid grid-cols-3 gap-2">
+          {images.map((img) => (
+            <div
+              key={img.id}
+              className="group relative aspect-video overflow-hidden rounded-lg border border-border bg-muted"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={img.url} alt={img.alt_text} className="h-full w-full object-cover" />
+              <button
+                onClick={() => onRemove(img.id)}
+                className="absolute right-1 top-1 rounded-md bg-black/60 p-1 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover:opacity-100"
+                title="Remove image"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+              {img.source === "stock" && img.attribution && (
+                <span className="absolute inset-x-0 bottom-0 truncate bg-black/50 px-1.5 py-0.5 text-[9px] text-white/90">
+                  {img.attribution}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!picking ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            onChange={onUpload}
+          />
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+            Upload
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => setPicking(true)}>
+            <ImageIcon className="h-4 w-4" />
+            Stock
+          </Button>
+          {isX && images.length > 0 && (
+            <span className="text-[11px] text-muted-foreground">Up to 4 attach on publish</span>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2 rounded-lg border border-border p-2.5">
+          <div className="flex items-center gap-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  runSearch();
+                }
+              }}
+              placeholder="Search stock photos…"
+              className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-[13px] outline-none focus:border-ring"
+              autoFocus
+            />
+            <Button size="sm" disabled={searching || !query.trim()} onClick={runSearch}>
+              {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setPicking(false);
+                setResults([]);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+          {stockOff && (
+            <p className="text-[11.5px] text-muted-foreground">
+              Stock search needs a Pexels API key (<code>PEXELS_API_KEY</code>). Uploads work without it.
+            </p>
+          )}
+          {results.length > 0 && (
+            <div className="grid grid-cols-3 gap-2">
+              {results.map((s, i) => (
+                <button
+                  key={i}
+                  disabled={busy}
+                  onClick={() => pickStock(s)}
+                  className="group relative aspect-video overflow-hidden rounded-md border border-border hover:ring-2 hover:ring-primary/40"
+                  title={s.attribution}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={s.thumb} alt={s.alt} className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-1.5 text-[11.5px] text-destructive">{error}</p>}
+    </div>
+  );
+}
 
 function Field({
   icon: Icon,

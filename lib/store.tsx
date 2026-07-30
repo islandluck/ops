@@ -1653,6 +1653,7 @@ function buildDraftRequest(
     idealCustomer: s.brief.ideal_customer_profile,
     voiceRules: s.brief.voice_rules,
     restrictedPhrases: s.brief.restricted_phrases,
+    xPost: task.affected_systems.includes("X (Twitter)"),
     agentName: agent?.name,
     agentInstructions: agent?.instructions,
   };

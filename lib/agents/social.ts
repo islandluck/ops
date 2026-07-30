@@ -8,6 +8,7 @@ import { getPlanningContext, saveDocument } from "@/lib/db/queries";
 import { researchTopics } from "@/lib/ai/research";
 import { generateSocialBatch, type SocialPiece } from "@/lib/ai/social";
 import { nextPublishSlots } from "./slots";
+import { composeXPost } from "@/lib/social/x-post";
 
 /**
  * Social Media Agent — researches current topics in the company's industry
@@ -29,24 +30,6 @@ const CONFIG = { x: 3, blog: 1 };
  *  the pipeline (not the run frequency) means a frequent cron can't run away:
  *  each run only tops the pipeline back up to this target. */
 const AUTOPILOT_TARGET = 3;
-
-/** X's hard post limit. */
-const X_LIMIT = 280;
-
-/**
- * Compose an X post that fits the character limit: append as many hashtags as
- * fit, dropping the rest. Guarantees the draft is publishable as-is.
- */
-function composeXPost(body: string, hashtags: string[]): string {
-  let text = body.trim();
-  if (text.length > X_LIMIT) text = `${text.slice(0, X_LIMIT - 1).trimEnd()}…`;
-  const kept: string[] = [];
-  for (const tag of hashtags) {
-    const candidate = `${text}\n\n${[...kept, `#${tag}`].join(" ")}`;
-    if (candidate.length <= X_LIMIT) kept.push(`#${tag}`);
-  }
-  return kept.length ? `${text}\n\n${kept.join(" ")}` : text;
-}
 
 export async function runSocialMediaAgent(
   workspaceId: string,

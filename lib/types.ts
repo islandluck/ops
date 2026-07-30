@@ -249,6 +249,21 @@ export interface Task {
   assets: TaskAsset[];
 }
 
+/** An image attached to a post/task. Binary lives in Supabase Storage. */
+export interface PostImage {
+  id: string;
+  task_id: string | null;
+  source: "upload" | "stock" | "ai";
+  /** Public URL for previewing/serving the image. */
+  url: string;
+  mime_type: string;
+  alt_text: string;
+  width: number;
+  height: number;
+  attribution?: string | null;
+  created_at: string;
+}
+
 export interface Integration {
   id: string;
   name: string;
@@ -332,6 +347,8 @@ export interface DraftRequest {
   idealCustomer: string;
   voiceRules: string[];
   restrictedPhrases: string[];
+  /** True when the task publishes to X — draft to fit the 280-char limit. */
+  xPost?: boolean;
   /** The acting agent's persona (Phase 4 — editable agents). */
   agentName?: string;
   agentInstructions?: string;

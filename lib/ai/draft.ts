@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { fitToX } from "@/lib/social/x-post";
 import type { Category, DraftRequest } from "@/lib/types";
 
 /**
@@ -43,6 +44,9 @@ function systemPrompt(r: DraftRequest): string {
     "",
     `Never use these restricted phrases: ${restricted}.`,
     "",
+    r.xPost
+      ? "This is a post for X (Twitter): write ONE complete, self-contained post of AT MOST 280 characters — a finished thought that fits within the limit, never a truncated paragraph. Keep any hashtags inline, within the 280."
+      : "",
     "Output ONLY the finished draft, ready to use — no preamble, no explanation, no meta-commentary, no markdown code fences, and no notes about what you changed. Do not begin with phrases like \"Here is\" or \"Sure\". If you are drafting an email, include a Subject line and the body.",
   ]
     .filter(Boolean)
@@ -96,7 +100,8 @@ export async function draftWithClaude(req: DraftRequest): Promise<string> {
       .trim();
 
     if (!text) throw new Error("The model returned an empty draft. Please try again.");
-    return text;
+    // Guarantee X posts fit — the model is asked to, but this is the hard cap.
+    return req.xPost ? fitToX(text) : text;
   } catch (err) {
     if (err instanceof Anthropic.AuthenticationError) {
       throw new Error("AI drafting failed: the Anthropic API key is invalid.");
