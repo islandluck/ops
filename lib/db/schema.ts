@@ -27,6 +27,9 @@ import type {
   EventType,
   ExecutionStatus,
   ExecutionStep,
+  PageContent,
+  PageStatus,
+  PageType,
   PermissionMode,
   Priority,
   ProjectPlan,
@@ -297,4 +300,61 @@ export const projects = pgTable("projects", {
   created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
   created_at: createdAt,
   updated_at: updatedAt,
+});
+
+/** A sellable offer — what a buy button charges for (Stripe price = price_cents). */
+export const products = pgTable("products", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  price_cents: integer("price_cents").notNull().default(0),
+  currency: text("currency").notNull().default("usd"),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
+
+/** A generated page with a buy button — landing / product / blog. Hosted in-app
+ *  at /p/[slug]; the atomic unit of the Builder growth loop. */
+export const pages = pgTable(
+  "pages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    project_id: uuid("project_id"),
+    product_id: uuid("product_id"),
+    slug: text("slug").notNull(),
+    title: text("title").notNull().default(""),
+    status: text("status").$type<PageStatus>().notNull().default("draft"),
+    page_type: text("page_type").$type<PageType>().notNull().default("landing"),
+    content: jsonb("content")
+      .$type<PageContent>()
+      .notNull()
+      .default({ headline: "", subheadline: "", cta_label: "Buy now", sections: [] }),
+    created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
+    agent_id: uuid("agent_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [uniqueIndex("pages_slug_uniq").on(t.slug)],
+);
+
+/** A checkout attempt / sale against a product (via Stripe Checkout). */
+export const orders = pgTable("orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  page_id: uuid("page_id"),
+  product_id: uuid("product_id"),
+  stripe_session_id: text("stripe_session_id"),
+  status: text("status").$type<"pending" | "paid" | "failed">().notNull().default("pending"),
+  amount_cents: integer("amount_cents").notNull().default(0),
+  currency: text("currency").notNull().default("usd"),
+  customer_email: text("customer_email"),
+  created_at: createdAt,
 });

@@ -50,13 +50,27 @@ import {
   getProject,
   listProjects,
 } from "@/lib/agents/project";
+import {
+  createProduct,
+  deletePage,
+  generateAndSavePage,
+  listOrders,
+  listPages,
+  listProducts,
+  setPageStatus,
+  updatePage,
+} from "@/lib/pages";
 import type {
   AppState,
   DraftRequest,
   OnboardingInput,
+  Order,
+  Page,
+  PageType,
   PermissionMode,
   PlannedTask,
   PostImage,
+  Product,
   Project,
 } from "@/lib/types";
 
@@ -349,6 +363,103 @@ export async function getProjectAction(projectId: string): Promise<Project | nul
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   return getProject(ws, projectId);
+}
+
+/* --------------------------- pages & commerce ---------------------------- */
+
+export async function getPagesAction(): Promise<Page[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? listPages(ws) : [];
+}
+
+export async function generatePageAction(input: {
+  offer: string;
+  pageType?: PageType;
+  productId?: string | null;
+  projectId?: string | null;
+}): Promise<{ ok: boolean; page?: Page; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!input.offer.trim()) return { ok: false, error: "Describe what the page is for." };
+  return generateAndSavePage(ws, {
+    offer: input.offer.trim(),
+    pageType: input.pageType,
+    productId: input.productId ?? null,
+    projectId: input.projectId ?? null,
+  });
+}
+
+export async function publishPageAction(pageId: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return setPageStatus(ws, pageId, "published");
+}
+
+export async function unpublishPageAction(pageId: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return setPageStatus(ws, pageId, "draft");
+}
+
+export async function attachProductToPageAction(
+  pageId: string,
+  productId: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return updatePage(ws, pageId, { product_id: productId });
+}
+
+export async function deletePageAction(pageId: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return deletePage(ws, pageId);
+}
+
+export async function getProductsAction(): Promise<Product[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? listProducts(ws) : [];
+}
+
+export async function createProductAction(input: {
+  name: string;
+  price_cents: number;
+  description?: string;
+  currency?: string;
+}): Promise<{ ok: boolean; product?: Product; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!input.name.trim()) return { ok: false, error: "Give the product a name." };
+  const product = await createProduct(ws, {
+    name: input.name.trim(),
+    price_cents: input.price_cents,
+    description: input.description,
+    currency: input.currency,
+  });
+  return { ok: true, product };
+}
+
+export async function getOrdersAction(): Promise<Order[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? listOrders(ws) : [];
 }
 
 /**

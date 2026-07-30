@@ -315,6 +315,56 @@ export interface Project {
   progress?: { total: number; done: number };
 }
 
+/* --------------------------- pages & commerce ---------------------------- */
+
+export type PageStatus = "draft" | "published";
+export type PageType = "landing" | "product" | "blog";
+
+/** The structured content of a generated page (a page with a buy button). */
+export interface PageContent {
+  headline: string;
+  subheadline: string;
+  cta_label: string;
+  sections: { heading: string; body: string }[];
+  features?: { title: string; body: string }[];
+  footer_note?: string;
+}
+
+export interface Page {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  product_id: string | null;
+  slug: string;
+  title: string;
+  status: PageStatus;
+  page_type: PageType;
+  content: PageContent;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Product {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string;
+  price_cents: number;
+  currency: string;
+}
+
+export interface Order {
+  id: string;
+  workspace_id: string;
+  page_id: string | null;
+  product_id: string | null;
+  status: "pending" | "paid" | "failed";
+  amount_cents: number;
+  currency: string;
+  customer_email: string | null;
+  created_at: string;
+}
+
 export interface Integration {
   id: string;
   name: string;
