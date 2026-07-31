@@ -8,7 +8,9 @@ import * as schema from "./schema";
  * Lazily-initialised Postgres connection (Supabase-compatible). The connection
  * is created on first query — never at import time — so `next build` and demo
  * mode work without DATABASE_URL set. `prepare: false` is required for
- * Supabase's transaction pooler. Cached on globalThis to survive dev HMR.
+ * Supabase's transaction pooler. Cached on globalThis as ONE pool per process
+ * (in every environment — also surviving dev HMR); creating a pool per request
+ * would churn/exhaust the pooler under real traffic.
  */
 const globalForDb = globalThis as unknown as {
   _pgClient?: ReturnType<typeof postgres>;
@@ -24,9 +26,9 @@ function getDb(): PostgresJsDatabase<typeof schema> {
     );
   }
   const client = globalForDb._pgClient ?? postgres(connectionString, { prepare: false, max: 5 });
-  if (process.env.NODE_ENV !== "production") globalForDb._pgClient = client;
+  globalForDb._pgClient = client;
   const instance = drizzle(client, { schema });
-  if (process.env.NODE_ENV !== "production") globalForDb._db = instance;
+  globalForDb._db = instance;
   return instance;
 }
 
