@@ -29,8 +29,10 @@ already deployed for beta testing at `https://ops-ai-launch.vercel.app`.
       off for normal), `OPERATOR_DAILY_ACTION_CAP` (default 50).
 
 ## 🟠 Make execution real (Phase 2)
-- [ ] Gmail sends to the **real recipient** (currently self-sends to the owner).
-- [ ] Remove hardcoded demo records (HubSpot `operator-demo@…`, Stripe `$50` draft). *(task #28)*
+- [x] Gmail sends to the **real recipient** — explicit address only, shown at approval,
+      never self-sent. *(task #28 — done)*
+- [x] Removed hardcoded demo records — HubSpot / Stripe now act on real task data or
+      skip; Stripe stays test-mode. *(task #28 — done)*
 - [ ] Register **production OAuth callbacks** for every provider in use
       (Google / X / Notion) + the Stripe **prod** webhook endpoint.
 
