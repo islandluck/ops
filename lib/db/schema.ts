@@ -160,7 +160,7 @@ export const tasks = pgTable("tasks", {
   /** Project orchestration — set when a task is a materialized project step. */
   project_id: uuid("project_id"),
   project_phase: integer("project_phase"),
-  project_step_kind: text("project_step_kind").$type<"deliverable" | "action">(),
+  project_step_kind: text("project_step_kind").$type<"deliverable" | "action" | "page">(),
   agent_id: uuid("agent_id"),
   created_by_type: text("created_by_type").$type<CreatedByType>().notNull().default("agent"),
   requires_approval: boolean("requires_approval").notNull().default(true),

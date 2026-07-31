@@ -237,7 +237,7 @@ export interface Task {
    *  phase it's in, and whether it's an agent deliverable or a human action. */
   project_id?: string | null;
   project_phase?: number | null;
-  project_step_kind?: "deliverable" | "action" | null;
+  project_step_kind?: "deliverable" | "action" | "page" | null;
   agent_id: string;
   created_by_type: CreatedByType;
   requires_approval: boolean;
@@ -278,11 +278,13 @@ export type ProjectStatus = "planning" | "active" | "blocked" | "done" | "cancel
 export interface ProjectStep {
   id: string;
   title: string;
-  /** What to produce (deliverable) or do (action). */
+  /** What to produce (deliverable), build (page), or do (action). */
   brief: string;
   /** The worker department that owns it, or "human" for an owner action. */
   assignee: Category | "human";
-  kind: "deliverable" | "action";
+  /** deliverable = a drafted artifact · page = a real hosted page with a buy
+   *  button · action = a step the owner performs themselves. */
+  kind: "deliverable" | "action" | "page";
 }
 
 export interface ProjectPhase {

@@ -7,6 +7,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Globe,
   Loader2,
   Plus,
   Sparkles,
@@ -348,17 +349,23 @@ function ProjectDrawer({
                       <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
                       <span className="flex-1">
                         {step.title}
-                        <span
-                          className={cn(
-                            "ml-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
-                            step.assignee === "human"
-                              ? "bg-amber-50 text-amber-700"
-                              : "bg-muted text-muted-foreground",
-                          )}
-                        >
-                          {step.assignee === "human" && <User className="h-2.5 w-2.5" />}
-                          {assigneeLabel(step.assignee)}
-                        </span>
+                        {step.kind === "page" ? (
+                          <span className="ml-1.5 inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700">
+                            <Globe className="h-2.5 w-2.5" /> Page
+                          </span>
+                        ) : (
+                          <span
+                            className={cn(
+                              "ml-1.5 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
+                              step.assignee === "human"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-muted text-muted-foreground",
+                            )}
+                          >
+                            {step.assignee === "human" && <User className="h-2.5 w-2.5" />}
+                            {assigneeLabel(step.assignee)}
+                          </span>
+                        )}
                       </span>
                     </li>
                   ))}

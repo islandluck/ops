@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
   Crown,
   Folder,
+  FolderKanban,
   Inbox,
-  Lock,
   Play,
   Plus,
   Sparkles,
@@ -181,12 +182,14 @@ export default function AgentsPage() {
                     </div>
                   </div>
                   <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-                    <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
-                      <Lock className="h-3.5 w-3.5" /> Coming soon
+                    <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-emerald-600">
+                      <FolderKanban className="h-3.5 w-3.5" /> Runs projects
                     </span>
-                    <Button size="sm" variant="subtle" disabled>
-                      Upgrade
-                    </Button>
+                    <Link href="/projects">
+                      <Button size="sm" variant="outline">
+                        Start a project
+                      </Button>
+                    </Link>
                   </div>
                 </Card>
               ))}

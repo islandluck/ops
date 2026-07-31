@@ -21,6 +21,7 @@ import { createDraftInvoice } from "./stripe";
 import { postTweet, uploadMediaToX } from "./x";
 import { listMediaRowsForTask } from "@/lib/db/queries";
 import { getImageBytes } from "@/lib/media/storage";
+import { setPageStatus } from "@/lib/pages";
 import type { ExecutionStep } from "@/lib/types";
 
 export interface ExecResult {
@@ -130,7 +131,23 @@ export async function runTaskExecution(
     created_at: now,
   });
 
+  // Project "page" step: approving publishes the generated page live at /p/[slug].
+  const pageMeta = assets
+    .map((a) => a.metadata as { page_id?: string; slug?: string } | null | undefined)
+    .find((m) => m?.page_id);
+  if (pageMeta?.page_id) {
+    try {
+      await setPageStatus(workspaceId, String(pageMeta.page_id), "published");
+      steps.push({ label: `Published page — /p/${pageMeta.slug ?? ""}`, status: "done" });
+      touched.push("Pages");
+    } catch (e) {
+      failure = e instanceof Error ? e.message : "Failed to publish the page.";
+      steps.push({ label: `Pages: ${failure}`, status: "failed" });
+    }
+  }
+
   for (const name of task.affected_systems) {
+    if (failure) break;
     const provider = providerForIntegrationName(name);
     const integ = connectedByName.get(name);
     const live = provider && isProviderConfigured(provider) && integ?.connected;

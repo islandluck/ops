@@ -67,16 +67,17 @@ export async function planProjectWithClaude(input: {
     team,
     "(Social posts / tweets → content.)",
     "",
-    "What your agents CAN do: research, plans, strategy, copy, briefs, outreach drafts, social posts, financial models — and act on connected tools (email, calendar, CRM, Notion, X).",
-    "What they CANNOT do: build or deploy a website, write or ship code, buy a domain, run paid ads, sign contracts, or anything needing hands-on human execution or a login we don't have. Mark those as \"human\" actions for the owner — never pretend an agent can do them.",
+    "What your agents CAN do: research, plans, strategy, copy, briefs, outreach drafts, social posts, financial models — and act on connected tools (email, calendar, CRM, Notion, X). They can also GENERATE AND PUBLISH a real hosted landing/product page — a page with a working buy button, live in-app at /p/<slug> — from a brief.",
+    "What they CANNOT do: put a page on your own domain or external host, buy a domain, run paid ads, connect a live payment account, write or ship code, or anything needing hands-on human execution or a login we don't have. Mark those as \"human\" actions for the owner — never pretend an agent can do them.",
     "",
-    "Break the goal into 2–5 ORDERED phases (dependency order — earlier phases unblock later ones). Each phase has 2–6 steps. Each step is either:",
-    '- a "deliverable" assigned to a department (a concrete artifact/draft that department produces), or',
-    '- an "action" assigned to "human" (a step the owner must do themselves).',
-    "Be specific and realistic — no filler steps. Honestly separate agent-work from human-work.",
+    "Break the goal into 2–5 ORDERED phases (dependency order — earlier phases unblock later ones). Each phase has 2–6 steps. Each step is one of:",
+    '- a "deliverable" assigned to a department (a concrete artifact/draft — copy, email, brief, plan — that department produces), or',
+    '- a "page" assigned to "content" (build a real hosted landing/product page with a buy button — generated automatically from the brief), or',
+    '- an "action" assigned to "human" (a step the owner performs — e.g. buy a domain, connect a live payment account, point a domain at the page).',
+    "Be specific and realistic — no filler steps. Prefer a \"page\" step over a human \"build the website\" step when the goal needs a landing/product page. Honestly separate agent-work from human-work.",
     "",
     "Respond with ONLY this JSON (no markdown, no code fences, no commentary):",
-    '{"title": string (<=60 chars), "summary": string (one sentence on the approach), "phases": [{"title": string, "summary": string, "steps": [{"title": string, "brief": string (what to produce or do, one or two sentences), "assignee": "growth"|"admin"|"content"|"research"|"finance"|"human", "kind": "deliverable"|"action"}]}]}',
+    '{"title": string (<=60 chars), "summary": string (one sentence on the approach), "phases": [{"title": string, "summary": string, "steps": [{"title": string, "brief": string (what to produce, build, or do, one or two sentences), "assignee": "growth"|"admin"|"content"|"research"|"finance"|"human", "kind": "deliverable"|"page"|"action"}]}]}',
   ]
     .filter(Boolean)
     .join("\n");
@@ -107,13 +108,17 @@ export async function planProjectWithClaude(input: {
         const title = typeof sr.title === "string" ? sr.title.slice(0, 120) : "";
         if (!title) return null;
         const rawAssignee = typeof sr.assignee === "string" ? sr.assignee.toLowerCase() : "";
+        const rawKind = typeof sr.kind === "string" ? sr.kind.toLowerCase() : "";
         const isHuman = rawAssignee === "human";
-        const assignee: Category | "human" = isHuman
-          ? "human"
-          : known.has(rawAssignee)
-            ? (rawAssignee as Category)
-            : "content";
-        const kind: "deliverable" | "action" = isHuman ? "action" : "deliverable";
+        // A page step must belong to a department (content) — never "human".
+        const assignee: Category | "human" =
+          isHuman && rawKind !== "page"
+            ? "human"
+            : known.has(rawAssignee)
+              ? (rawAssignee as Category)
+              : "content";
+        const kind: ProjectStep["kind"] =
+          assignee === "human" ? "action" : rawKind === "page" ? "page" : "deliverable";
         return {
           id: `p${pi}s${si}`,
           title,

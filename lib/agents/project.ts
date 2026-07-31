@@ -6,8 +6,9 @@ import { db } from "@/lib/db";
 import { activityEvents, agents, projects, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { planProjectWithClaude } from "@/lib/ai/project";
+import { generateAndSavePage } from "@/lib/pages";
 import { runTaskWithAgent } from "./run";
-import type { Category, Project, ProjectPlan, ProjectStatus } from "@/lib/types";
+import type { Category, Project, ProjectPlan, ProjectStatus, ProjectStep } from "@/lib/types";
 
 /**
  * Project orchestration — the Manager/Executive engine. A leadership agent turns
@@ -157,9 +158,11 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
   const workerFor = (cat: Category) => workers.find((w) => w.category === cat)?.id ?? null;
 
   const toDraft: string[] = [];
+  const pageJobs: Array<{ taskId: string; step: ProjectStep }> = [];
   for (const step of phase.steps) {
-    const isAction = step.kind === "action" || step.assignee === "human";
-    const category: Category = isAction ? "admin" : (step.assignee as Category);
+    const isPage = step.kind === "page" && step.assignee !== "human";
+    const isAction = !isPage && (step.kind === "action" || step.assignee === "human");
+    const category: Category = isPage ? "content" : isAction ? "admin" : (step.assignee as Category);
     const agentId = isAction ? null : workerFor(category);
     const taskId = uid();
     await db.insert(tasks).values({
@@ -169,13 +172,13 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
       title: step.title.slice(0, 120),
       description: step.brief,
       rationale: `${project.title} · ${phase.title}`,
-      status: isAction || !agentId ? "ready" : "agent_working",
+      status: isAction || (!agentId && !isPage) ? "ready" : "agent_working",
       risk_level: "low",
       priority: "medium",
       due_at: null,
       project_id: project.id,
       project_phase: phaseIndex,
-      project_step_kind: isAction ? "action" : "deliverable",
+      project_step_kind: isPage ? "page" : isAction ? "action" : "deliverable",
       agent_id: agentId,
       created_by_type: "agent",
       requires_approval: true,
@@ -188,7 +191,9 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
       updated_at: now,
     });
 
-    if (isAction) {
+    if (isPage) {
+      pageJobs.push({ taskId, step });
+    } else if (isAction) {
       await db.insert(taskAssets).values({
         id: uid(),
         task_id: taskId,
@@ -212,14 +217,58 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
     }
   }
 
-  // Draft deliverables concurrently; a failure just leaves the task Ready to draft manually.
-  await Promise.all(
-    toDraft.map((taskId) =>
+  // Draft deliverables + generate pages concurrently; failures just leave the
+  // task Ready with the brief attached.
+  const fallbackReady = async (taskId: string, step: ProjectStep) => {
+    await db
+      .insert(taskAssets)
+      .values({ id: uid(), task_id: taskId, asset_type: "summary", title: `Brief — ${step.title}`.slice(0, 120), content: step.brief, metadata: null });
+    await db.update(tasks).set({ status: "ready", updated_at: new Date() }).where(eq(tasks.id, taskId));
+  };
+  await Promise.all([
+    ...toDraft.map((taskId) =>
       runTaskWithAgent(workspaceId, taskId).catch(async () => {
         await db.update(tasks).set({ status: "ready", updated_at: new Date() }).where(eq(tasks.id, taskId));
       }),
     ),
-  );
+    ...pageJobs.map(({ taskId, step }) =>
+      generatePageForProjectTask(workspaceId, project, taskId, step).catch(() => fallbackReady(taskId, step)),
+    ),
+  ]);
+}
+
+/** A "page" step: generate a real (draft) page and attach it to the task, linked
+ *  by page_id so approving the task publishes it. */
+async function generatePageForProjectTask(
+  workspaceId: string,
+  project: Project,
+  taskId: string,
+  step: ProjectStep,
+): Promise<void> {
+  const res = await generateAndSavePage(workspaceId, {
+    offer: `${step.title}. ${step.brief}`.trim(),
+    pageType: "landing",
+    projectId: project.id,
+  });
+  if (!res.ok || !res.page) throw new Error(res.error ?? "Page generation failed.");
+  const p = res.page;
+  const preview = [
+    `Draft page generated: “${p.content.headline}”`,
+    p.content.subheadline,
+    "",
+    `Approving this task publishes the page live at /p/${p.slug}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  await db.insert(taskAssets).values({
+    id: uid(),
+    task_id: taskId,
+    asset_type: "document",
+    title: `Page — ${p.title}`.slice(0, 120),
+    content: preview,
+    metadata: { page_id: p.id, slug: p.slug },
+  });
+  await db.update(tasks).set({ status: "ready", updated_at: new Date() }).where(eq(tasks.id, taskId));
 }
 
 /** Approve the plan and kick off phase 1. */
