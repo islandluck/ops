@@ -17,9 +17,12 @@ already deployed for beta testing at `https://ops-ai-launch.vercel.app`.
 - [ ] Keep `AUTH_AUTOCONFIRM` **off** in production (it is).
 
 ## 🟠 Data & safety
-- [ ] **Tenant isolation / RLS.** App connects as the service role, so isolation is
-      app-code discipline only. Add Supabase RLS + an authenticated connection, or a
-      forced workspace-scoping query guard. *(task #26)*
+- [x] **Workspace-scoping guard** — `npm run check:tenancy` (now in CI) enforces that
+      every SELECT/UPDATE/DELETE on a workspace table is tenant-filtered or explicitly
+      exempt. Catches a forgotten `workspace_id` before it ships. *(task #26 — done)*
+- [ ] **Full RLS (defense in depth).** The guard above is code-layer. For true
+      DB-level isolation, enable Supabase RLS + an authenticated (per-user) connection
+      so even a missed filter can't cross tenants. Larger task — before scaling past beta.
 - [ ] **Production DB pool.** Cache the Postgres pool in prod (`lib/db/index.ts` only
       caches in dev → connection churn). *(being fixed in a separate session)*
 - [ ] Confirm safety switches in Vercel: `OPERATOR_EXECUTION_DISABLED` (kill switch,
