@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Check,
   ExternalLink,
   Eye,
   Loader2,
   Package,
+  Pencil,
   Plus,
   Sparkles,
   Trash2,
@@ -405,28 +407,36 @@ function PageDetailDrawer({
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-3.5">
-        {page.status === "published" ? (
-          <>
-            <Button variant="outline" className="flex-1" disabled={busy} onClick={() => act(() => unpublishPageAction(page.id))}>
-              Unpublish
+      <div className="flex shrink-0 flex-col gap-2 border-t border-border px-5 py-3.5">
+        <div className="flex items-center gap-2">
+          <Link href={`/pages/${page.id}/edit`} className="flex-1">
+            <Button variant="primary" className="w-full">
+              <Pencil className="h-4 w-4" />
+              Edit page
             </Button>
+          </Link>
+          {page.status === "published" && (
             <a href={publicUrl} target="_blank" rel="noreferrer" className="inline-flex">
-              <Button variant="primary">
+              <Button variant="outline">
                 <Eye className="h-4 w-4" />
                 View
               </Button>
             </a>
-          </>
+          )}
+          <Button variant="destructive" disabled={busy} onClick={() => act(() => deletePageAction(page.id))} title="Delete">
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+        {page.status === "published" ? (
+          <Button variant="outline" className="w-full" disabled={busy} onClick={() => act(() => unpublishPageAction(page.id))}>
+            Unpublish
+          </Button>
         ) : (
-          <Button variant="success" className="flex-1" disabled={busy} onClick={() => act(() => publishPageAction(page.id))}>
+          <Button variant="success" className="w-full" disabled={busy} onClick={() => act(() => publishPageAction(page.id))}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
             Publish page
           </Button>
         )}
-        <Button variant="destructive" disabled={busy} onClick={() => act(() => deletePageAction(page.id))} title="Delete">
-          <Trash2 className="h-4 w-4" />
-        </Button>
       </div>
     </Drawer>
   );

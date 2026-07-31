@@ -54,6 +54,7 @@ import {
   createProduct,
   deletePage,
   generateAndSavePage,
+  getPage,
   listOrders,
   listPages,
   listProducts,
@@ -66,6 +67,7 @@ import type {
   OnboardingInput,
   Order,
   Page,
+  PageContent,
   PageType,
   PermissionMode,
   PlannedTask,
@@ -460,6 +462,70 @@ export async function getOrdersAction(): Promise<Order[]> {
   if (!user) return [];
   const ws = await workspaceIdForUser(user.id);
   return ws ? listOrders(ws) : [];
+}
+
+export async function getPageAction(pageId: string): Promise<Page | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? getPage(ws, pageId) : null;
+}
+
+/** Persist editor changes to a page (title, content, attached product). */
+export async function updatePageAction(
+  pageId: string,
+  patch: { title?: string; content?: PageContent; product_id?: string | null },
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return updatePage(ws, pageId, patch);
+}
+
+/** Upload an image for a page (logo/hero/section); returns its stored URL. */
+export async function uploadPageImageAction(
+  formData: FormData,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false, error: "No file provided." };
+  if (!IMAGE_MIME_TYPES.includes(file.type)) {
+    return { ok: false, error: "Unsupported image type — use PNG, JPEG, WebP, or GIF." };
+  }
+  if (file.size > MAX_IMAGE_BYTES) return { ok: false, error: "Image is too large (max 10 MB)." };
+  try {
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const { publicUrl } = await uploadImageBytes(ws, randomUUID(), bytes, file.type);
+    return { ok: true, url: publicUrl };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Upload failed." };
+  }
+}
+
+/** Re-host a chosen stock image into our storage for a page; returns its URL. */
+export async function attachStockToPageAction(
+  stockUrl: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const res = await fetch(stockUrl);
+    if (!res.ok) return { ok: false, error: "Couldn't fetch that image." };
+    const mime = (res.headers.get("content-type") ?? "image/jpeg").split(";")[0].trim();
+    if (!IMAGE_MIME_TYPES.includes(mime)) return { ok: false, error: "Unsupported image type." };
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length > MAX_IMAGE_BYTES) return { ok: false, error: "Image is too large (max 10 MB)." };
+    const { publicUrl } = await uploadImageBytes(ws, randomUUID(), bytes, mime);
+    return { ok: true, url: publicUrl };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't attach that image." };
+  }
 }
 
 /**

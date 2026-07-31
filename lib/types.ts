@@ -327,9 +327,14 @@ export interface PageContent {
   headline: string;
   subheadline: string;
   cta_label: string;
-  sections: { heading: string; body: string }[];
+  sections: { heading: string; body: string; image_url?: string }[];
   features?: { title: string; body: string }[];
   footer_note?: string;
+  /** Brand + media, added in the editor (all optional). */
+  logo_url?: string;
+  hero_image_url?: string;
+  /** Accent hex used for the CTA + highlights (e.g. "#2a44c0"). */
+  accent?: string;
 }
 
 export interface Page {
