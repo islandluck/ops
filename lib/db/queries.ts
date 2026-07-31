@@ -104,6 +104,18 @@ async function ensureProfile(userId: string, email: string, fullName: string) {
     });
 }
 
+/** Ensure the user has a profile row + a provisioned workspace. Idempotent —
+ *  safe to call from onboarding so it never dead-ends if the initial load didn't
+ *  provision (e.g. the session cookie wasn't ready right after signup). */
+export async function ensureProvisioned(
+  userId: string,
+  email: string,
+  fullName: string,
+): Promise<string> {
+  await ensureProfile(userId, email, fullName);
+  return getOrCreateWorkspace(userId);
+}
+
 /** Load (provisioning + seeding on first visit) the full workspace bundle. */
 export async function loadBundleForUser(
   userId: string,
@@ -555,8 +567,9 @@ export async function applyOnboardingForUser(
   userId: string,
   input: OnboardingInput,
 ): Promise<void> {
-  const wsId = await getWorkspaceId(userId);
-  if (!wsId) throw new Error("No workspace for user");
+  // Provision on the spot if an earlier load didn't — onboarding must never
+  // dead-end with "No workspace for user".
+  const wsId = await getOrCreateWorkspace(userId);
 
   await db.transaction(async (tx) => {
     // Clear any seed/demo board content (FK children first).

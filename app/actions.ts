@@ -10,6 +10,7 @@ import {
   applyOnboardingForUser,
   createPlannedTask,
   deleteMediaRow,
+  ensureProvisioned,
   getDocumentById,
   getMediaRow,
   getPlanningContext,
@@ -673,8 +674,14 @@ export async function signUpAction(
   });
   if (error) return { error: error.message };
 
-  // Session present → email confirmation is off; go straight to guided setup.
-  if (data.session) redirect("/onboarding");
+  // Session present → email confirmation is off. Provision the profile +
+  // workspace now (so it always exists before onboarding), then go to setup.
+  if (data.session && data.user) {
+    await ensureProvisioned(data.user.id, email, name).catch((e) =>
+      console.error("[signUp provision] failed:", e instanceof Error ? e.message : e),
+    );
+    redirect("/onboarding");
+  }
 
   // No session → Supabase requires email confirmation. For local/dev testing
   // (AUTH_AUTOCONFIRM=true) confirm immediately via the service role and sign in,
@@ -693,7 +700,12 @@ export async function signUpAction(
       console.error("[signUp autoconfirm] failed:", e instanceof Error ? e.message : e);
     }
   }
-  if (autoConfirmed) redirect("/onboarding");
+  if (autoConfirmed && data.user) {
+    await ensureProvisioned(data.user.id, email, name).catch((e) =>
+      console.error("[signUp provision] failed:", e instanceof Error ? e.message : e),
+    );
+    redirect("/onboarding");
+  }
 
   return { needsConfirmation: true };
 }
@@ -737,6 +749,9 @@ export async function completeOnboardingAction(
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   try {
+    // Guarantee profile + workspace exist before applying onboarding, in case the
+    // initial load didn't provision (session cookie not ready right after signup).
+    await ensureProvisioned(user.id, user.email ?? "", input.user_name);
     await applyOnboardingForUser(user.id, input);
     const prevName = (user.user_metadata as { full_name?: string } | undefined)?.full_name ?? "";
     await supabase.auth.updateUser({
