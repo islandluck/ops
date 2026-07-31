@@ -215,7 +215,7 @@ export interface ExecutionRun {
 
 export interface ExecutionStep {
   label: string;
-  status: "pending" | "running" | "done" | "failed";
+  status: "pending" | "running" | "done" | "failed" | "skipped";
 }
 
 export interface Task {

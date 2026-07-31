@@ -19,6 +19,7 @@ import { upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice } from "./stripe";
 import { postTweet, uploadMediaToX } from "./x";
+import { executionKilled, guardUnattendedExecution } from "./guardrails";
 import { listMediaRowsForTask } from "@/lib/db/queries";
 import { getImageBytes } from "@/lib/media/storage";
 import { setPageStatus } from "@/lib/pages";
@@ -66,6 +67,7 @@ export async function runTaskExecution(
   workspaceId: string,
   taskId: string,
   actor: { name: string; email: string },
+  opts: { unattended?: boolean } = {},
 ): Promise<ExecResult> {
   const [task] = await db
     .select()
@@ -73,6 +75,17 @@ export async function runTaskExecution(
     .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId)))
     .limit(1);
   if (!task) return { ok: false, error: "Task not found." };
+
+  // Safety floor. The kill switch halts every execution path instantly;
+  // unattended automation additionally honours the per-workspace daily cap and
+  // an auto-mode re-check so a runaway agent can't ship without a human.
+  if (executionKilled()) {
+    return { ok: false, error: "Execution is paused (kill switch is on)." };
+  }
+  if (opts.unattended) {
+    const guard = await guardUnattendedExecution(workspaceId, task.agent_id);
+    if (!guard.allowed) return { ok: false, error: guard.reason };
+  }
 
   const assets = await db.select().from(taskAssets).where(eq(taskAssets.task_id, taskId));
   const draft = assets[0]?.content ?? "";
@@ -110,6 +123,7 @@ export async function runTaskExecution(
   const runId = randomUUID();
   const steps: ExecutionStep[] = [];
   const touched: string[] = [];
+  const skipped: string[] = [];
   let failure: string | null = null;
 
   await db.insert(executionRuns).values({
@@ -153,7 +167,8 @@ export async function runTaskExecution(
     const live = provider && isProviderConfigured(provider) && integ?.connected;
 
     if (!live) {
-      steps.push({ label: `Simulated: update ${name} (not connected)`, status: "done" });
+      steps.push({ label: `Skipped ${name} — not connected`, status: "skipped" });
+      skipped.push(name);
       continue;
     }
 
@@ -279,7 +294,8 @@ export async function runTaskExecution(
         steps.push({ label: "Created Stripe draft invoice (test)", status: "done" });
         touched.push("Stripe");
       } else {
-        steps.push({ label: `Simulated: update ${name}`, status: "done" });
+        steps.push({ label: `Skipped ${name} — no action handler`, status: "skipped" });
+        skipped.push(name);
       }
     } catch (e) {
       failure = e instanceof Error ? e.message : `Failed updating ${name}`;
@@ -309,8 +325,10 @@ export async function runTaskExecution(
   }
 
   const summary = touched.length
-    ? `Executed live: ${touched.join(", ")}.`
-    : "Completed (no connected systems — simulated).";
+    ? `Executed live: ${touched.join(", ")}.${skipped.length ? ` Skipped (not connected): ${skipped.join(", ")}.` : ""}`
+    : skipped.length
+      ? `Skipped — no connected systems: ${skipped.join(", ")}. Connect them to act for real.`
+      : "Completed.";
   await db
     .update(executionRuns)
     .set({ status: "completed", completed_at: done, result_summary: summary, steps })

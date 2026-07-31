@@ -136,7 +136,7 @@ export async function runAgentForWorkspace(
     .where(eq(agents.id, a.id));
 
   if (auto && actor.email) {
-    const res = await runTaskExecution(workspaceId, taskId, actor);
+    const res = await runTaskExecution(workspaceId, taskId, actor, { unattended: true });
     return { ok: true, taskTitle: gen.title, shipped: res.ok };
   }
   return { ok: true, taskTitle: gen.title };

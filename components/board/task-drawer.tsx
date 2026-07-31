@@ -15,6 +15,7 @@ import {
   ListChecks,
   Loader2,
   Mail,
+  MinusCircle,
   Megaphone,
   MessageSquarePlus,
   MoreHorizontal,
@@ -926,6 +927,8 @@ function ExecutionSteps({ run }: { run: { steps: { label: string; status: string
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
           ) : s.status === "failed" ? (
             <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+          ) : s.status === "skipped" ? (
+            <MinusCircle className="h-4 w-4 shrink-0 text-muted-foreground" />
           ) : (
             <span className="h-4 w-4 shrink-0 rounded-full border-2 border-border" />
           )}
@@ -933,6 +936,7 @@ function ExecutionSteps({ run }: { run: { steps: { label: string; status: string
             className={cn(
               s.status === "done" && "text-foreground/70 line-through decoration-1",
               s.status === "pending" && "text-muted-foreground",
+              s.status === "skipped" && "text-muted-foreground",
               s.status === "failed" && "font-medium text-red-700",
             )}
           >
