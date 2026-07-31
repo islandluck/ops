@@ -69,10 +69,11 @@ export async function planTask(
     `Categories: ${CATEGORIES.join(", ")}.`,
     "Risk: low (routine/internal), medium (external-facing or money-adjacent), high (irreversible or high-stakes).",
     'If the task sends an email, the draft MUST begin with a "Subject:" line, then a blank line, then the body.',
+    'For an email, set "recipient" to the intended person\'s email address ONLY when it is explicitly provided or unambiguously known. If you do not have a real address, set "recipient" to null — NEVER invent, guess, or use a placeholder address. When null, the owner will add the recipient before it can send.',
     'If the task posts to X (Twitter), the draft MUST be a single post of at most 280 characters — complete and self-contained, with any hashtags inline.',
     "",
     "Respond with ONLY this JSON object (no markdown, no code fences, no commentary):",
-    '{"title": string (max ~70 chars), "category": string, "affected_systems": string[], "risk_level": "low"|"medium"|"high", "requires_approval": boolean, "rationale": string (one sentence on what you will do), "draft": string}',
+    '{"title": string (max ~70 chars), "category": string, "affected_systems": string[], "risk_level": "low"|"medium"|"high", "requires_approval": boolean, "rationale": string (one sentence on what you will do), "draft": string, "recipient": string|null}',
   ]
     .filter(Boolean)
     .join("\n");
@@ -122,6 +123,10 @@ export async function planTask(
   const rawDraft = typeof raw.draft === "string" ? raw.draft : "";
   const draft = affected.includes("X (Twitter)") ? fitToX(rawDraft) : rawDraft;
 
+  // Only accept a recipient that is a well-formed address — never a guess/placeholder.
+  const recipientRaw = typeof raw.recipient === "string" ? raw.recipient.trim() : "";
+  const recipient = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientRaw) ? recipientRaw : null;
+
   return {
     title: String(raw.title || input.title).slice(0, 120),
     category,
@@ -131,5 +136,6 @@ export async function planTask(
     rationale: String(raw.rationale || "Prepared by Operator.").slice(0, 300),
     draft,
     needs_connection: affected.filter((n) => !connected.has(n)),
+    recipient,
   };
 }

@@ -899,6 +899,13 @@ function AssetBlock({ asset }: { asset: TaskAsset }) {
           ))}
         <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
+      {asset.metadata?.to && (
+        <div className="flex items-center gap-1.5 border-t border-border bg-amber-50 px-3.5 py-2 text-[12px] text-amber-900">
+          <Mail className="h-3.5 w-3.5 shrink-0" />
+          <span className="font-medium">Sends to</span>
+          <span className="truncate font-mono">{String(asset.metadata.to)}</span>
+        </div>
+      )}
       {open && (
         <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-border bg-card px-3.5 py-3 font-mono text-[12px] leading-relaxed text-foreground/90">
           {asset.content}

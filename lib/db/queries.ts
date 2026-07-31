@@ -846,7 +846,8 @@ export async function createPlannedTask(
       asset_type: plannedAssetType(planned.affected_systems),
       title: "Draft prepared by Operator",
       content: planned.draft,
-      metadata: null,
+      // Capture an explicit email recipient so execution sends for real (vs. self-send).
+      metadata: planned.recipient ? { to: planned.recipient } : null,
     });
     await saveDocument({
       workspaceId: wsId,

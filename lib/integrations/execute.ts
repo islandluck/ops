@@ -17,7 +17,7 @@ import { getValidAccessToken } from "./tokens";
 import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
-import { createDraftInvoice } from "./stripe";
+import { createDraftInvoice, isStripeTestKey } from "./stripe";
 import { postTweet, uploadMediaToX } from "./x";
 import { executionKilled, guardUnattendedExecution } from "./guardrails";
 import { listMediaRowsForTask } from "@/lib/db/queries";
@@ -187,15 +187,21 @@ export async function runTaskExecution(
             inReplyTo: meta.in_reply_to ? String(meta.in_reply_to) : undefined,
           });
           steps.push({ label: `Replied via Gmail (to ${String(meta.to)})`, status: "done" });
-        } else {
+          touched.push("Gmail");
+        } else if (meta?.to) {
+          // Real outbound: send the approved draft to the explicit recipient captured
+          // at planning time (and shown to the approver). Never a guessed address.
           await sendGmail(token, {
-            to: actor.email, // safe self-send (verifiable); production targets the real recipient
-            subject: `[Operator approved] ${parseSubject(draft)}`,
-            body: `This email was sent by Operator after you approved "${task.title}".\n\n— — —\n${draft || task.description}`,
+            to: String(meta.to),
+            subject: meta.subject ? String(meta.subject) : parseSubject(draft),
+            body: draft || task.description,
           });
-          steps.push({ label: `Sent via Gmail (to ${actor.email})`, status: "done" });
+          steps.push({ label: `Sent via Gmail (to ${String(meta.to)})`, status: "done" });
+          touched.push("Gmail");
+        } else {
+          steps.push({ label: "Gmail — no recipient specified; drafted only", status: "skipped" });
+          skipped.push("Gmail");
         }
-        touched.push("Gmail");
       } else if (name === "Google Calendar") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No Calendar token");
@@ -212,13 +218,23 @@ export async function runTaskExecution(
       } else if (name === "HubSpot") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No HubSpot token");
-        const r = await upsertContact(token, {
-          email: "operator-demo@example.com",
-          firstname: "Operator",
-          lastname: "Demo Contact",
-        });
-        steps.push({ label: `${r.created ? "Created" : "Updated"} HubSpot contact`, status: "done" });
-        touched.push("HubSpot");
+        const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
+        const contactEmail = meta?.contact_email ? String(meta.contact_email) : "";
+        if (!contactEmail) {
+          steps.push({ label: "HubSpot — no contact specified; skipped", status: "skipped" });
+          skipped.push("HubSpot");
+        } else {
+          const r = await upsertContact(token, {
+            email: contactEmail,
+            firstname: meta?.contact_first ? String(meta.contact_first) : undefined,
+            lastname: meta?.contact_last ? String(meta.contact_last) : undefined,
+          });
+          steps.push({
+            label: `${r.created ? "Created" : "Updated"} HubSpot contact ${contactEmail}`,
+            status: "done",
+          });
+          touched.push("HubSpot");
+        }
       } else if (name === "Google Sheets") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No Google Sheets token");
@@ -285,14 +301,23 @@ export async function runTaskExecution(
         });
         touched.push("X (Twitter)");
       } else if (name === "Stripe") {
+        const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
+        const customerEmail = meta?.customer_email ? String(meta.customer_email) : "";
+        const amountCents =
+          typeof meta?.amount_cents === "number" ? meta.amount_cents : Number(meta?.amount_cents);
         const key = process.env.STRIPE_SECRET_KEY ?? "";
-        await createDraftInvoice(key, {
-          customerEmail: "operator-demo@example.com",
-          amountCents: 5000,
-          description: task.title,
-        });
-        steps.push({ label: "Created Stripe draft invoice (test)", status: "done" });
-        touched.push("Stripe");
+        if (!customerEmail || !Number.isFinite(amountCents) || amountCents <= 0) {
+          steps.push({ label: "Stripe — no invoice details specified; skipped", status: "skipped" });
+          skipped.push("Stripe");
+        } else if (!isStripeTestKey(key)) {
+          // Never call Stripe with a live key — test mode only.
+          steps.push({ label: "Stripe — test mode only; skipped", status: "skipped" });
+          skipped.push("Stripe");
+        } else {
+          await createDraftInvoice(key, { customerEmail, amountCents, description: task.title });
+          steps.push({ label: `Created Stripe draft invoice (${customerEmail})`, status: "done" });
+          touched.push("Stripe");
+        }
       } else {
         steps.push({ label: `Skipped ${name} — no action handler`, status: "skipped" });
         skipped.push(name);

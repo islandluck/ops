@@ -58,6 +58,9 @@ export interface PlannedTask {
   draft: string;
   /** Subset of affected_systems that isn't connected yet. */
   needs_connection: string[];
+  /** For email tasks: the real recipient address, ONLY if explicitly given —
+   *  null when unknown (never invented). Drives a real send vs. drafted-only. */
+  recipient?: string | null;
 }
 
 /** Payload persisted when a user completes guided onboarding (server mode). */
