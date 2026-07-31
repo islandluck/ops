@@ -3,6 +3,9 @@
 Your Supabase database is already migrated and verified. This gets the app live on Vercel.
 Three steps: **push to GitHub → import to Vercel → add env vars.**
 
+> **Before you deploy:** run `npm run preflight`. It checks every required secret and
+> safety switch — and hard-fails on a live Stripe key — without ever printing a value.
+
 ---
 
 ## 1. Push to GitHub
@@ -51,6 +54,10 @@ local `.env.local`:
 | `NEXT_PUBLIC_APP_URL` | your Vercel URL, e.g. `https://operator-xxxx.vercel.app` | recommended |
 | `ANTHROPIC_API_KEY` | `sk-ant-…` — turns on **real AI drafting** (agents draft & revise with Claude) | optional |
 | `DIRECT_URL` | session pooler string (port 5432) | only if running migrations from CI |
+| `CRON_SECRET` | `openssl rand -base64 24` (same value here + in Vercel Cron) | ✅ for automation |
+| `TOKEN_ENCRYPTION_KEY` | `openssl rand -base64 32` — encrypts stored OAuth tokens | ✅ for integrations |
+| `OPERATOR_DAILY_ACTION_CAP` | max unattended actions per workspace/day (default 50) | optional |
+| provider creds | `GOOGLE_*`, `NOTION_*`, `X_*`, `STRIPE_*` (test) — see `.env.example` / `PHASE3.md` | per integration |
 
 Then click **Deploy**.
 
@@ -72,6 +79,23 @@ Supabase → **Authentication → URL Configuration**:
 Open your Vercel URL → **Sign up** (you'll get a confirmation email since email
 confirmation is ON) → confirm → sign in → you land in a fully-seeded Approval Center,
 backed by Postgres. Done.
+
+---
+
+## 6. Private beta — before you invite testers
+
+- **Turn OFF `AUTH_AUTOCONFIRM`** in production and configure **Supabase → Authentication →
+  Emails (SMTP)** so real confirmation + password-reset emails send. (Preflight warns if it's
+  still on — it auto-confirms signups and is dev-only.)
+- **Connect real integrations for real actions.** Register each provider's app and add its
+  credentials (see `PHASE3.md`). For **Google**, you don't need full app verification for a
+  beta: keep the OAuth app in **Testing** mode and add your testers as **test users** (up to
+  100) — the Gmail / Calendar / Sheets scopes work for them right away.
+- **Stripe stays in TEST mode.** Buy buttons accept test cards only; preflight hard-fails on a
+  live key. Flip to live only when you deliberately choose to (separate task).
+- **Know the kill switch.** Set `OPERATOR_EXECUTION_DISABLED=1` in Vercel to instantly halt all
+  task execution across every workspace; set it back to `0` (and redeploy) to resume.
+  `OPERATOR_DAILY_ACTION_CAP` bounds unattended actions per workspace/day (default 50).
 
 ---
 
