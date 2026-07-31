@@ -20,6 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run check:tenancy # every workspace table access is tenant-scoped
       - run: npm run build # builds in demo mode; needs no secrets
 
   migrate:

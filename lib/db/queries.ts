@@ -50,6 +50,7 @@ export async function workspaceIdForUser(userId: string): Promise<string | null>
 }
 
 async function getWorkspaceId(userId: string): Promise<string | null> {
+  // tenant-scope-exempt: resolves the caller's OWN workspace by their auth user_id.
   const rows = await db
     .select({ id: workspaceMembers.workspace_id })
     .from(workspaceMembers)
@@ -67,6 +68,7 @@ async function getOrCreateWorkspace(userId: string): Promise<string> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
 
+    // tenant-scope-exempt: resolves the caller's OWN workspace by their auth user_id.
     const existing = await tx
       .select({ id: workspaceMembers.workspace_id })
       .from(workspaceMembers)
@@ -698,8 +700,12 @@ export async function listMediaForTask(workspaceId: string, taskId: string): Pro
 }
 
 /** Raw rows (incl. storage_path) — used by the publish path to fetch binaries. */
-export async function listMediaRowsForTask(taskId: string) {
-  return db.select().from(media).where(eq(media.task_id, taskId)).orderBy(media.created_at);
+export async function listMediaRowsForTask(workspaceId: string, taskId: string) {
+  return db
+    .select()
+    .from(media)
+    .where(and(eq(media.workspace_id, workspaceId), eq(media.task_id, taskId)))
+    .orderBy(media.created_at);
 }
 
 export async function getMediaRow(workspaceId: string, mediaId: string) {

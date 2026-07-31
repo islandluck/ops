@@ -145,6 +145,8 @@ export async function runAgentForWorkspace(
 /** Cron entry point: run background-enabled agents across all workspaces, then
  *  flush any scheduled posts whose time has arrived. */
 export async function runBackgroundAgents(limit = 25): Promise<{ ran: number; published: number }> {
+  // tenant-scope-exempt: cron runs background agents across ALL workspaces; each
+  // agent is then executed with its own workspace_id.
   const eligible = await db
     .select()
     .from(agents)

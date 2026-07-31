@@ -262,7 +262,7 @@ export async function runTaskExecution(
         // sinks the post — publish text-only and note what was skipped.
         let mediaIds: string[] = [];
         let mediaNote = "";
-        const mediaRows = (await listMediaRowsForTask(taskId)).slice(0, 4);
+        const mediaRows = (await listMediaRowsForTask(workspaceId, taskId)).slice(0, 4);
         if (mediaRows.length) {
           try {
             for (const m of mediaRows) {

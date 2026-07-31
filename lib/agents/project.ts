@@ -44,9 +44,16 @@ function toProject(row: ProjectRow, progress?: { total: number; done: number }):
 }
 
 /** Overall completion: done tasks over the plan's total step count. */
-async function progressFor(projectId: string, plan: ProjectPlan): Promise<{ total: number; done: number }> {
+async function progressFor(
+  workspaceId: string,
+  projectId: string,
+  plan: ProjectPlan,
+): Promise<{ total: number; done: number }> {
   const total = plan.phases.reduce((n, ph) => n + ph.steps.length, 0);
-  const rows = await db.select({ status: tasks.status }).from(tasks).where(eq(tasks.project_id, projectId));
+  const rows = await db
+    .select({ status: tasks.status })
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.project_id, projectId)));
   return { total, done: rows.filter((r) => r.status === "done").length };
 }
 
@@ -316,7 +323,13 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
   const phaseTasks = await db
     .select({ status: tasks.status, approval_status: tasks.approval_status })
     .from(tasks)
-    .where(and(eq(tasks.project_id, projectId), eq(tasks.project_phase, phaseIdx)));
+    .where(
+      and(
+        eq(tasks.workspace_id, workspaceId),
+        eq(tasks.project_id, projectId),
+        eq(tasks.project_phase, phaseIdx),
+      ),
+    );
 
   // A phase is complete when every one of its tasks is resolved (done, or the
   // owner rejected/skipped it). Empty phase-tasks means it hasn't materialized —
@@ -348,6 +361,8 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
 
 /** Cron heartbeat: advance every active project whose current phase is done. */
 export async function advanceActiveProjects(limit = 20): Promise<{ advanced: number }> {
+  // tenant-scope-exempt: cron heartbeat scans active projects across ALL workspaces;
+  // each is then advanced via advanceProject(workspace_id, id), which is scoped.
   const active = await db
     .select({ id: projects.id, workspace_id: projects.workspace_id })
     .from(projects)
@@ -390,7 +405,7 @@ export async function listProjects(workspaceId: string): Promise<Project[]> {
     .from(projects)
     .where(eq(projects.workspace_id, workspaceId))
     .orderBy(desc(projects.created_at));
-  return Promise.all(rows.map(async (r) => toProject(r, await progressFor(r.id, r.plan))));
+  return Promise.all(rows.map(async (r) => toProject(r, await progressFor(r.workspace_id, r.id, r.plan))));
 }
 
 export async function getProject(workspaceId: string, projectId: string): Promise<Project | null> {
@@ -400,5 +415,5 @@ export async function getProject(workspaceId: string, projectId: string): Promis
     .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
     .limit(1);
   if (!r) return null;
-  return toProject(r, await progressFor(r.id, r.plan));
+  return toProject(r, await progressFor(r.workspace_id, r.id, r.plan));
 }

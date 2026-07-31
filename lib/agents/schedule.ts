@@ -135,6 +135,8 @@ export interface PublishDueResult {
  */
 export async function publishDueScheduledPosts(limit = 25): Promise<PublishDueResult> {
   const now = new Date();
+  // tenant-scope-exempt: scheduler flushes due tasks across ALL workspaces; each is
+  // then executed via runTaskExecution(workspace_id, id).
   const due = await db
     .select({ id: tasks.id, workspace_id: tasks.workspace_id })
     .from(tasks)

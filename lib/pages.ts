@@ -41,6 +41,7 @@ async function uniqueSlug(base: string): Promise<string> {
   const root = slugify(base);
   for (let i = 0; i < 8; i++) {
     const candidate = `${root}-${randomUUID().slice(0, 6)}`;
+    // tenant-scope-exempt: slugs are globally unique across workspaces (public /p/[slug] URLs).
     const [ex] = await db.select({ id: pages.id }).from(pages).where(eq(pages.slug, candidate)).limit(1);
     if (!ex) return candidate;
   }
@@ -168,6 +169,8 @@ export async function getPage(workspaceId: string, id: string): Promise<Page | n
 
 /** Public read — only returns PUBLISHED pages (used by the /p/[slug] renderer). */
 export async function getPublishedPageBySlug(slug: string): Promise<Page | null> {
+  // tenant-scope-exempt: public renderer looks up a page by its globally-unique
+  // slug; a public request carries no workspace context.
   const [r] = await db
     .select()
     .from(pages)
@@ -276,6 +279,8 @@ export async function markOrderPaidBySession(
   stripeSessionId: string,
   customerEmail?: string | null,
 ): Promise<void> {
+  // tenant-scope-exempt: Stripe webhook has no workspace context; the session id
+  // is a unique, Stripe-issued token identifying exactly one order.
   await db
     .update(orders)
     .set({ status: "paid", customer_email: customerEmail ?? null })
