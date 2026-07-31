@@ -1,9 +1,10 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/server";
-import { hasAnthropicKey, isBackendConfigured } from "@/lib/config";
+import { APP_URL, hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import { randomUUID } from "node:crypto";
 import {
   applyOnboardingForUser,
@@ -646,16 +647,29 @@ export async function signInAction(
   redirect("/approvals");
 }
 
+/** The request's own origin — works on any deployment URL, not just APP_URL. */
+async function requestOrigin(): Promise<string> {
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  return host ? `${proto}://${host}` : APP_URL;
+}
+
 export async function signUpAction(
   email: string,
   password: string,
   name: string,
 ): Promise<{ error?: string; needsConfirmation?: boolean }> {
   const supabase = await createSupabaseServerClient();
+  const origin = await requestOrigin();
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { full_name: name } },
+    options: {
+      data: { full_name: name },
+      // Confirmation link returns here to establish the session, then → onboarding.
+      emailRedirectTo: `${origin}/auth/callback?next=/onboarding`,
+    },
   });
   if (error) return { error: error.message };
 
@@ -682,6 +696,31 @@ export async function signUpAction(
   if (autoConfirmed) redirect("/onboarding");
 
   return { needsConfirmation: true };
+}
+
+/** Send a password-reset email. Always returns ok — never reveal which emails exist. */
+export async function requestPasswordResetAction(email: string): Promise<{ ok: true }> {
+  if (email.trim()) {
+    try {
+      const supabase = await createSupabaseServerClient();
+      const origin = await requestOrigin();
+      await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${origin}/auth/callback?next=/reset-password`,
+      });
+    } catch {
+      /* swallow — don't leak whether the account exists */
+    }
+  }
+  return { ok: true };
+}
+
+/** Set a new password for the recovery-session user, then send them into the app. */
+export async function updatePasswordAction(password: string): Promise<{ error?: string }> {
+  if (password.length < 6) return { error: "Password must be at least 6 characters." };
+  const supabase = await createSupabaseServerClient();
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) return { error: error.message };
+  redirect("/approvals");
 }
 
 /**

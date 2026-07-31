@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
@@ -9,20 +9,34 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { hasSupabaseClientEnv } from "@/lib/config";
-import { signInAction, signUpAction } from "@/app/actions";
+import { requestPasswordResetAction, signInAction, signUpAction } from "@/app/actions";
+
+type Mode = "signin" | "signup" | "forgot";
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useStore();
   const configured = hasSupabaseClientEnv;
 
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<Mode>("signin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState(configured ? "" : "alex@northwindstudio.com");
   const [password, setPassword] = useState(configured ? "" : "demo-password");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Surface an error handed back by the /auth/callback route (bad/expired link).
+  useEffect(() => {
+    const e = new URLSearchParams(window.location.search).get("error");
+    if (e) setError(e);
+  }, []);
+
+  function switchMode(next: Mode) {
+    setMode(next);
+    setError(null);
+    setNotice(null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,11 +57,14 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      if (mode === "signup") {
+      if (mode === "forgot") {
+        await requestPasswordResetAction(email);
+        setNotice("If that email has an account, a reset link is on its way.");
+      } else if (mode === "signup") {
         const res = await signUpAction(email, password, name.trim());
         if (res?.error) setError(res.error);
         else if (res?.needsConfirmation)
-          setNotice("Check your email to confirm your account, then sign in.");
+          setNotice("Check your email to confirm your account — the link signs you in.");
         // success redirects server-side
       } else {
         const res = await signInAction(email, password);
@@ -62,6 +79,7 @@ export default function LoginPage() {
   }
 
   const isSignup = mode === "signup";
+  const isForgot = mode === "forgot";
 
   return (
     <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-canvas px-4">
@@ -80,12 +98,14 @@ export default function LoginPage() {
         </div>
         <div className="rounded-2xl border border-border bg-card p-7 shadow-elevated">
           <h1 className="text-center text-xl font-semibold tracking-tight">
-            {isSignup ? "Create your workspace" : "Sign in to Operator"}
+            {isForgot ? "Reset your password" : isSignup ? "Create your workspace" : "Sign in to Operator"}
           </h1>
           <p className="mt-1 text-center text-[13.5px] text-muted-foreground">
-            {isSignup
-              ? "A populated Approval Center will be ready in seconds."
-              : "Welcome back. Your Approval Center is waiting."}
+            {isForgot
+              ? "Enter your email and we'll send a link to set a new password."
+              : isSignup
+                ? "A populated Approval Center will be ready in seconds."
+                : "Welcome back. Your Approval Center is waiting."}
           </p>
 
           <form className="mt-6 space-y-4" onSubmit={submit}>
@@ -106,18 +126,31 @@ export default function LoginPage() {
                 placeholder="you@company.com"
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                required
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={isSignup ? "At least 6 characters" : "••••••••"}
-              />
-            </div>
+            {!isForgot && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  {mode === "signin" && configured && (
+                    <button
+                      type="button"
+                      onClick={() => switchMode("forgot")}
+                      className="text-[12px] font-medium text-primary hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <Input
+                  id="password"
+                  type="password"
+                  required
+                  minLength={6}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={isSignup ? "At least 6 characters" : "••••••••"}
+                />
+              </div>
+            )}
 
             {error && (
               <p className="rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">{error}</p>
@@ -128,28 +161,31 @@ export default function LoginPage() {
 
             <Button type="submit" size="lg" className="w-full" disabled={loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {isSignup ? "Create workspace" : "Sign in"}
-              {!loading && <ArrowRight className="h-4 w-4" />}
+              {isForgot ? "Send reset link" : isSignup ? "Create workspace" : "Sign in"}
+              {!loading && !isForgot && <ArrowRight className="h-4 w-4" />}
             </Button>
           </form>
 
           <p className="mt-5 text-center text-[12.5px] text-muted-foreground">
-            {configured
-              ? isSignup
-                ? "Already have an account?"
-                : "New to Operator?"
-              : "This is a demo — any email and password will work."}{" "}
-            {configured && (
-              <button
-                onClick={() => {
-                  setMode(isSignup ? "signin" : "signup");
-                  setError(null);
-                  setNotice(null);
-                }}
-                className="font-semibold text-primary hover:underline"
-              >
-                {isSignup ? "Sign in" : "Create one"}
-              </button>
+            {!configured ? (
+              "This is a demo — any email and password will work."
+            ) : isForgot ? (
+              <>
+                Remembered it?{" "}
+                <button onClick={() => switchMode("signin")} className="font-semibold text-primary hover:underline">
+                  Back to sign in
+                </button>
+              </>
+            ) : (
+              <>
+                {isSignup ? "Already have an account?" : "New to Operator?"}{" "}
+                <button
+                  onClick={() => switchMode(isSignup ? "signin" : "signup")}
+                  className="font-semibold text-primary hover:underline"
+                >
+                  {isSignup ? "Sign in" : "Create one"}
+                </button>
+              </>
             )}
           </p>
         </div>
