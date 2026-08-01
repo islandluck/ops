@@ -43,16 +43,18 @@ export function nextPublishSlots(
   tz: string | null | undefined,
   occupied: number[],
   now: Date,
+  hours: number[] = POSTING_HOURS,
 ): Date[] {
   if (count <= 0) return [];
   const offMin = tzOffsetMinutes(tz || "UTC", now);
   const taken = [...occupied];
   const slots: Date[] = [];
+  const hrs = [...hours].sort((a, b) => a - b);
   // Local wall-clock "now" as a UTC-based Date, so we can walk the local calendar.
   const localNow = new Date(now.getTime() + offMin * 60000);
 
   for (let day = 0; day < 90 && slots.length < count; day++) {
-    for (const h of POSTING_HOURS) {
+    for (const h of hrs) {
       if (slots.length >= count) break;
       const localWall = Date.UTC(
         localNow.getUTCFullYear(),

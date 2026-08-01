@@ -91,7 +91,13 @@ export async function runSocialMediaAgent(
 
   let pieces: SocialPiece[];
   try {
-    pieces = await generateSocialBatch(brief, agent?.instructions ?? "", research, genConfig);
+    pieces = await generateSocialBatch(
+      brief,
+      agent?.instructions ?? "",
+      research,
+      genConfig,
+      agent?.style_profile ?? null,
+    );
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Content generation failed." };
   }

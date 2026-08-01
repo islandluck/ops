@@ -14,18 +14,23 @@ import {
   getDocumentById,
   getMediaRow,
   getPlanningContext,
+  getXStyleProfile,
   insertMedia,
   listMediaForTask,
   loadBundleForUser,
   resetBundleForUser,
   saveBundleForUser,
   setDocumentNotionUrl,
+  setXStyleProfile,
   workspaceIdForUser,
 } from "@/lib/db/queries";
 import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } from "@/lib/media/storage";
 import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
+import { analyzeTweetStyle, cleanUpTweets } from "@/lib/ai/style";
+import { getUserTweets } from "@/lib/integrations/x";
+import { parseTweets, scheduleBulkTweets } from "@/lib/agents/social-bulk";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
 import {
   clearIntegration,
@@ -527,6 +532,119 @@ export async function attachStockToPageAction(
     return { ok: true, url: publicUrl };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't attach that image." };
+  }
+}
+
+/* ------------------------------ X voice --------------------------------- */
+
+export async function getXStyleAction(): Promise<{ profile: string | null }> {
+  const user = await getCurrentUser();
+  if (!user) return { profile: null };
+  const ws = await workspaceIdForUser(user.id);
+  return { profile: ws ? await getXStyleProfile(ws) : null };
+}
+
+/** Learn the owner's voice from their connected X account's recent tweets. */
+export async function learnXStyleFromXAction(): Promise<{
+  ok: boolean;
+  profile?: string;
+  count?: number;
+  needsPaste?: boolean;
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const token = await getValidAccessToken(ws, "X (Twitter)");
+  if (!token) return { ok: false, needsPaste: true, error: "X isn't connected." };
+  const tweets = await getUserTweets(token, 40);
+  if (tweets.length < 5) {
+    return { ok: false, needsPaste: true, error: `Only found ${tweets.length} usable tweets.` };
+  }
+  try {
+    const profile = await analyzeTweetStyle(tweets);
+    await setXStyleProfile(ws, profile);
+    return { ok: true, profile, count: tweets.length };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't analyze your style." };
+  }
+}
+
+/** Learn the owner's voice from pasted example tweets. */
+export async function learnXStyleFromTextAction(
+  text: string,
+): Promise<{ ok: boolean; profile?: string; count?: number; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const samples = parseTweets(text);
+  if (samples.length < 3) return { ok: false, error: "Paste at least 3 example tweets." };
+  try {
+    const profile = await analyzeTweetStyle(samples);
+    await setXStyleProfile(ws, profile);
+    return { ok: true, profile, count: samples.length };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't analyze your style." };
+  }
+}
+
+/** Save an edited style profile (or clear it when empty). */
+export async function saveXStyleAction(profile: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  await setXStyleProfile(ws, profile.trim() ? profile.trim().slice(0, 4000) : null);
+  return { ok: true };
+}
+
+/** Preview: parse a pasted list + clean each tweet in the owner's voice. */
+export async function bulkPreviewTweetsAction(
+  text: string,
+): Promise<{ ok: boolean; tweets?: string[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const raw = parseTweets(text);
+  if (!raw.length) return { ok: false, error: "Paste at least one tweet." };
+  try {
+    const { brief } = await getPlanningContext(ws);
+    const style = await getXStyleProfile(ws);
+    const tweets = await cleanUpTweets(raw, {
+      company: brief.company_name,
+      voiceRules: brief.voice_rules,
+      styleProfile: style,
+    });
+    return { ok: true, tweets };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't clean up the tweets." };
+  }
+}
+
+/** Schedule the (possibly edited) cleaned tweets across the day/week. */
+export async function bulkScheduleTweetsAction(
+  tweets: string[],
+  config: { perDay: number; startHour?: number; endHour?: number },
+): Promise<{ ok: boolean; scheduled?: number; when?: string[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const clean = tweets.map((t) => t.trim()).filter(Boolean);
+  if (!clean.length) return { ok: false, error: "No tweets to schedule." };
+  try {
+    const res = await scheduleBulkTweets(
+      ws,
+      clean,
+      { perDay: Math.max(1, Math.min(config.perDay || 3, 8)), startHour: config.startHour, endHour: config.endHour },
+      { name: displayName(user) },
+    );
+    return { ok: true, scheduled: res.scheduled, when: res.when };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't schedule the tweets." };
   }
 }
 

@@ -6,6 +6,7 @@ const PROTECTED_PREFIXES = [
   "/approvals",
   "/dashboard",
   "/agents",
+  "/social",
   "/documents",
   "/activity",
   "/integrations",

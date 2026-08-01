@@ -371,6 +371,14 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
       .set({ name: state.workspace.name, plan: state.workspace.plan, updated_at: new Date() })
       .where(eq(workspaces.id, wsId));
 
+    // Preserve server-managed agent fields the client bundle doesn't carry (the
+    // learned X style profile), so a client-driven save can never wipe them.
+    const priorStyle = await tx
+      .select({ id: agents.id, style_profile: agents.style_profile })
+      .from(agents)
+      .where(eq(agents.workspace_id, wsId));
+    const styleById = new Map(priorStyle.map((r) => [r.id, r.style_profile] as const));
+
     // Replace child rows (delete in FK-safe order, then reinsert).
     // NOTE: integrations are intentionally excluded — they hold server-only OAuth
     // tokens + connection state managed by the OAuth callback and dedicated
@@ -432,6 +440,12 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
           kind: a.kind ?? null,
         })),
       );
+
+    // Re-apply the preserved style profiles (server-authoritative, not in the bundle).
+    for (const a of state.agents) {
+      const s = styleById.get(a.id);
+      if (s) await tx.update(agents).set({ style_profile: s }).where(eq(agents.id, a.id));
+    }
 
     // (integrations deliberately not re-inserted here — see note above)
 
@@ -791,6 +805,26 @@ export async function setDocumentNotionUrl(
     .update(documents)
     .set({ notion_url: url, updated_at: new Date() })
     .where(and(eq(documents.workspace_id, workspaceId), eq(documents.id, documentId)));
+}
+
+/* --------------------------- X voice (style) ----------------------------- */
+
+/** The learned X writing-voice profile for the workspace (held on the Social agent). */
+export async function getXStyleProfile(workspaceId: string): Promise<string | null> {
+  const [a] = await db
+    .select({ style_profile: agents.style_profile })
+    .from(agents)
+    .where(and(eq(agents.workspace_id, workspaceId), eq(agents.kind, "social")))
+    .limit(1);
+  return a?.style_profile ?? null;
+}
+
+/** Save (or clear) the learned X writing-voice profile on the Social agent. */
+export async function setXStyleProfile(workspaceId: string, profile: string | null): Promise<void> {
+  await db
+    .update(agents)
+    .set({ style_profile: profile })
+    .where(and(eq(agents.workspace_id, workspaceId), eq(agents.kind, "social")));
 }
 
 /** Persist a planned task (+ its draft asset + an activity event). Returns the id. */

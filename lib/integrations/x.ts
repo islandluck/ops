@@ -15,6 +15,39 @@ export async function getXAccount(accessToken: string): Promise<string | null> {
 }
 
 /**
+ * Fetch the connected account's own recent ORIGINAL tweets (no retweets/replies)
+ * so we can learn how the owner writes. Best-effort — returns [] on any error or
+ * limited read access, so voice-learning degrades to the paste flow.
+ */
+export async function getUserTweets(accessToken: string, max = 40): Promise<string[]> {
+  try {
+    const me = await fetch("https://api.x.com/2/users/me", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!me.ok) return [];
+    const meJson = (await me.json()) as { data?: { id?: string } };
+    const id = meJson.data?.id;
+    if (!id) return [];
+    const params = new URLSearchParams({
+      max_results: String(Math.min(Math.max(max, 5), 100)),
+      exclude: "retweets,replies",
+      "tweet.fields": "text",
+    });
+    const res = await fetch(`https://api.x.com/2/users/${id}/tweets?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { data?: Array<{ text?: string }> };
+    return (json.data ?? [])
+      .map((t) => (t.text ?? "").trim())
+      .filter((t) => t.length > 0 && !t.startsWith("RT @"))
+      .slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Upload an image to X and return its media id, for attaching to a post.
  * Requires the `media.write` scope on the connected account (reconnect X if it
  * was authorized before images were added).

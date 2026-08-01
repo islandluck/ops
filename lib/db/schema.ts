@@ -118,6 +118,9 @@ export const agents = pgTable("agents", {
   archived: boolean("archived").notNull().default(false),
   /** Special agent workflow: null (standard) | "social" (social media manager). */
   kind: text("kind"),
+  /** Learned writing voice, distilled from the owner's own tweets — injected into
+   *  X drafting so posts match how they actually write. Null until learned. */
+  style_profile: text("style_profile"),
 });
 
 export const integrations = pgTable("integrations", {

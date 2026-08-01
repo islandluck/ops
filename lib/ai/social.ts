@@ -29,6 +29,7 @@ export async function generateSocialBatch(
   persona: string,
   research: ResearchResult | null,
   config: { x: number; blog: number },
+  styleProfile?: string | null,
 ): Promise<SocialPiece[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
@@ -40,6 +41,9 @@ export async function generateSocialBatch(
     brief.ideal_customer_profile ? `Audience: ${brief.ideal_customer_profile}` : "",
     brief.voice_rules.length ? `Brand voice: ${brief.voice_rules.join("; ")}` : "",
     brief.restricted_phrases.length ? `Never use / never claim: ${brief.restricted_phrases.join(", ")}` : "",
+    styleProfile?.trim()
+      ? `\nWrite the X posts in the OWNER'S personal voice — match this style closely:\n${styleProfile}`
+      : "",
     "",
     `Create ${config.x} X/Twitter post(s) and ${config.blog} blog draft(s) — on-brand and genuinely useful to the audience.`,
     "X posts: ≤ 200 characters of body text (NO hashtags in the body — they're appended separately and must fit X's 280-character limit), punchy and specific; give 2–3 relevant lowercase hashtags separately. Blog drafts: a title + 3–5 short paragraphs.",
