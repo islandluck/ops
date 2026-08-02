@@ -716,6 +716,18 @@ export async function insertMedia(row: {
   return toPostImage(inserted);
 }
 
+/** Attach an orphan media row (task_id null) to a task, scoped to the workspace. */
+export async function linkMediaToTask(
+  workspaceId: string,
+  mediaId: string,
+  taskId: string,
+): Promise<void> {
+  await db
+    .update(media)
+    .set({ task_id: taskId })
+    .where(and(eq(media.workspace_id, workspaceId), eq(media.id, mediaId)));
+}
+
 /** Images attached to a task, oldest first (public URLs only — no storage paths). */
 export async function listMediaForTask(workspaceId: string, taskId: string): Promise<PostImage[]> {
   const rows = await db

@@ -96,3 +96,65 @@ export async function cleanUpTweets(
     .filter((s) => s.length > 0)
     .map((s) => (s.length > 280 ? s.slice(0, 277).trimEnd() + "…" : s));
 }
+
+/**
+ * Growth-marketer boost: suggest a punchier, more shareable version of a single
+ * tweet — a stronger hook, sharper specificity, a real reason to engage — WITHOUT
+ * changing what the author is actually saying or betraying their voice. Advisory:
+ * the author chooses whether to use it. Returns the suggestion + a one-line note
+ * on the main lever applied.
+ */
+export async function growthBoostTweet(
+  tweet: string,
+  ctx: { company?: string; voiceRules?: string[]; restrictedPhrases?: string[]; styleProfile?: string | null },
+): Promise<{ boosted: string; note: string }[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const original = tweet.trim();
+  if (!original) throw new Error("Nothing to boost.");
+  const client = new Anthropic({ apiKey, maxRetries: 2 });
+
+  const system = [
+    "You are a world-class growth marketer and viral copywriter for X/Twitter.",
+    "Produce THREE distinct rewrites of the author's tweet, each more likely to earn genuine engagement (replies, reposts, saves) — WITHOUT changing what they're actually saying. Give the author real choices: each variant must take a DIFFERENT angle — e.g. one HOOK-FIRST (a scroll-stopping opening line), one SPECIFIC / proof-driven (concrete detail over vague phrasing), one BOLD POINT-OF-VIEW (a crisp, confident take). Cut filler.",
+    "HARD RULES for every variant: keep the author's core message and point of view; keep their voice — never hypey, cringe, or clickbait; NEVER invent facts, numbers, quotes, or outcomes; no engagement-bait ('RT if you agree', fake questions, 'a thread 🧵' when there's no thread); keep it ≤ 280 characters; keep hashtags/@mentions only if the author already used them. Make the three genuinely different from one another.",
+    ctx.styleProfile ? `The author's writing voice (stay within it):\n${ctx.styleProfile}` : "",
+    ctx.company ? `They post for ${ctx.company}.` : "",
+    ctx.voiceRules?.length ? `Brand voice: ${ctx.voiceRules.join("; ")}.` : "",
+    ctx.restrictedPhrases?.length ? `Never use / never claim: ${ctx.restrictedPhrases.join(", ")}.` : "",
+    "",
+    'Respond with ONLY a JSON array of exactly 3 objects (no markdown, no code fences): [{"boosted": string, "note": string (≤ 6 words naming this variant\'s angle)}]',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1400,
+    system,
+    messages: [{ role: "user", content: `Tweet to boost:\n\n${original}` }],
+  });
+  const text = msg.content
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .join("")
+    .trim();
+
+  let arr: unknown;
+  try {
+    arr = JSON.parse(stripFences(text));
+  } catch {
+    throw new Error("Couldn't read the suggestions. Please try again.");
+  }
+  if (!Array.isArray(arr)) throw new Error("The boost returned an unexpected shape.");
+  const out = (arr as Record<string, unknown>[])
+    .map((raw) => {
+      let boosted = typeof raw.boosted === "string" ? raw.boosted.trim() : "";
+      if (boosted.length > 280) boosted = boosted.slice(0, 277).trimEnd() + "…";
+      const note = typeof raw.note === "string" && raw.note.trim() ? raw.note.trim().slice(0, 60) : "punchier";
+      return { boosted, note };
+    })
+    .filter((s) => s.boosted.length > 0)
+    .slice(0, 3);
+  if (!out.length) throw new Error("No suggestions came back. Please try again.");
+  return out;
+}

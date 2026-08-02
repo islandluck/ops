@@ -28,7 +28,7 @@ import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } fr
 import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
-import { analyzeTweetStyle, cleanUpTweets } from "@/lib/ai/style";
+import { analyzeTweetStyle, cleanUpTweets, growthBoostTweet } from "@/lib/ai/style";
 import { getUserTweets } from "@/lib/integrations/x";
 import { parseTweets, scheduleBulkTweets } from "@/lib/agents/social-bulk";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
@@ -217,7 +217,7 @@ export async function getPostImagesAction(taskId: string): Promise<PostImage[]> 
 
 /** Upload an image file and attach it to a task. */
 export async function uploadPostImageAction(
-  taskId: string,
+  taskId: string | null,
   formData: FormData,
 ): Promise<{ ok: boolean; image?: PostImage; error?: string }> {
   const user = await getCurrentUser();
@@ -262,7 +262,7 @@ export async function searchStockAction(
 
 /** Save a chosen stock image into our storage and attach it to a task. */
 export async function attachStockImageAction(
-  taskId: string,
+  taskId: string | null,
   stock: { url: string; alt: string; width: number; height: number; attribution: string },
 ): Promise<{ ok: boolean; image?: PostImage; error?: string }> {
   const user = await getCurrentUser();
@@ -624,16 +624,41 @@ export async function bulkPreviewTweetsAction(
   }
 }
 
+/** Growth Marketer: suggest 3 more-engaging/viral takes on one tweet (advisory). */
+export async function growthBoostTweetAction(
+  tweet: string,
+): Promise<{ ok: boolean; suggestions?: { boosted: string; note: string }[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!tweet.trim()) return { ok: false, error: "Nothing to boost." };
+  try {
+    const { brief } = await getPlanningContext(ws);
+    const style = await getXStyleProfile(ws);
+    const suggestions = await growthBoostTweet(tweet, {
+      company: brief.company_name,
+      voiceRules: brief.voice_rules,
+      styleProfile: style,
+    });
+    return { ok: true, suggestions };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't boost the tweet." };
+  }
+}
+
 /** Schedule the (possibly edited) cleaned tweets across the day/week. */
 export async function bulkScheduleTweetsAction(
-  tweets: string[],
+  items: { text: string; mediaId?: string | null }[],
   config: { perDay: number; startHour?: number; endHour?: number },
 ): Promise<{ ok: boolean; scheduled?: number; when?: string[]; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  const clean = tweets.map((t) => t.trim()).filter(Boolean);
+  const clean = items
+    .map((it) => ({ text: it.text.trim(), mediaId: it.mediaId ?? null }))
+    .filter((it) => it.text);
   if (!clean.length) return { ok: false, error: "No tweets to schedule." };
   try {
     const res = await scheduleBulkTweets(

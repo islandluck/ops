@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, approvalDecisions, taskAssets, tasks } from "@/lib/db/schema";
-import { getPlanningContext, saveDocument } from "@/lib/db/queries";
+import { getPlanningContext, linkMediaToTask, saveDocument } from "@/lib/db/queries";
 import { fitToX } from "@/lib/social/x-post";
 import { nextPublishSlots } from "./slots";
 
@@ -50,16 +50,22 @@ export interface BulkScheduleResult {
   when: string[]; // ISO instants, in order
 }
 
+export interface BulkTweetItem {
+  text: string;
+  /** Optional pre-uploaded media row (task_id null) to attach to this tweet's task. */
+  mediaId?: string | null;
+}
+
 /** Create one queued+approved scheduled X task per tweet, spread across days. */
 export async function scheduleBulkTweets(
   workspaceId: string,
-  tweets: string[],
+  items: BulkTweetItem[],
   config: BulkScheduleConfig,
   actor: { name: string },
 ): Promise<BulkScheduleResult> {
-  const clean = tweets
-    .map((t) => fitToX(t.trim()))
-    .filter(Boolean)
+  const clean = items
+    .map((it) => ({ text: fitToX(it.text.trim()), mediaId: it.mediaId ?? null }))
+    .filter((it) => it.text)
     .slice(0, 100);
   if (!clean.length) return { scheduled: 0, when: [] };
 
@@ -96,7 +102,7 @@ export async function scheduleBulkTweets(
 
   const n = Math.min(clean.length, slots.length);
   for (let i = 0; i < n; i++) {
-    const text = clean[i];
+    const { text, mediaId } = clean[i];
     const slot = slots[i];
     const taskId = randomUUID();
     const heading = `X post: ${text.slice(0, 60)}`.slice(0, 120);
@@ -152,6 +158,7 @@ export async function scheduleBulkTweets(
       folder,
       docType: "social_post",
     });
+    if (mediaId) await linkMediaToTask(workspaceId, mediaId, taskId);
   }
 
   await db.insert(activityEvents).values({

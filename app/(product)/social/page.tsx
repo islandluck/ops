@@ -1,32 +1,45 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarClock,
   Check,
   Clock,
+  ImagePlus,
   Loader2,
   Pencil,
   RefreshCw,
+  Search,
   Send,
   Sparkles,
   Trash2,
+  TrendingUp,
+  Upload,
   Wand2,
+  X,
 } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
+  attachStockImageAction,
   bulkPreviewTweetsAction,
   bulkScheduleTweetsAction,
   getXStyleAction,
+  growthBoostTweetAction,
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
+  removePostImageAction,
   saveXStyleAction,
+  searchStockAction,
+  uploadPostImageAction,
 } from "@/app/actions";
+import type { PostImage } from "@/lib/types";
+import type { StockImage } from "@/lib/ai/stock";
 
 function fmtWhen(iso: string, tz?: string): string {
   try {
@@ -213,7 +226,7 @@ function VoiceSection() {
 function ComposerSection() {
   const { reloadWorkspace } = useStore();
   const [raw, setRaw] = useState("");
-  const [cleaned, setCleaned] = useState<string[] | null>(null);
+  const [cleaned, setCleaned] = useState<{ text: string; image: PostImage | null }[] | null>(null);
   const [cleaning, setCleaning] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [perDay, setPerDay] = useState(3);
@@ -226,7 +239,7 @@ function ComposerSection() {
     setDone(null);
     const r = await bulkPreviewTweetsAction(raw);
     setCleaning(false);
-    if (r.ok && r.tweets) setCleaned(r.tweets);
+    if (r.ok && r.tweets) setCleaned(r.tweets.map((t) => ({ text: t, image: null })));
     else setErr(r.error ?? "Couldn't clean up the tweets.");
   }
 
@@ -234,7 +247,10 @@ function ComposerSection() {
     if (!cleaned) return;
     setScheduling(true);
     setErr(null);
-    const r = await bulkScheduleTweetsAction(cleaned, { perDay });
+    const r = await bulkScheduleTweetsAction(
+      cleaned.map((d) => ({ text: d.text, mediaId: d.image?.id ?? null })),
+      { perDay },
+    );
     setScheduling(false);
     if (r.ok) {
       setDone({ count: r.scheduled ?? 0 });
@@ -285,11 +301,13 @@ function ComposerSection() {
             <Button size="sm" variant="ghost" onClick={() => setCleaned(null)}>Start over</Button>
           </div>
           <div className="space-y-2">
-            {cleaned.map((t, i) => (
+            {cleaned.map((d, i) => (
               <TweetRow
                 key={i}
-                value={t}
-                onChange={(v) => setCleaned((arr) => arr!.map((x, j) => (j === i ? v : x)))}
+                value={d.text}
+                image={d.image}
+                onChange={(v) => setCleaned((arr) => arr!.map((x, j) => (j === i ? { ...x, text: v } : x)))}
+                onImage={(img) => setCleaned((arr) => arr!.map((x, j) => (j === i ? { ...x, image: img } : x)))}
                 onRemove={() => setCleaned((arr) => arr!.filter((_, j) => j !== i))}
               />
             ))}
@@ -327,14 +345,44 @@ function ComposerSection() {
 
 function TweetRow({
   value,
+  image,
   onChange,
+  onImage,
   onRemove,
 }: {
   value: string;
+  image: PostImage | null;
   onChange: (v: string) => void;
+  onImage: (img: PostImage | null) => void;
   onRemove: () => void;
 }) {
   const over = value.length > 280;
+  const [boosting, setBoosting] = useState(false);
+  const [options, setOptions] = useState<{ boosted: string; note: string }[] | null>(null);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [boostDraft, setBoostDraft] = useState("");
+  const [boostErr, setBoostErr] = useState<string | null>(null);
+
+  async function boost() {
+    setBoosting(true);
+    setBoostErr(null);
+    setOptions(null);
+    const r = await growthBoostTweetAction(value);
+    setBoosting(false);
+    if (r.ok && r.suggestions?.length) {
+      setOptions(r.suggestions);
+      setSelectedIdx(0);
+      setBoostDraft(r.suggestions[0].boosted);
+    } else {
+      setBoostErr(r.error ?? "Couldn't boost this one.");
+    }
+  }
+
+  function pick(i: number) {
+    setSelectedIdx(i);
+    if (options?.[i]) setBoostDraft(options[i].boosted);
+  }
+
   return (
     <div className="rounded-xl border border-border p-2.5">
       <Textarea
@@ -346,10 +394,286 @@ function TweetRow({
         <span className={cn("text-[11px] tabular-nums", over ? "font-semibold text-destructive" : "text-muted-foreground")}>
           {value.length}/280
         </span>
-        <button onClick={onRemove} className="rounded p-1 text-muted-foreground hover:text-red-600" aria-label="Remove">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={boost}
+            disabled={boosting || value.trim().length < 4}
+            title="Suggest a more viral version"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-violet-600 transition hover:bg-violet-50 disabled:pointer-events-none disabled:opacity-40"
+          >
+            {boosting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
+            Growth Marketer
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded p-1 text-muted-foreground hover:text-red-600"
+            aria-label="Remove"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <TweetImageSlot image={image} onImage={onImage} />
+
+      {boostErr && <p className="px-1.5 pb-0.5 text-[11px] text-amber-600">{boostErr}</p>}
+
+      {options && (
+        <div className="mt-1.5 rounded-lg border border-violet-200 bg-violet-50/70 p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700">
+            <TrendingUp className="h-3 w-3" />
+            Growth Marketer — pick a direction, then tweak
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {options.map((o, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => pick(i)}
+                title={o.boosted}
+                className={cn(
+                  "rounded-md px-2 py-1 text-[11px] font-medium transition",
+                  i === selectedIdx
+                    ? "bg-violet-600 text-white"
+                    : "bg-white/70 text-violet-700 hover:bg-white",
+                )}
+              >
+                {i + 1}
+                {o.note ? ` · ${o.note}` : ""}
+              </button>
+            ))}
+          </div>
+          <Textarea
+            value={boostDraft}
+            onChange={(e) => setBoostDraft(e.target.value)}
+            className="mt-1.5 min-h-[64px] resize-none border-violet-200 bg-white/70 text-[13px] leading-relaxed focus-visible:border-violet-400"
+          />
+          <div className="mt-1.5 flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="success"
+              disabled={!boostDraft.trim()}
+              onClick={() => {
+                onChange(boostDraft.trim());
+                setOptions(null);
+              }}
+            >
+              <Check className="h-3.5 w-3.5" />
+              Use this
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setOptions(null)}>
+              Keep mine
+            </Button>
+            <span
+              className={cn(
+                "ml-auto text-[11px] tabular-nums",
+                boostDraft.length > 280 ? "font-semibold text-destructive" : "text-violet-600/70",
+              )}
+            >
+              {boostDraft.length}/280
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TweetImageSlot({
+  image,
+  onImage,
+}: {
+  image: PostImage | null;
+  onImage: (img: PostImage | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"upload" | "stock">("upload");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<StockImage[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [configured, setConfigured] = useState(true);
+  const [attaching, setAttaching] = useState<string | null>(null);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setErr("");
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await uploadPostImageAction(null, fd);
+    setBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+    if (res.ok && res.image) {
+      onImage(res.image);
+      setOpen(false);
+    } else {
+      setErr(res.error ?? "Upload failed.");
+    }
+  }
+
+  async function runSearch() {
+    if (!q.trim()) return;
+    setSearching(true);
+    setErr("");
+    const res = await searchStockAction(q.trim());
+    setSearching(false);
+    setConfigured(res.configured);
+    setResults(res.images);
+  }
+
+  async function pickStock(img: StockImage) {
+    setAttaching(img.url);
+    setErr("");
+    const res = await attachStockImageAction(null, {
+      url: img.url,
+      alt: img.alt,
+      width: img.width,
+      height: img.height,
+      attribution: img.attribution,
+    });
+    setAttaching(null);
+    if (res.ok && res.image) {
+      onImage(res.image);
+      setOpen(false);
+    } else {
+      setErr(res.error ?? "Couldn't add that image.");
+    }
+  }
+
+  async function remove() {
+    if (!image) return;
+    const id = image.id;
+    onImage(null);
+    setOpen(false);
+    await removePostImageAction(id);
+  }
+
+  if (image) {
+    return (
+      <div className="mt-2 flex items-center gap-2 px-1.5">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={image.url} alt="" className="h-12 w-12 rounded-md border border-border object-cover" />
+        <span className="text-[11.5px] text-muted-foreground">Image attached — posts with the tweet</span>
+        <button
+          type="button"
+          onClick={remove}
+          className="ml-auto rounded p-1 text-muted-foreground hover:text-red-600"
+          aria-label="Remove image"
+        >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
+    );
+  }
+
+  return (
+    <div className="mt-1 px-1.5">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11.5px] font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        >
+          <ImagePlus className="h-3.5 w-3.5" />
+          Add image
+        </button>
+      ) : (
+        <div className="rounded-lg border border-border bg-card p-2.5">
+          <div className="mb-2 flex items-center justify-between">
+            <Segmented
+              options={[
+                { value: "upload", label: "Upload" },
+                { value: "stock", label: "Stock" },
+              ]}
+              value={tab}
+              onChange={(v) => setTab(v as "upload" | "stock")}
+            />
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded p-1 text-muted-foreground hover:bg-accent"
+              aria-label="Close image picker"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {tab === "upload" ? (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={onFile}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={busy}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border py-5 text-[12.5px] font-medium text-muted-foreground transition hover:border-primary/40 hover:text-foreground disabled:opacity-60"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                {busy ? "Uploading…" : "Choose an image (max 10 MB)"}
+              </button>
+            </>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex gap-1.5">
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void runSearch();
+                    }
+                  }}
+                  placeholder="Search Pexels…"
+                  className="h-8"
+                />
+                <Button size="sm" variant="outline" onClick={runSearch} disabled={searching || !q.trim()}>
+                  {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                </Button>
+              </div>
+              {!configured && (
+                <p className="text-[11.5px] text-amber-600">
+                  Stock search needs a Pexels API key (PEXELS_API_KEY). Upload works either way.
+                </p>
+              )}
+              {results.length > 0 && (
+                <div className="grid max-h-44 grid-cols-3 gap-1.5 overflow-y-auto">
+                  {results.map((img) => (
+                    <button
+                      key={img.url}
+                      type="button"
+                      onClick={() => pickStock(img)}
+                      disabled={attaching !== null}
+                      title={img.attribution}
+                      className="relative aspect-[4/3] overflow-hidden rounded-md border border-border transition hover:ring-2 hover:ring-primary"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={img.thumb} alt={img.alt} className="h-full w-full object-cover" />
+                      {attaching === img.url && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50">
+                          <Loader2 className="h-4 w-4 animate-spin text-white" />
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {err && <p className="mt-1.5 text-[11px] text-destructive">{err}</p>}
+        </div>
+      )}
     </div>
   );
 }
