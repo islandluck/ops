@@ -5,10 +5,12 @@ import {
   CalendarClock,
   Check,
   Clock,
+  ExternalLink,
   ImagePlus,
   Loader2,
   Pencil,
   RefreshCw,
+  Reply,
   Search,
   Send,
   Sparkles,
@@ -33,9 +35,11 @@ import {
   growthBoostTweetAction,
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
+  postReplyAction,
   removePostImageAction,
   saveXStyleAction,
   searchStockAction,
+  suggestRepliesAction,
   uploadPostImageAction,
 } from "@/app/actions";
 import type { PostImage } from "@/lib/types";
@@ -66,6 +70,7 @@ export default function SocialPage() {
       <PageBody className="max-w-3xl space-y-5">
         <VoiceSection />
         <ComposerSection />
+        <ReplyAssistantSection />
         <QueueSection />
       </PageBody>
     </>
@@ -675,6 +680,192 @@ function TweetImageSlot({
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------------------------- Reply assistant ---------------------------- */
+
+function ReplyAssistantSection() {
+  const [url, setUrl] = useState("");
+  const [pastedText, setPastedText] = useState("");
+  const [needsText, setNeedsText] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [target, setTarget] = useState<{ id: string; text: string; author: string | null } | null>(null);
+  const [options, setOptions] = useState<{ reply: string; note: string }[] | null>(null);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [postedUrl, setPostedUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function suggest() {
+    setLoading(true);
+    setErr(null);
+    setPostedUrl(null);
+    const r = await suggestRepliesAction(url, needsText ? pastedText : undefined);
+    setLoading(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Couldn't suggest replies.");
+      return;
+    }
+    if (r.needsText) {
+      setNeedsText(true);
+      setErr("Couldn't read that tweet automatically — paste its text below, then try again.");
+      return;
+    }
+    if (r.suggestions?.length && r.tweetId) {
+      setTarget({ id: r.tweetId, text: r.tweetText ?? pastedText, author: r.author ?? null });
+      setOptions(r.suggestions);
+      setSelectedIdx(0);
+      setDraft(r.suggestions[0].reply);
+      setNeedsText(false);
+    }
+  }
+
+  function pick(i: number) {
+    setSelectedIdx(i);
+    if (options?.[i]) setDraft(options[i].reply);
+  }
+
+  async function post() {
+    if (!target) return;
+    setPosting(true);
+    setErr(null);
+    const r = await postReplyAction(target.id, draft);
+    setPosting(false);
+    if (r.ok && r.url) setPostedUrl(r.url);
+    else setErr(r.error ?? "Couldn't post the reply.");
+  }
+
+  function reset() {
+    setUrl("");
+    setPastedText("");
+    setNeedsText(false);
+    setTarget(null);
+    setOptions(null);
+    setDraft("");
+    setPostedUrl(null);
+    setErr(null);
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Reply className="h-5 w-5" />
+        </div>
+        <div>
+          <h2 className="text-[15px] font-semibold">Reply assistant</h2>
+          <p className="text-[12.5px] text-muted-foreground">
+            Paste a tweet from a big account in your niche — get value-add replies in your voice, then post.
+          </p>
+        </div>
+      </div>
+
+      {postedUrl ? (
+        <div className="mt-4 space-y-3">
+          <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700">
+            ✅ Reply posted.{" "}
+            <a
+              href={postedUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium underline"
+            >
+              View on X <ExternalLink className="h-3 w-3" />
+            </a>
+          </p>
+          <Button size="sm" variant="outline" onClick={reset}>
+            Reply to another
+          </Button>
+        </div>
+      ) : !target ? (
+        <div className="mt-4 space-y-3">
+          <div className="space-y-1.5">
+            <Label>Tweet link</Label>
+            <Input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://x.com/username/status/1234567890"
+            />
+          </div>
+          {needsText && (
+            <div className="space-y-1.5">
+              <Label>Paste the tweet&apos;s text</Label>
+              <Textarea
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                className="min-h-[70px]"
+                placeholder="Paste what the tweet says so Operator can draft a reply."
+              />
+            </div>
+          )}
+          <Button
+            onClick={suggest}
+            disabled={loading || url.trim().length < 8 || (needsText && pastedText.trim().length < 3)}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {loading ? "Reading the room…" : "Suggest replies"}
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <div className="rounded-xl border border-border bg-muted/30 p-3">
+            <p className="text-[11px] font-medium text-muted-foreground">
+              Replying to {target.author ?? "this tweet"}
+            </p>
+            <p className="mt-1 whitespace-pre-line text-[13px] leading-relaxed text-foreground/90">{target.text}</p>
+          </div>
+
+          {options && (
+            <div className="flex flex-wrap gap-1">
+              {options.map((o, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => pick(i)}
+                  title={o.reply}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11px] font-medium transition",
+                    i === selectedIdx
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-foreground/80 hover:bg-muted/70",
+                  )}
+                >
+                  {i + 1}
+                  {o.note ? ` · ${o.note}` : ""}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} className="min-h-[80px]" />
+          <div className="flex items-center gap-2">
+            <Button variant="success" onClick={post} disabled={posting || !draft.trim() || draft.length > 280}>
+              {posting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Post reply
+            </Button>
+            <Button variant="ghost" onClick={reset}>
+              Start over
+            </Button>
+            <span
+              className={cn(
+                "ml-auto text-[11px] tabular-nums",
+                draft.length > 280 ? "font-semibold text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {draft.length}/280
+            </span>
+          </div>
+          <p className="text-[11.5px] text-muted-foreground">
+            Posts a real reply to your connected X. Add genuine value — quality replies grow your account; spammy
+            ones get you muted.
+          </p>
+        </div>
+      )}
+
+      {err && <p className="mt-3 text-[12.5px] text-amber-600">{err}</p>}
+    </Card>
   );
 }
 

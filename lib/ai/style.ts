@@ -158,3 +158,75 @@ export async function growthBoostTweet(
   if (!out.length) throw new Error("No suggestions came back. Please try again.");
   return out;
 }
+
+/**
+ * Suggest value-add replies to someone else's tweet — the "reply guy" growth
+ * move (reply to bigger accounts in your niche to get seen by the right people).
+ * Every reply must ADD something real; sycophantic filler and fabricated facts
+ * are forbidden. Returns 3 distinct angles in the owner's voice. Server-only.
+ */
+export async function suggestReplies(
+  tweet: { text: string; author?: string | null },
+  ctx: {
+    company?: string;
+    idealCustomer?: string;
+    voiceRules?: string[];
+    restrictedPhrases?: string[];
+    styleProfile?: string | null;
+  },
+): Promise<{ reply: string; note: string }[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const original = tweet.text.trim();
+  if (!original) throw new Error("No tweet to reply to.");
+  const client = new Anthropic({ apiKey, maxRetries: 2 });
+
+  const system = [
+    "You are a sharp X/Twitter growth strategist writing REPLIES on behalf of the account owner.",
+    "The point: replying to bigger accounts' tweets to get the owner seen by the RIGHT audience. The only replies that work ADD GENUINE VALUE — a specific insight, a concrete example or data point, a sharp question that moves the conversation forward, a useful resource, or a respectful alternative take.",
+    "Write THREE distinct reply options, each a DIFFERENT angle, all in the owner's voice.",
+    "HARD RULES: never sycophantic filler ('so true', 'great post', 'this 💯', 'well said') — it's invisible and reads as a bot; never fabricate facts, numbers, or quotes; never be rude or contrarian just for engagement; stay on the owner's niche so the right people notice; ≤ 280 characters; hashtags only if truly natural; sound like a real, smart person — not a brand account.",
+    ctx.styleProfile ? `The owner's writing voice (match it):\n${ctx.styleProfile}` : "",
+    ctx.company ? `The owner runs / represents: ${ctx.company}.` : "",
+    ctx.idealCustomer ? `The owner's niche / audience: ${ctx.idealCustomer}.` : "",
+    ctx.voiceRules?.length ? `Voice rules: ${ctx.voiceRules.join("; ")}.` : "",
+    ctx.restrictedPhrases?.length ? `Never use / never claim: ${ctx.restrictedPhrases.join(", ")}.` : "",
+    "",
+    'Respond with ONLY a JSON array of exactly 3 objects (no markdown, no code fences): [{"reply": string, "note": string (≤ 6 words naming the angle)}]',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const who = tweet.author ? ` (by ${tweet.author})` : "";
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1400,
+    system,
+    messages: [
+      { role: "user", content: `The tweet to reply to${who}:\n\n"${original}"\n\nWrite the 3 reply options now.` },
+    ],
+  });
+  const text = msg.content
+    .map((b) => (b.type === "text" ? b.text : ""))
+    .join("")
+    .trim();
+
+  let arr: unknown;
+  try {
+    arr = JSON.parse(stripFences(text));
+  } catch {
+    throw new Error("Couldn't read the reply suggestions. Please try again.");
+  }
+  if (!Array.isArray(arr)) throw new Error("The reply suggester returned an unexpected shape.");
+  const out = (arr as Record<string, unknown>[])
+    .map((raw) => {
+      let reply = typeof raw.reply === "string" ? raw.reply.trim() : "";
+      if (reply.length > 280) reply = reply.slice(0, 277).trimEnd() + "…";
+      const note = typeof raw.note === "string" && raw.note.trim() ? raw.note.trim().slice(0, 60) : "value-add";
+      return { reply, note };
+    })
+    .filter((s) => s.reply.length > 0)
+    .slice(0, 3);
+  if (!out.length) throw new Error("No reply suggestions came back. Please try again.");
+  return out;
+}

@@ -28,7 +28,7 @@ import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } fr
 import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
-import { analyzeTweetStyle, cleanUpTweets, growthBoostTweet } from "@/lib/ai/style";
+import { analyzeTweetStyle, cleanUpTweets, growthBoostTweet, suggestReplies } from "@/lib/ai/style";
 import { getUserTweets } from "@/lib/integrations/x";
 import { parseTweets, scheduleBulkTweets } from "@/lib/agents/social-bulk";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
@@ -41,6 +41,8 @@ import {
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { executionKilled } from "@/lib/integrations/guardrails";
+import { getTweetById, postTweet } from "@/lib/integrations/x";
 import {
   runAgentForWorkspace,
   runTaskWithAgent,
@@ -670,6 +672,84 @@ export async function bulkScheduleTweetsAction(
     return { ok: true, scheduled: res.scheduled, when: res.when };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't schedule the tweets." };
+  }
+}
+
+/** Reply Assistant: suggest value-add replies to a pasted tweet (link or text). */
+export async function suggestRepliesAction(
+  input: string,
+  pastedText?: string,
+): Promise<{
+  ok: boolean;
+  tweetId?: string;
+  tweetText?: string;
+  author?: string | null;
+  suggestions?: { reply: string; note: string }[];
+  needsText?: boolean;
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const idMatch = input.match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/i);
+  const tweetId = idMatch?.[1];
+  if (!tweetId) return { ok: false, error: "Paste a link to a tweet (e.g. x.com/user/status/12345…)." };
+
+  // Prefer the API's copy of the tweet; fall back to the owner pasting the text.
+  let tweetText = (pastedText ?? "").trim();
+  let author: string | null = null;
+  if (!tweetText) {
+    const token = await getValidAccessToken(ws, "X (Twitter)");
+    if (token) {
+      const fetched = await getTweetById(token, tweetId);
+      if (fetched) {
+        tweetText = fetched.text;
+        author = fetched.author;
+      }
+    }
+  }
+  if (!tweetText) return { ok: true, tweetId, needsText: true };
+
+  try {
+    const { brief } = await getPlanningContext(ws);
+    const style = await getXStyleProfile(ws);
+    const suggestions = await suggestReplies(
+      { text: tweetText, author },
+      {
+        company: brief.company_name,
+        idealCustomer: brief.ideal_customer_profile,
+        voiceRules: brief.voice_rules,
+        restrictedPhrases: brief.restricted_phrases,
+        styleProfile: style,
+      },
+    );
+    return { ok: true, tweetId, tweetText, author, suggestions };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't suggest replies." };
+  }
+}
+
+/** Post a reply to a tweet (user-initiated). Gated by the global kill switch. */
+export async function postReplyAction(
+  tweetId: string,
+  text: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (executionKilled()) return { ok: false, error: "Posting is paused (kill switch is on)." };
+  const body = text.trim();
+  if (!body) return { ok: false, error: "The reply is empty." };
+  if (!/^\d+$/.test(tweetId)) return { ok: false, error: "That tweet link looks invalid." };
+  const token = await getValidAccessToken(ws, "X (Twitter)");
+  if (!token) return { ok: false, error: "Connect X first (from Integrations)." };
+  try {
+    const r = await postTweet(token, body, undefined, tweetId);
+    return { ok: true, url: r.url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't post the reply." };
   }
 }
 
