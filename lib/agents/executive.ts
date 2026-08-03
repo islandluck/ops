@@ -266,11 +266,11 @@ export async function sendExecutiveMessage(
   const clean = text.trim();
   if (!clean) return { ok: false, error: "Type a message first." };
 
-  // Prior turns (oldest→newest) before recording this one.
+  // Prior turns in the current chat (oldest→newest) before recording this one.
   const historyRows = await db
     .select()
     .from(executiveMessages)
-    .where(eq(executiveMessages.workspace_id, workspaceId))
+    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)))
     .orderBy(desc(executiveMessages.created_at))
     .limit(20);
   const history = historyRows.reverse().map((m) => ({ role: m.role, content: m.content }));
@@ -311,6 +311,16 @@ export async function sendExecutiveMessage(
     ok: true,
     reply: { id: asstId, role: "assistant", content: result.text, actions: result.actions, created_at: iso(asstAt) },
   };
+}
+
+/** Start a fresh conversation — archives the current chat (kept for history).
+ *  The agent's memory is separate and unaffected, so it still knows the business. */
+export async function startNewExecutiveChat(workspaceId: string): Promise<{ ok: boolean }> {
+  await db
+    .update(executiveMessages)
+    .set({ archived: true })
+    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)));
+  return { ok: true };
 }
 
 /* ---------------------------- daily brief ------------------------------- */
@@ -636,7 +646,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     db
       .select()
       .from(executiveMessages)
-      .where(eq(executiveMessages.workspace_id, workspaceId))
+      .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)))
       .orderBy(asc(executiveMessages.created_at))
       .limit(200),
     db

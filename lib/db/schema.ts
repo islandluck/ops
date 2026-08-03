@@ -503,6 +503,8 @@ export const executiveMessages = pgTable("executive_messages", {
   content: text("content").notNull().default(""),
   /** Tool calls the agent made while producing an assistant turn. */
   actions: jsonb("actions").$type<ExecAction[]>().notNull().default([]),
+  /** Archived when the owner starts a new chat — hidden, kept for history. */
+  archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
 });
 

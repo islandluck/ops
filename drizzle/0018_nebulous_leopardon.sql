@@ -1,0 +1,2 @@
+ALTER TABLE "executive_briefs" ALTER COLUMN "content" SET DEFAULT '{"headline":"","kpi_review":"","shipped":[],"in_motion":[],"next":[],"insights":[],"suggestions":[]}'::jsonb;--> statement-breakpoint
+ALTER TABLE "executive_messages" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;

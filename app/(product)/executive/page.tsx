@@ -9,11 +9,13 @@ import {
   Check,
   CheckCircle2,
   Compass,
+  Download,
   FileText,
   FolderKanban,
   Lightbulb,
   ListChecks,
   Loader2,
+  MessageSquarePlus,
   Paperclip,
   Pin,
   Plus,
@@ -29,9 +31,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover } from "@/components/ui/popover";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
-import { markdownToHtml } from "@/lib/content/format";
+import { markdownToHtml, markdownToPlainText } from "@/lib/content/format";
 import {
   addGoalAction,
   addMemoryAction,
@@ -43,6 +46,7 @@ import {
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
   setGoalStatusAction,
+  startNewExecutiveChatAction,
   togglePinMemoryAction,
 } from "@/app/actions";
 import type {
@@ -161,6 +165,12 @@ export default function ExecutivePage() {
     },
     [loadBundle],
   );
+
+  const newChat = useCallback(async () => {
+    setMessages([]);
+    await startNewExecutiveChatAction();
+    await loadBundle();
+  }, [loadBundle]);
   useEffect(() => {
     void loadBundle();
   }, [loadBundle]);
@@ -218,25 +228,37 @@ export default function ExecutivePage() {
               Your Chief of Staff — grounded in your live business data
             </p>
           </div>
-          <div className="ml-auto flex shrink-0 rounded-lg border border-border bg-muted/50 p-0.5 text-[12.5px] font-medium">
-            <button
-              onClick={() => setView("chat")}
-              className={cn(
-                "rounded-md px-3 py-1 transition",
-                view === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              Conversation
-            </button>
-            <button
-              onClick={() => setView("brief")}
-              className={cn(
-                "rounded-md px-3 py-1 transition",
-                view === "brief" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              Daily brief
-            </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {view === "chat" && messages.length > 0 && (
+              <button
+                onClick={newChat}
+                title="Start a new chat"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[12.5px] font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+                <span className="hidden sm:inline">New chat</span>
+              </button>
+            )}
+            <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-[12.5px] font-medium">
+              <button
+                onClick={() => setView("chat")}
+                className={cn(
+                  "rounded-md px-3 py-1 transition",
+                  view === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Conversation
+              </button>
+              <button
+                onClick={() => setView("brief")}
+                className={cn(
+                  "rounded-md px-3 py-1 transition",
+                  view === "brief" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Daily brief
+              </button>
+            </div>
           </div>
         </div>
 
@@ -484,6 +506,87 @@ function fmtBriefDate(iso: string): string {
   }
 }
 
+/** Serialize a brief to Markdown (the canonical export; txt/doc/pdf derive from it). */
+function briefToMarkdown(b: ExecBrief): string {
+  const c = b.content;
+  const out: string[] = ["# Daily Brief", `_Prepared ${fmtBriefDate(b.created_at)}_`, ""];
+  if (c.headline) out.push(`**${c.headline}**`, "");
+  if (c.kpi_review) out.push("## KPI review", c.kpi_review, "");
+  const sec = (title: string, items: string[]) => {
+    if (items.length) {
+      out.push(`## ${title}`);
+      items.forEach((i) => out.push(`- ${i}`));
+      out.push("");
+    }
+  };
+  sec("Shipped", c.shipped);
+  sec("In motion", c.in_motion);
+  sec("Next", c.next);
+  if (c.insights.length) {
+    out.push("## Insights & ideas");
+    c.insights.forEach((i) => {
+      out.push(`### ${i.title}`);
+      if (i.detail) out.push(i.detail);
+      out.push("");
+    });
+  }
+  const open = c.suggestions.filter((s) => s.status !== "dismissed");
+  if (open.length) {
+    out.push("## Proposed next steps");
+    open.forEach((s) =>
+      out.push(`- **[${s.kind}]** ${s.title}${s.rationale ? ` — ${s.rationale}` : ""}${s.status === "accepted" ? " _(created)_" : ""}`),
+    );
+    out.push("");
+  }
+  return out.join("\n").trim() + "\n";
+}
+
+function downloadBlob(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Print a brief to PDF via a hidden iframe (the print dialog's "Save as PDF"). */
+function printBriefPdf(bodyHtml: string) {
+  const iframe = document.createElement("iframe");
+  Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+  doc.open();
+  doc.write(
+    `<!doctype html><html><head><meta charset="utf-8"><title>Daily Brief</title><style>` +
+      `body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;max-width:680px;margin:32px auto;padding:0 24px;line-height:1.6}` +
+      `h1{font-size:24px;margin:0 0 4px}h2{font-size:14px;margin:1.7em 0 .4em;text-transform:uppercase;letter-spacing:.05em;color:#64748b}` +
+      `h3{font-size:15px;margin:1.1em 0 .2em}ul{padding-left:1.3em}li{margin:.2em 0}` +
+      `code{background:#f1f5f9;padding:.1em .35em;border-radius:4px;font-size:.9em}a{color:#2563eb}` +
+      `</style></head><body>${bodyHtml}</body></html>`,
+  );
+  doc.close();
+  iframe.contentWindow?.focus();
+  iframe.contentWindow?.print();
+  setTimeout(() => document.body.removeChild(iframe), 1500);
+}
+
+function downloadBrief(b: ExecBrief, fmt: "md" | "txt" | "doc" | "pdf") {
+  const md = briefToMarkdown(b);
+  const base = `daily-brief-${new Date(b.created_at).toISOString().slice(0, 10)}`;
+  if (fmt === "md") downloadBlob(`${base}.md`, md, "text/markdown");
+  else if (fmt === "txt") downloadBlob(`${base}.txt`, markdownToPlainText(md), "text/plain");
+  else if (fmt === "doc")
+    downloadBlob(
+      `${base}.doc`,
+      `<!doctype html><html><head><meta charset="utf-8"></head><body>${markdownToHtml(md)}</body></html>`,
+      "application/msword",
+    );
+  else printBriefPdf(markdownToHtml(md));
+}
+
 function BriefView({
   brief,
   briefs,
@@ -532,6 +635,43 @@ function BriefView({
                   </option>
                 ))}
               </select>
+            )}
+            {brief && (
+              <Popover
+                align="end"
+                className="inline-flex"
+                trigger={
+                  <span className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
+                    <Download className="h-4 w-4" />
+                    <span className="hidden sm:inline">Download</span>
+                  </span>
+                }
+              >
+                {(close) => (
+                  <div className="min-w-[150px]">
+                    {(
+                      [
+                        ["md", "Markdown (.md)"],
+                        ["txt", "Text (.txt)"],
+                        ["doc", "Word (.doc)"],
+                        ["pdf", "PDF"],
+                      ] as const
+                    ).map(([fmt, label]) => (
+                      <button
+                        key={fmt}
+                        onClick={() => {
+                          downloadBrief(brief, fmt);
+                          close();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-accent"
+                      >
+                        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Popover>
             )}
             <Button size="sm" variant={brief ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
               {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}

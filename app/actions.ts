@@ -82,6 +82,7 @@ import {
   getExecutiveBundle,
   sendExecutiveMessage,
   setGoalStatus,
+  startNewExecutiveChat,
   togglePinMemory,
 } from "@/lib/agents/executive";
 import {
@@ -649,6 +650,15 @@ export async function dismissBriefSuggestionAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   return dismissBriefSuggestion(ws, briefId, suggestionId);
+}
+
+/** Start a fresh Executive conversation (archives the current one). */
+export async function startNewExecutiveChatAction(): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return startNewExecutiveChat(ws);
 }
 
 /** Talk to the Executive Agent — a tool-using reply grounded in live business data. */
