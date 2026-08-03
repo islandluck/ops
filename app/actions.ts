@@ -89,6 +89,14 @@ import {
   togglePinMemory,
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
+import {
+  getCurrentContext,
+  getDeepDive,
+  listDeepDives,
+  startDeepDive,
+  type NewDeepDiveSource,
+} from "@/lib/agents/deepdive";
+import { extractDocText, isSupportedDoc, MAX_DOC_BYTES, SUPPORTED_DOC_LABEL } from "@/lib/deepdive/extract";
 import { countAttention } from "@/lib/executive/nudges";
 import {
   boostPost,
@@ -126,6 +134,9 @@ import type {
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
+  CompanyContext,
+  DeepDive,
+  DeepDiveSource,
   GoalStatus,
   InvestorUpdate,
   InvestorUpdateContent,
@@ -683,6 +694,70 @@ export async function deleteInvestorUpdateAction(id: string): Promise<{ ok: bool
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   return deleteInvestorUpdate(ws, id);
+}
+
+/* ------------------------------ Deep Dive ------------------------------- */
+
+/** Start a Deep Dive: extract text from uploaded docs + pasted notes, then queue it. */
+export async function startDeepDiveAction(
+  formData: FormData,
+): Promise<{ ok: boolean; deepDive?: DeepDive; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+
+  const title = String(formData.get("title") ?? "");
+  const sources: NewDeepDiveSource[] = [];
+
+  const pasted = String(formData.get("text") ?? "").trim();
+  if (pasted) sources.push({ kind: "text", title: "Pasted notes", text: pasted });
+
+  const files = formData.getAll("files").filter((f): f is File => f instanceof File);
+  for (const file of files) {
+    if (file.size === 0) continue;
+    if (!isSupportedDoc(file.type, file.name)) {
+      return { ok: false, error: `"${file.name}" isn't a supported file — use ${SUPPORTED_DOC_LABEL}.` };
+    }
+    if (file.size > MAX_DOC_BYTES) {
+      return { ok: false, error: `"${file.name}" is too large (max 20 MB).` };
+    }
+    try {
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const text = await extractDocText(file.name, file.type, bytes);
+      if (text.trim()) sources.push({ kind: "upload", title: file.name, text });
+    } catch {
+      return { ok: false, error: `Couldn't read "${file.name}". It may be scanned, encrypted, or corrupt.` };
+    }
+  }
+
+  return startDeepDive(ws, title, sources);
+}
+
+export async function listDeepDivesAction(): Promise<DeepDive[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listDeepDives(ws);
+}
+
+export async function getDeepDiveAction(
+  id: string,
+): Promise<{ deepDive: DeepDive; sources: DeepDiveSource[] } | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getDeepDive(ws, id);
+}
+
+export async function getCompanyContextAction(): Promise<CompanyContext | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getCurrentContext(ws);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */
