@@ -1,15 +1,19 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { companyContext, deepDives, deepDiveSources } from "@/lib/db/schema";
+import { getPlanningContext } from "@/lib/db/queries";
+import { distillSource, synthesizeContextPack, type AiUsage } from "@/lib/ai/deepdive";
 import type {
   CompanyContext,
   CompanyContextPack,
   DeepDive,
   DeepDiveSource,
   DeepDiveSourceKind,
+  DeepDiveStatus,
+  SourceDistillation,
 } from "@/lib/types";
 
 /**
@@ -159,4 +163,247 @@ export async function getCurrentContext(workspaceId: string): Promise<CompanyCon
     .orderBy(desc(companyContext.version))
     .limit(1);
   return row ? toContext(row) : null;
+}
+
+/* ------------------------------- worker --------------------------------- */
+
+const ADVANCEABLE: DeepDiveStatus[] = ["queued", "distilling", "synthesizing"];
+const DISTILL_BATCH = 3; // sources distilled per tick — keep a tick well within serverless limits
+const LOCK_STALE_MS = 10 * 60 * 1000; // reclaim a lock held this long (a crashed tick)
+
+/** Cron entry — advance in-progress Deep Dives across ALL workspaces, one bounded step each. */
+export async function advanceDeepDives(limit = 3): Promise<{ advanced: number }> {
+  const stale = new Date(Date.now() - LOCK_STALE_MS);
+  // tenant-scope-exempt: background worker sweeps every workspace, like advanceActiveProjects.
+  const candidates = await db
+    .select({ id: deepDives.id })
+    .from(deepDives)
+    .where(
+      and(
+        inArray(deepDives.status, ADVANCEABLE),
+        or(isNull(deepDives.worker_locked_at), lt(deepDives.worker_locked_at, stale)),
+      ),
+    )
+    .orderBy(asc(deepDives.created_at))
+    .limit(limit);
+  let advanced = 0;
+  for (const c of candidates) {
+    try {
+      if (await advanceDeepDiveTick(c.id)) advanced++;
+    } catch {
+      /* isolate failures — one bad run can't block the rest */
+    }
+  }
+  return { advanced };
+}
+
+/** Advance only the caller's workspace (used by the UI while a run is in progress). */
+export async function advanceWorkspaceDeepDives(workspaceId: string, limit = 2): Promise<void> {
+  const stale = new Date(Date.now() - LOCK_STALE_MS);
+  const candidates = await db
+    .select({ id: deepDives.id })
+    .from(deepDives)
+    .where(
+      and(
+        eq(deepDives.workspace_id, workspaceId),
+        inArray(deepDives.status, ADVANCEABLE),
+        or(isNull(deepDives.worker_locked_at), lt(deepDives.worker_locked_at, stale)),
+      ),
+    )
+    .limit(limit);
+  for (const c of candidates) {
+    try {
+      await advanceDeepDiveTick(c.id);
+    } catch {
+      /* isolate */
+    }
+  }
+}
+
+/** One bounded unit of work for a single run, guarded by an atomic worker lock. */
+async function advanceDeepDiveTick(id: string): Promise<boolean> {
+  const now = new Date();
+  const stale = new Date(now.getTime() - LOCK_STALE_MS);
+  // Atomic claim — only one tick can hold the lock at a time.
+  const [dive] = await db
+    .update(deepDives)
+    .set({ worker_locked_at: now })
+    .where(
+      and(
+        eq(deepDives.id, id),
+        inArray(deepDives.status, ADVANCEABLE),
+        or(isNull(deepDives.worker_locked_at), lt(deepDives.worker_locked_at, stale)),
+      ),
+    )
+    .returning();
+  if (!dive) return false; // already claimed elsewhere, or finished
+
+  try {
+    if (dive.status === "queued") {
+      await db
+        .update(deepDives)
+        .set({ status: "distilling", started_at: dive.started_at ?? now, stage_detail: "Reading your material" })
+        .where(eq(deepDives.id, id));
+      await distillBatch(dive.workspace_id, id);
+    } else if (dive.status === "distilling") {
+      await distillBatch(dive.workspace_id, id);
+    } else if (dive.status === "synthesizing") {
+      await synthesizeStep(dive.workspace_id, id);
+    }
+    return true;
+  } catch (e) {
+    await db
+      .update(deepDives)
+      .set({
+        status: "failed",
+        stage_detail: "Failed",
+        error: e instanceof Error ? e.message.slice(0, 400) : "Deep Dive failed.",
+      })
+      .where(eq(deepDives.id, id));
+    return false;
+  } finally {
+    await db.update(deepDives).set({ worker_locked_at: null }).where(eq(deepDives.id, id));
+  }
+}
+
+/** Distill up to DISTILL_BATCH pending sources; when none remain, move to synthesis. */
+async function distillBatch(workspaceId: string, diveId: string): Promise<void> {
+  const { brief } = await getPlanningContext(workspaceId);
+  const pending = await db
+    .select()
+    .from(deepDiveSources)
+    .where(
+      and(
+        eq(deepDiveSources.deep_dive_id, diveId),
+        eq(deepDiveSources.workspace_id, workspaceId),
+        eq(deepDiveSources.status, "pending"),
+      ),
+    )
+    .orderBy(asc(deepDiveSources.created_at))
+    .limit(DISTILL_BATCH);
+
+  for (const src of pending) {
+    try {
+      const { distilled, usage } = await distillSource(
+        { title: src.title, text: src.raw_text ?? "" },
+        brief.company_name,
+      );
+      await db.update(deepDiveSources).set({ distilled, status: "distilled" }).where(eq(deepDiveSources.id, src.id));
+      await bumpUsage(diveId, usage);
+    } catch (e) {
+      // A single unreadable doc shouldn't stall the run — mark it failed and move on.
+      await db
+        .update(deepDiveSources)
+        .set({ status: "failed", error: e instanceof Error ? e.message.slice(0, 300) : "distill failed" })
+        .where(eq(deepDiveSources.id, src.id));
+    }
+  }
+
+  const total = await countSources(diveId, workspaceId, false);
+  const left = await countSources(diveId, workspaceId, true);
+  const done = total - left;
+  await db
+    .update(deepDives)
+    .set({ progress: { done, total }, stage_detail: `Read ${done} of ${total}` })
+    .where(eq(deepDives.id, diveId));
+  if (left === 0) {
+    await db
+      .update(deepDives)
+      .set({ status: "synthesizing", stage_detail: "Connecting the dots" })
+      .where(eq(deepDives.id, diveId));
+  }
+}
+
+/** Synthesize the cumulative Context Pack, persist it, purge raw text, complete. */
+async function synthesizeStep(workspaceId: string, diveId: string): Promise<void> {
+  const { brief } = await getPlanningContext(workspaceId);
+  const rows = await db
+    .select()
+    .from(deepDiveSources)
+    .where(
+      and(
+        eq(deepDiveSources.deep_dive_id, diveId),
+        eq(deepDiveSources.workspace_id, workspaceId),
+        eq(deepDiveSources.status, "distilled"),
+      ),
+    );
+  const distillations = rows
+    .filter((r) => r.distilled)
+    .map((r) => ({ title: r.title, distilled: r.distilled as SourceDistillation }));
+
+  if (!distillations.length) {
+    await db
+      .update(deepDives)
+      .set({ status: "failed", stage_detail: "Failed", error: "Couldn't read any of the provided material." })
+      .where(eq(deepDives.id, diveId));
+    return;
+  }
+
+  const prior = await getCurrentContext(workspaceId);
+  const result = await synthesizeContextPack({
+    companyName: brief.company_name,
+    priorSummary: prior?.summary ?? "",
+    priorPack: prior?.pack ?? null,
+    distillations,
+  });
+  await bumpUsage(diveId, result.usage);
+
+  // Publish the new current Context Pack (cumulative — supersedes the prior one).
+  await db
+    .update(companyContext)
+    .set({ is_current: false })
+    .where(and(eq(companyContext.workspace_id, workspaceId), eq(companyContext.is_current, true)));
+  await db.insert(companyContext).values({
+    id: uid(),
+    workspace_id: workspaceId,
+    deep_dive_id: diveId,
+    version: (prior?.version ?? 0) + 1,
+    is_current: true,
+    summary: result.summary,
+    pack: result.pack,
+    created_at: new Date(),
+  });
+
+  // Privacy: keep only the distillation — drop the raw source text.
+  await db
+    .update(deepDiveSources)
+    .set({ raw_text: null })
+    .where(and(eq(deepDiveSources.deep_dive_id, diveId), eq(deepDiveSources.workspace_id, workspaceId)));
+
+  await db
+    .update(deepDives)
+    .set({ status: "complete", completed_at: new Date(), stage_detail: "Complete" })
+    .where(eq(deepDives.id, diveId));
+}
+
+async function countSources(diveId: string, workspaceId: string, onlyPending: boolean): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(deepDiveSources)
+    .where(
+      onlyPending
+        ? and(
+            eq(deepDiveSources.deep_dive_id, diveId),
+            eq(deepDiveSources.workspace_id, workspaceId),
+            eq(deepDiveSources.status, "pending"),
+          )
+        : and(eq(deepDiveSources.deep_dive_id, diveId), eq(deepDiveSources.workspace_id, workspaceId)),
+    );
+  return row?.n ?? 0;
+}
+
+async function bumpUsage(diveId: string, u: AiUsage): Promise<void> {
+  const [row] = await db.select({ usage: deepDives.usage }).from(deepDives).where(eq(deepDives.id, diveId)).limit(1);
+  const cur = row?.usage ?? { input_tokens: 0, output_tokens: 0, est_cost_cents: 0, calls: 0 };
+  await db
+    .update(deepDives)
+    .set({
+      usage: {
+        input_tokens: cur.input_tokens + u.input_tokens,
+        output_tokens: cur.output_tokens + u.output_tokens,
+        est_cost_cents: cur.est_cost_cents + u.est_cost_cents,
+        calls: cur.calls + 1,
+      },
+    })
+    .where(eq(deepDives.id, diveId));
 }

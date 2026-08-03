@@ -90,6 +90,7 @@ import {
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
 import {
+  advanceWorkspaceDeepDives,
   getCurrentContext,
   getDeepDive,
   listDeepDives,
@@ -758,6 +759,16 @@ export async function getCompanyContextAction(): Promise<CompanyContext | null> 
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   return getCurrentContext(ws);
+}
+
+/** Nudge in-progress Deep Dives forward one step (the UI polls this while a run is active,
+ *  so it makes progress even without the cron — e.g. in local dev). */
+export async function pokeDeepDiveAction(): Promise<void> {
+  const user = await getCurrentUser();
+  if (!user) return;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return;
+  await advanceWorkspaceDeepDives(ws);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */

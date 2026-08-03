@@ -8,6 +8,10 @@
     {
       "path": "/api/social/publish",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/deep-dive/run",
+      "schedule": "*/2 * * * *"
     }
   ]
 }
