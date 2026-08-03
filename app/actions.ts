@@ -7,20 +7,28 @@ import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/serve
 import { APP_URL, hasAnthropicKey, isBackendConfigured } from "@/lib/config";
 import { randomUUID } from "node:crypto";
 import {
+  addXTarget,
   applyOnboardingForUser,
   createPlannedTask,
   deleteMediaRow,
+  dismissOpportunity,
   ensureProvisioned,
   getDocumentById,
   getMediaRow,
+  getOpportunity,
   getPlanningContext,
   getXStyleProfile,
   insertMedia,
   listMediaForTask,
+  listReplyOpportunities,
+  listXTargets,
   loadBundleForUser,
+  markOpportunityReplied,
+  removeXTarget,
   resetBundleForUser,
   saveBundleForUser,
   setDocumentNotionUrl,
+  setOpportunityReplies,
   setXStyleProfile,
   workspaceIdForUser,
 } from "@/lib/db/queries";
@@ -42,7 +50,8 @@ import { getStripeAccount } from "@/lib/integrations/stripe";
 import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { executionKilled } from "@/lib/integrations/guardrails";
-import { getTweetById, postTweet } from "@/lib/integrations/x";
+import { getTweetById, getUserByUsername, postTweet } from "@/lib/integrations/x";
+import { refreshReplyRadar } from "@/lib/agents/reply-radar";
 import {
   runAgentForWorkspace,
   runTaskWithAgent,
@@ -50,6 +59,7 @@ import {
   type RunTaskResult,
 } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
+import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
 import { scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
   advanceProject,
@@ -83,6 +93,8 @@ import type {
   PostImage,
   Product,
   Project,
+  ReplyOpportunity,
+  XTarget,
 } from "@/lib/types";
 
 function displayName(user: User): string {
@@ -753,6 +765,139 @@ export async function postReplyAction(
   }
 }
 
+/* ------------------------------ reply radar ------------------------------ */
+
+export async function getXTargetsAction(): Promise<XTarget[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? listXTargets(ws) : [];
+}
+
+export async function addXTargetAction(
+  handle: string,
+  note?: string,
+): Promise<{ ok: boolean; target?: XTarget; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const clean = handle.replace(/^@/, "").trim();
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(clean)) {
+    return { ok: false, error: "Enter a valid X handle (letters, numbers, underscores)." };
+  }
+  // Best-effort resolve the user id now (so the first refresh is faster).
+  let xUserId: string | null = null;
+  const token = await getValidAccessToken(ws, "X (Twitter)");
+  if (token) {
+    const u = await getUserByUsername(token, clean);
+    if (u) xUserId = u.id;
+  }
+  try {
+    const target = await addXTarget(ws, clean, note ?? "", xUserId);
+    return { ok: true, target };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't add that account." };
+  }
+}
+
+export async function removeXTargetAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (ws) await removeXTarget(ws, id);
+  return { ok: true };
+}
+
+export async function getReplyOpportunitiesAction(): Promise<ReplyOpportunity[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  return ws ? listReplyOpportunities(ws) : [];
+}
+
+export async function refreshReplyRadarAction(): Promise<{
+  ok: boolean;
+  found?: number;
+  readBlocked?: boolean;
+  targets?: number;
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await refreshReplyRadar(ws, { maxTargets: 8, perTarget: 10, draftTop: 2 });
+    return { ok: true, found: r.found, readBlocked: r.readBlocked, targets: r.targets };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't refresh the radar." };
+  }
+}
+
+export async function dismissOpportunityAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (ws) await dismissOpportunity(ws, id);
+  return { ok: true };
+}
+
+/** Draft (or re-draft) reply options for an opportunity on demand. */
+export async function draftOpportunityRepliesAction(
+  id: string,
+): Promise<{ ok: boolean; suggestions?: { reply: string; note: string }[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const opp = await getOpportunity(ws, id);
+  if (!opp) return { ok: false, error: "Opportunity not found." };
+  try {
+    const { brief } = await getPlanningContext(ws);
+    const style = await getXStyleProfile(ws);
+    const suggestions = await suggestReplies(
+      { text: opp.tweet_text, author: opp.author_handle },
+      {
+        company: brief.company_name,
+        idealCustomer: brief.ideal_customer_profile,
+        voiceRules: brief.voice_rules,
+        restrictedPhrases: brief.restricted_phrases,
+        styleProfile: style,
+      },
+    );
+    await setOpportunityReplies(ws, id, suggestions);
+    return { ok: true, suggestions };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft replies." };
+  }
+}
+
+/** Post the owner's reply to an opportunity's tweet, then mark it replied. */
+export async function postOpportunityReplyAction(
+  id: string,
+  text: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (executionKilled()) return { ok: false, error: "Posting is paused (kill switch is on)." };
+  const body = text.trim();
+  if (!body) return { ok: false, error: "The reply is empty." };
+  const opp = await getOpportunity(ws, id);
+  if (!opp) return { ok: false, error: "Opportunity not found." };
+  const token = await getValidAccessToken(ws, "X (Twitter)");
+  if (!token) return { ok: false, error: "Connect X first (from Integrations)." };
+  try {
+    const r = await postTweet(token, body, undefined, opp.tweet_id);
+    await markOpportunityReplied(ws, id, r.url);
+    return { ok: true, url: r.url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't post the reply." };
+  }
+}
+
 /**
  * Create a task from a plain-language request. Operator plans it first —
  * interpreting intent, choosing the integrations it needs, and drafting the
@@ -819,6 +964,15 @@ export async function runEmailTriageAction(): Promise<TriageResult> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runEmailTriage(ws, { name: displayName(user), email: user.email ?? "" });
+}
+
+/** Run Notion triage now — read shared Notion pages and turn action items into tasks. */
+export async function runNotionTriageAction(): Promise<NotionTriageResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runNotionTriage(ws, { name: displayName(user) });
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

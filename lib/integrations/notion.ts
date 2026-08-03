@@ -92,3 +92,91 @@ export async function createNotionPage(
   }
   return { id: String(json.id), url: json.url ? String(json.url) : undefined };
 }
+
+export interface NotionPageRef {
+  id: string;
+  title: string;
+  url: string;
+  last_edited: string;
+}
+
+/** Plain-text title of a Notion page from its `properties` (any title property). */
+function pageTitle(props: Record<string, unknown> | undefined): string {
+  if (!props) return "";
+  for (const val of Object.values(props)) {
+    const p = val as { type?: string; title?: Array<{ plain_text?: string }> };
+    if (p?.type === "title" && Array.isArray(p.title)) {
+      return p.title.map((t) => t.plain_text ?? "").join("").trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * Recently-edited pages the integration can access (the pages the user shared),
+ * newest first. Best-effort — returns [] on error/limited access so callers
+ * degrade gracefully. Excludes pages Operator itself created (child pages).
+ */
+export async function searchNotionPages(
+  accessToken: string,
+  max = 15,
+): Promise<NotionPageRef[]> {
+  try {
+    const res = await fetch("https://api.notion.com/v1/search", {
+      method: "POST",
+      headers: notionHeaders(accessToken),
+      body: JSON.stringify({
+        filter: { property: "object", value: "page" },
+        sort: { direction: "descending", timestamp: "last_edited_time" },
+        page_size: Math.min(Math.max(max, 5), 100),
+      }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      results?: Array<{
+        id: string;
+        object: string;
+        url?: string;
+        last_edited_time?: string;
+        properties?: Record<string, unknown>;
+      }>;
+    };
+    return (json.results ?? [])
+      .filter((r) => r.object === "page")
+      .map((r) => ({
+        id: r.id,
+        title: pageTitle(r.properties) || "Untitled",
+        url: r.url ?? "",
+        last_edited: r.last_edited_time ?? "",
+      }))
+      .slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+/** Flatten a page's block children into readable plain text (best-effort). */
+export async function getNotionPageContent(accessToken: string, pageId: string): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
+      { headers: notionHeaders(accessToken) },
+    );
+    if (!res.ok) return "";
+    const json = (await res.json()) as { results?: Array<Record<string, unknown>> };
+    const lines: string[] = [];
+    for (const block of json.results ?? []) {
+      const type = block.type as string | undefined;
+      if (!type) continue;
+      const body = block[type] as { rich_text?: Array<{ plain_text?: string }>; checked?: boolean } | undefined;
+      const text = (body?.rich_text ?? []).map((t) => t.plain_text ?? "").join("").trim();
+      if (!text) continue;
+      const prefix =
+        type === "to_do" ? `- [${body?.checked ? "x" : " "}] ` : type.startsWith("heading") ? "## " : type.includes("list_item") ? "- " : "";
+      lines.push(`${prefix}${text}`);
+    }
+    return lines.join("\n").slice(0, 9000);
+  } catch {
+    return "";
+  }
+}

@@ -17,6 +17,7 @@ import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { saveDocument } from "@/lib/db/queries";
 import { runEmailTriage } from "./triage";
+import { runNotionTriage } from "./notion-triage";
 import { runSocialMediaAgent } from "./social";
 import { publishDueScheduledPosts } from "./schedule";
 import type { Agent, AssetType, BusinessBrief, Category, DraftRequest } from "@/lib/types";
@@ -163,9 +164,10 @@ export async function runBackgroundAgents(limit = 25): Promise<{ ran: number; pu
       : [];
     const actor = { name: owner?.full_name || "Scheduler", email: owner?.email || "" };
     try {
-      // The Admin agent's background job is inbox triage; others prepare a task.
+      // The Admin agent's background job is inbox + Notion triage; others prepare a task.
       if (a.category === "admin") {
         await runEmailTriage(a.workspace_id, actor);
+        await runNotionTriage(a.workspace_id, actor).catch(() => {});
       } else {
         await runAgentForWorkspace(a.workspace_id, a.id, actor);
       }

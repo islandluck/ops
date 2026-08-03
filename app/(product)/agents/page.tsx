@@ -7,6 +7,7 @@ import {
   Folder,
   FolderKanban,
   Inbox,
+  NotebookText,
   Play,
   Plus,
   Sparkles,
@@ -56,10 +57,11 @@ function Avatar({ agent, size = "md" }: { agent: { emoji: string; accent: string
 }
 
 export default function AgentsPage() {
-  const { state, runAgent, runTriage } = useStore();
+  const { state, runAgent, runTriage, runNotionTriage } = useStore();
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [triaging, setTriaging] = useState(false);
+  const [triagingNotion, setTriagingNotion] = useState(false);
 
   if (!state) return null;
 
@@ -81,6 +83,15 @@ export default function AgentsPage() {
       await runTriage();
     } finally {
       setTriaging(false);
+    }
+  }
+
+  async function onTriageNotion() {
+    setTriagingNotion(true);
+    try {
+      await runNotionTriage();
+    } finally {
+      setTriagingNotion(false);
     }
   }
 
@@ -135,20 +146,36 @@ export default function AgentsPage() {
                 </span>
                 <div className="flex items-center gap-1.5">
                   {a.category === "admin" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={triaging}
-                      onClick={onTriage}
-                      title="Read + triage your inbox"
-                    >
-                      {triaging ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Inbox className="h-3.5 w-3.5" />
-                      )}
-                      Triage
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={triaging}
+                        onClick={onTriage}
+                        title="Read + triage your inbox"
+                      >
+                        {triaging ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Inbox className="h-3.5 w-3.5" />
+                        )}
+                        Triage
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={triagingNotion}
+                        onClick={onTriageNotion}
+                        title="Read your Notion pages + turn action items into tasks"
+                      >
+                        {triagingNotion ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <NotebookText className="h-3.5 w-3.5" />
+                        )}
+                        Notion
+                      </Button>
+                    </>
                   )}
                   <Button size="sm" variant="outline" disabled={running === a.id} onClick={() => onRun(a.id)}>
                     {running === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}

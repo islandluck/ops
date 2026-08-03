@@ -241,6 +241,21 @@ export const triagedEmails = pgTable(
   (t) => [uniqueIndex("triaged_emails_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
 );
 
+/** Notion refs already triaged — page-version markers + per-item hashes — so
+ *  re-runs skip unchanged pages and never re-create the same action item. */
+export const triagedNotion = pgTable(
+  "triaged_notion",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    ref: text("ref").notNull(),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("triaged_notion_ws_ref_uniq").on(t.workspace_id, t.ref)],
+);
+
 /** Images attached to a post/task. Binaries live in Supabase Storage; this row
  *  holds the metadata + a public URL. Server-authoritative. */
 export const media = pgTable("media", {
@@ -344,6 +359,55 @@ export const pages = pgTable(
     updated_at: updatedAt,
   },
   (t) => [uniqueIndex("pages_slug_uniq").on(t.slug)],
+);
+
+/** Accounts the owner watches for reply opportunities — the "reply radar" watchlist. */
+export const xTargets = pgTable(
+  "x_targets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** Normalized @handle, stored without the leading @. */
+    handle: text("handle").notNull(),
+    /** Resolved X user id (best-effort; null until first lookup succeeds). */
+    x_user_id: text("x_user_id"),
+    note: text("note").notNull().default(""),
+    active: boolean("active").notNull().default(true),
+    last_checked_at: timestamp("last_checked_at", { withTimezone: true }),
+    /** Newest tweet id seen last check — used as since_id for incremental pulls. */
+    last_seen_tweet_id: text("last_seen_tweet_id"),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("x_targets_ws_handle_uniq").on(t.workspace_id, t.handle)],
+);
+
+/** A scored reply opportunity surfaced by the radar (someone else's tweet worth
+ *  replying to), with pre-drafted reply options for the owner to review. */
+export const replyOpportunities = pgTable(
+  "reply_opportunities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    target_id: uuid("target_id").references(() => xTargets.id, { onDelete: "cascade" }),
+    tweet_id: text("tweet_id").notNull(),
+    tweet_url: text("tweet_url").notNull().default(""),
+    author_handle: text("author_handle").notNull().default(""),
+    tweet_text: text("tweet_text").notNull().default(""),
+    score: integer("score").notNull().default(0),
+    reason: text("reason").notNull().default(""),
+    suggested_replies: jsonb("suggested_replies")
+      .$type<{ reply: string; note: string }[]>()
+      .notNull()
+      .default([]),
+    status: text("status").$type<"new" | "dismissed" | "replied">().notNull().default("new"),
+    reply_url: text("reply_url"),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("reply_opps_ws_tweet_uniq").on(t.workspace_id, t.tweet_id)],
 );
 
 /** A checkout attempt / sale against a product (via Stripe Checkout). */

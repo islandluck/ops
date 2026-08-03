@@ -78,6 +78,20 @@
       "when": 1785609042829,
       "tag": "0010_wide_domino",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785651953075,
+      "tag": "0011_petite_gorilla_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785687433508,
+      "tag": "0012_numerous_supernaut",
+      "breakpoints": true
     }
   ]
 }

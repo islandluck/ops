@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runBackgroundAgents } from "@/lib/agents/run";
 import { advanceActiveProjects } from "@/lib/agents/project";
+import { refreshAllReplyRadars } from "@/lib/agents/reply-radar";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -25,7 +26,14 @@ async function handle(request: NextRequest) {
     // Advance any active projects whose current phase is complete (the heartbeat
     // that moves long-running projects forward phase by phase).
     const projects = await advanceActiveProjects();
-    return NextResponse.json({ ok: true, ...result, projectsAdvanced: projects.advanced });
+    // Refresh the reply radar for workspaces watching accounts (best-effort).
+    const radar = await refreshAllReplyRadars();
+    return NextResponse.json({
+      ok: true,
+      ...result,
+      projectsAdvanced: projects.advanced,
+      radar,
+    });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "run failed" },

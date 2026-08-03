@@ -168,3 +168,76 @@ export async function getTweetById(
     return null;
   }
 }
+
+/** Resolve an @handle to an X user id (best-effort — null on error/limited access). */
+export async function getUserByUsername(
+  accessToken: string,
+  handle: string,
+): Promise<{ id: string; username: string } | null> {
+  try {
+    const h = handle.replace(/^@/, "").trim();
+    if (!h) return null;
+    const res = await fetch(`https://api.x.com/2/users/by/username/${encodeURIComponent(h)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { id?: string; username?: string } };
+    return json.data?.id ? { id: String(json.data.id), username: json.data.username ?? h } : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface XTweet {
+  id: string;
+  text: string;
+  created_at: string | null;
+  likes: number;
+  replies: number;
+  reposts: number;
+}
+
+/**
+ * Fetch a user's recent ORIGINAL tweets (no retweets/replies) for the reply
+ * radar. Returns null on any error or limited read access (403/429) — reading
+ * arbitrary users' timelines needs the X API Basic tier — so callers can show a
+ * clear "needs Basic tier" state; [] means "reachable, nothing new".
+ */
+export async function getUserRecentTweets(
+  accessToken: string,
+  userId: string,
+  opts: { sinceId?: string | null; max?: number } = {},
+): Promise<XTweet[] | null> {
+  try {
+    const params = new URLSearchParams({
+      max_results: String(Math.min(Math.max(opts.max ?? 10, 5), 100)),
+      exclude: "retweets,replies",
+      "tweet.fields": "created_at,public_metrics,text",
+    });
+    if (opts.sinceId) params.set("since_id", opts.sinceId);
+    const res = await fetch(`https://api.x.com/2/users/${userId}/tweets?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      data?: Array<{
+        id?: string;
+        text?: string;
+        created_at?: string;
+        public_metrics?: { like_count?: number; reply_count?: number; retweet_count?: number };
+      }>;
+    };
+    return (json.data ?? [])
+      .filter((t) => t.id && t.text)
+      .map((t) => ({
+        id: String(t.id),
+        text: (t.text ?? "").trim(),
+        created_at: t.created_at ?? null,
+        likes: t.public_metrics?.like_count ?? 0,
+        replies: t.public_metrics?.reply_count ?? 0,
+        reposts: t.public_metrics?.retweet_count ?? 0,
+      }));
+  } catch {
+    return null;
+  }
+}

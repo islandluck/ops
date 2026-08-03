@@ -375,6 +375,39 @@ export interface Order {
   created_at: string;
 }
 
+/* ------------------------------ reply radar ------------------------------ */
+
+/** An account the owner watches for reply opportunities (the reply radar). */
+export interface XTarget {
+  id: string;
+  workspace_id: string;
+  handle: string;
+  x_user_id: string | null;
+  note: string;
+  active: boolean;
+  last_checked_at: string | null;
+  created_at: string;
+}
+
+export type ReplyOpportunityStatus = "new" | "dismissed" | "replied";
+
+/** A scored tweet worth replying to, with pre-drafted reply options. */
+export interface ReplyOpportunity {
+  id: string;
+  workspace_id: string;
+  target_id: string | null;
+  tweet_id: string;
+  tweet_url: string;
+  author_handle: string;
+  tweet_text: string;
+  score: number;
+  reason: string;
+  suggested_replies: { reply: string; note: string }[];
+  status: ReplyOpportunityStatus;
+  reply_url: string | null;
+  created_at: string;
+}
+
 export interface Integration {
   id: string;
   name: string;

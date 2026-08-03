@@ -12,10 +12,12 @@ import {
   integrations,
   media,
   profiles,
+  replyOpportunities,
   taskAssets,
   tasks,
   workspaceMembers,
   workspaces,
+  xTargets,
 } from "./schema";
 import { buildCleanSlateRows } from "./seed-workspace";
 import { hasAnthropicKey } from "@/lib/config";
@@ -33,8 +35,10 @@ import type {
   OnboardingInput,
   PlannedTask,
   PostImage,
+  ReplyOpportunity,
   Task,
   Workspace,
+  XTarget,
 } from "@/lib/types";
 
 const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString() : "");
@@ -837,6 +841,197 @@ export async function setXStyleProfile(workspaceId: string, profile: string | nu
     .update(agents)
     .set({ style_profile: profile })
     .where(and(eq(agents.workspace_id, workspaceId), eq(agents.kind, "social")));
+}
+
+/* ----------------------------- reply radar ------------------------------ */
+
+function toXTarget(t: typeof xTargets.$inferSelect): XTarget {
+  return {
+    id: t.id,
+    workspace_id: t.workspace_id,
+    handle: t.handle,
+    x_user_id: t.x_user_id,
+    note: t.note,
+    active: t.active,
+    last_checked_at: t.last_checked_at ? iso(t.last_checked_at) : null,
+    created_at: iso(t.created_at),
+  };
+}
+
+function toReplyOpportunity(o: typeof replyOpportunities.$inferSelect): ReplyOpportunity {
+  return {
+    id: o.id,
+    workspace_id: o.workspace_id,
+    target_id: o.target_id,
+    tweet_id: o.tweet_id,
+    tweet_url: o.tweet_url,
+    author_handle: o.author_handle,
+    tweet_text: o.tweet_text,
+    score: o.score,
+    reason: o.reason,
+    suggested_replies: o.suggested_replies,
+    status: o.status,
+    reply_url: o.reply_url,
+    created_at: iso(o.created_at),
+  };
+}
+
+export async function listXTargets(workspaceId: string): Promise<XTarget[]> {
+  const rows = await db
+    .select()
+    .from(xTargets)
+    .where(eq(xTargets.workspace_id, workspaceId))
+    .orderBy(desc(xTargets.created_at));
+  return rows.map(toXTarget);
+}
+
+export async function addXTarget(
+  workspaceId: string,
+  handle: string,
+  note: string,
+  xUserId?: string | null,
+): Promise<XTarget> {
+  const clean = handle.replace(/^@/, "").trim().toLowerCase().slice(0, 40);
+  const [row] = await db
+    .insert(xTargets)
+    .values({
+      id: uid(),
+      workspace_id: workspaceId,
+      handle: clean,
+      note: note.slice(0, 200),
+      x_user_id: xUserId ?? null,
+    })
+    .onConflictDoUpdate({
+      target: [xTargets.workspace_id, xTargets.handle],
+      set: { active: true, note: note.slice(0, 200), ...(xUserId ? { x_user_id: xUserId } : {}) },
+    })
+    .returning();
+  return toXTarget(row);
+}
+
+export async function removeXTarget(workspaceId: string, id: string): Promise<void> {
+  await db.delete(xTargets).where(and(eq(xTargets.workspace_id, workspaceId), eq(xTargets.id, id)));
+}
+
+export async function setTargetUserId(workspaceId: string, id: string, xUserId: string): Promise<void> {
+  await db
+    .update(xTargets)
+    .set({ x_user_id: xUserId })
+    .where(and(eq(xTargets.workspace_id, workspaceId), eq(xTargets.id, id)));
+}
+
+export async function markTargetChecked(
+  workspaceId: string,
+  id: string,
+  lastSeenTweetId: string | null,
+): Promise<void> {
+  await db
+    .update(xTargets)
+    .set({ last_checked_at: new Date(), ...(lastSeenTweetId ? { last_seen_tweet_id: lastSeenTweetId } : {}) })
+    .where(and(eq(xTargets.workspace_id, workspaceId), eq(xTargets.id, id)));
+}
+
+/** Active targets for a refresh pass, least-recently-checked first (raw rows). */
+export async function activeTargetsForRefresh(workspaceId: string, limit: number) {
+  return db
+    .select()
+    .from(xTargets)
+    .where(and(eq(xTargets.workspace_id, workspaceId), eq(xTargets.active, true)))
+    .orderBy(sql`${xTargets.last_checked_at} asc nulls first`)
+    .limit(limit);
+}
+
+/** Insert a new opportunity; returns false if this tweet is already tracked. */
+export async function insertOpportunity(
+  workspaceId: string,
+  o: {
+    targetId: string | null;
+    tweetId: string;
+    tweetUrl: string;
+    authorHandle: string;
+    tweetText: string;
+    score: number;
+    reason: string;
+    suggestedReplies: { reply: string; note: string }[];
+  },
+): Promise<boolean> {
+  const inserted = await db
+    .insert(replyOpportunities)
+    .values({
+      id: uid(),
+      workspace_id: workspaceId,
+      target_id: o.targetId,
+      tweet_id: o.tweetId,
+      tweet_url: o.tweetUrl,
+      author_handle: o.authorHandle,
+      tweet_text: o.tweetText.slice(0, 2000),
+      score: o.score,
+      reason: o.reason.slice(0, 300),
+      suggested_replies: o.suggestedReplies,
+    })
+    .onConflictDoNothing({ target: [replyOpportunities.workspace_id, replyOpportunities.tweet_id] })
+    .returning({ id: replyOpportunities.id });
+  return inserted.length > 0;
+}
+
+export async function listReplyOpportunities(workspaceId: string, limit = 40): Promise<ReplyOpportunity[]> {
+  const rows = await db
+    .select()
+    .from(replyOpportunities)
+    .where(and(eq(replyOpportunities.workspace_id, workspaceId), eq(replyOpportunities.status, "new")))
+    .orderBy(desc(replyOpportunities.score), desc(replyOpportunities.created_at))
+    .limit(limit);
+  return rows.map(toReplyOpportunity);
+}
+
+export async function getOpportunity(workspaceId: string, id: string): Promise<ReplyOpportunity | null> {
+  const [row] = await db
+    .select()
+    .from(replyOpportunities)
+    .where(and(eq(replyOpportunities.workspace_id, workspaceId), eq(replyOpportunities.id, id)))
+    .limit(1);
+  return row ? toReplyOpportunity(row) : null;
+}
+
+export async function setOpportunityReplies(
+  workspaceId: string,
+  id: string,
+  replies: { reply: string; note: string }[],
+): Promise<void> {
+  await db
+    .update(replyOpportunities)
+    .set({ suggested_replies: replies })
+    .where(and(eq(replyOpportunities.workspace_id, workspaceId), eq(replyOpportunities.id, id)));
+}
+
+export async function dismissOpportunity(workspaceId: string, id: string): Promise<void> {
+  await db
+    .update(replyOpportunities)
+    .set({ status: "dismissed" })
+    .where(and(eq(replyOpportunities.workspace_id, workspaceId), eq(replyOpportunities.id, id)));
+}
+
+export async function markOpportunityReplied(
+  workspaceId: string,
+  id: string,
+  replyUrl: string,
+): Promise<void> {
+  await db
+    .update(replyOpportunities)
+    .set({ status: "replied", reply_url: replyUrl })
+    .where(and(eq(replyOpportunities.workspace_id, workspaceId), eq(replyOpportunities.id, id)));
+}
+
+/** Workspaces that have at least one active radar target — for the cron. */
+export async function workspacesWithActiveTargets(limit = 25): Promise<string[]> {
+  // tenant-scope-exempt: cron discovery across ALL workspaces; each is then
+  // refreshed via refreshReplyRadar(workspace_id), which is workspace-scoped.
+  const rows = await db
+    .selectDistinct({ workspace_id: xTargets.workspace_id })
+    .from(xTargets)
+    .where(eq(xTargets.active, true))
+    .limit(limit);
+  return rows.map((r) => r.workspace_id);
 }
 
 /** Persist a planned task (+ its draft asset + an activity event). Returns the id. */

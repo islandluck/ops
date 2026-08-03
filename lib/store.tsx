@@ -23,6 +23,7 @@ import {
   resetWorkspace,
   runAgentAction,
   runEmailTriageAction,
+  runNotionTriageAction,
   runTaskAction,
   runTaskExecutionAction,
   scheduleTaskAction,
@@ -168,6 +169,7 @@ interface StoreContext {
   deleteAgent: (id: string) => void;
   runAgent: (id: string) => Promise<void>;
   runTriage: () => Promise<void>;
+  runNotionTriage: () => Promise<void>;
   sendToNotion: (id: string) => Promise<void>;
   updateBrief: (patch: Partial<BusinessBrief>) => void;
 
@@ -1309,6 +1311,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [serverMode, pushToast, loadServer]);
 
+  const runNotionTriage = useCallback(async (): Promise<void> => {
+    if (!serverMode) {
+      pushToast({ tone: "info", title: "Notion triage needs the live backend." });
+      return;
+    }
+    pushToast({ tone: "working", title: "Reading your Notion pages…" });
+    try {
+      const res = await runNotionTriageAction();
+      await loadServer();
+      if (res.ok) {
+        pushToast({
+          tone: "success",
+          title: res.actions
+            ? `Created ${res.actions} task${res.actions === 1 ? "" : "s"} from Notion`
+            : "No new action items in Notion",
+          description: res.actions
+            ? `${res.drafted ?? 0} came with a ready draft — see your board.`
+            : res.pages
+              ? `Scanned ${res.pages} page${res.pages === 1 ? "" : "s"}, nothing new to do.`
+              : undefined,
+        });
+      } else {
+        pushToast({ tone: "error", title: "Notion triage failed", description: res.error });
+      }
+    } catch {
+      pushToast({ tone: "error", title: "Notion triage failed" });
+    }
+  }, [serverMode, pushToast, loadServer]);
+
   const sendToNotion = useCallback(
     async (id: string): Promise<void> => {
       if (!serverMode) {
@@ -1493,6 +1524,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       deleteAgent,
       runAgent,
       runTriage,
+      runNotionTriage,
       sendToNotion,
       updateBrief,
       login,
@@ -1506,7 +1538,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject, snooze,
       scheduleTask, unscheduleTask, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
-      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, sendToNotion, updateBrief, login, logout, enterDemo,
+      setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, runNotionTriage, sendToNotion, updateBrief, login, logout, enterDemo,
       completeOnboarding, resetDemo,
     ],
   );

@@ -9,6 +9,8 @@ import {
   ImagePlus,
   Loader2,
   Pencil,
+  Plus,
+  Radar,
   RefreshCw,
   Reply,
   Search,
@@ -28,21 +30,29 @@ import { Segmented } from "@/components/ui/segmented";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
+  addXTargetAction,
   attachStockImageAction,
   bulkPreviewTweetsAction,
   bulkScheduleTweetsAction,
+  dismissOpportunityAction,
+  draftOpportunityRepliesAction,
+  getReplyOpportunitiesAction,
   getXStyleAction,
+  getXTargetsAction,
   growthBoostTweetAction,
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
+  postOpportunityReplyAction,
   postReplyAction,
+  refreshReplyRadarAction,
   removePostImageAction,
+  removeXTargetAction,
   saveXStyleAction,
   searchStockAction,
   suggestRepliesAction,
   uploadPostImageAction,
 } from "@/app/actions";
-import type { PostImage } from "@/lib/types";
+import type { PostImage, ReplyOpportunity, XTarget } from "@/lib/types";
 import type { StockImage } from "@/lib/ai/stock";
 
 function fmtWhen(iso: string, tz?: string): string {
@@ -71,6 +81,7 @@ export default function SocialPage() {
         <VoiceSection />
         <ComposerSection />
         <ReplyAssistantSection />
+        <ReplyRadarSection />
         <QueueSection />
       </PageBody>
     </>
@@ -866,6 +877,296 @@ function ReplyAssistantSection() {
 
       {err && <p className="mt-3 text-[12.5px] text-amber-600">{err}</p>}
     </Card>
+  );
+}
+
+/* ------------------------------ Reply radar ------------------------------ */
+
+function ReplyRadarSection() {
+  const [targets, setTargets] = useState<XTarget[]>([]);
+  const [opps, setOpps] = useState<ReplyOpportunity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [handle, setHandle] = useState("");
+  const [note, setNote] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [readBlocked, setReadBlocked] = useState(false);
+
+  async function loadAll() {
+    const [t, o] = await Promise.all([getXTargetsAction(), getReplyOpportunitiesAction()]);
+    setTargets(t);
+    setOpps(o);
+    setLoading(false);
+  }
+  useEffect(() => {
+    void loadAll();
+  }, []);
+
+  async function add() {
+    if (!handle.trim()) return;
+    setAdding(true);
+    setErr(null);
+    setMsg(null);
+    const r = await addXTargetAction(handle, note);
+    setAdding(false);
+    if (r.ok && r.target) {
+      setHandle("");
+      setNote("");
+      setTargets((prev) => [r.target!, ...prev.filter((x) => x.id !== r.target!.id)]);
+    } else {
+      setErr(r.error ?? "Couldn't add that account.");
+    }
+  }
+
+  async function remove(id: string) {
+    setTargets((prev) => prev.filter((t) => t.id !== id));
+    await removeXTargetAction(id);
+  }
+
+  async function refresh() {
+    setRefreshing(true);
+    setErr(null);
+    setMsg(null);
+    setReadBlocked(false);
+    const r = await refreshReplyRadarAction();
+    setRefreshing(false);
+    if (!r.ok) {
+      setErr(r.error ?? "Couldn't refresh the radar.");
+      return;
+    }
+    setReadBlocked(Boolean(r.readBlocked));
+    await loadAll();
+    if (r.found) setMsg(`Found ${r.found} new ${r.found === 1 ? "opportunity" : "opportunities"}.`);
+    else if (!r.readBlocked) setMsg("No new opportunities right now.");
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Radar className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-[15px] font-semibold">Reply radar</h2>
+            <p className="text-[12.5px] text-muted-foreground">
+              Watch the big accounts in your niche — Operator finds their tweets worth replying to and drafts replies in
+              your voice.
+            </p>
+          </div>
+        </div>
+        <Button size="sm" variant="outline" onClick={refresh} disabled={refreshing || targets.length === 0}>
+          {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          Refresh
+        </Button>
+      </div>
+
+      <div className="mt-4 space-y-2.5">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-1 items-center rounded-lg border border-input bg-background px-2.5">
+            <span className="text-[13px] text-muted-foreground">@</span>
+            <input
+              value={handle}
+              onChange={(e) => setHandle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void add();
+                }
+              }}
+              placeholder="handle"
+              className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none"
+            />
+          </div>
+          <Input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note (optional)"
+            className="sm:max-w-[200px]"
+          />
+          <Button onClick={add} disabled={adding || handle.trim().length < 1}>
+            {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Watch
+          </Button>
+        </div>
+        {targets.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {targets.map((t) => (
+              <span
+                key={t.id}
+                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 py-1 pl-2.5 pr-1 text-[12px]"
+              >
+                @{t.handle}
+                <button
+                  onClick={() => remove(t.id)}
+                  className="rounded-full p-0.5 text-muted-foreground hover:text-red-600"
+                  aria-label={`Stop watching ${t.handle}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {msg && <p className="mt-3 text-[12.5px] text-emerald-600">{msg}</p>}
+      {err && <p className="mt-3 text-[12.5px] text-amber-600">{err}</p>}
+      {readBlocked && (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
+          Couldn&apos;t read your targets&apos; tweets — reading other accounts needs the X API{" "}
+          <strong>Basic tier</strong>. Your posting + reply-assistant features still work on the free tier.
+        </p>
+      )}
+
+      <div className="mt-4">
+        {loading ? (
+          <div className="flex justify-center py-6 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : opps.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border px-3 py-5 text-center text-[12.5px] text-muted-foreground">
+            {targets.length === 0
+              ? "Add a few accounts to watch, then hit Refresh."
+              : "No opportunities yet — hit Refresh to scan your watchlist."}
+          </p>
+        ) : (
+          <div className="space-y-2.5">
+            <p className="text-[12px] font-medium text-muted-foreground">
+              {opps.length} opportunit{opps.length === 1 ? "y" : "ies"} — best first
+            </p>
+            {opps.map((o) => (
+              <OpportunityCard key={o.id} opp={o} onDone={(id) => setOpps((prev) => prev.filter((x) => x.id !== id))} />
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function OpportunityCard({ opp, onDone }: { opp: ReplyOpportunity; onDone: (id: string) => void }) {
+  const [options, setOptions] = useState(opp.suggested_replies);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [draft, setDraft] = useState(opp.suggested_replies[0]?.reply ?? "");
+  const [drafting, setDrafting] = useState(false);
+  const [posting, setPosting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function draftReplies() {
+    setDrafting(true);
+    setErr(null);
+    const r = await draftOpportunityRepliesAction(opp.id);
+    setDrafting(false);
+    if (r.ok && r.suggestions?.length) {
+      setOptions(r.suggestions);
+      setSelectedIdx(0);
+      setDraft(r.suggestions[0].reply);
+    } else {
+      setErr(r.error ?? "Couldn't draft replies.");
+    }
+  }
+  function pick(i: number) {
+    setSelectedIdx(i);
+    if (options[i]) setDraft(options[i].reply);
+  }
+  async function post() {
+    setPosting(true);
+    setErr(null);
+    const r = await postOpportunityReplyAction(opp.id, draft);
+    setPosting(false);
+    if (r.ok) onDone(opp.id);
+    else setErr(r.error ?? "Couldn't post the reply.");
+  }
+  async function dismiss() {
+    onDone(opp.id);
+    await dismissOpportunityAction(opp.id);
+  }
+
+  const scoreColor =
+    opp.score >= 75
+      ? "bg-emerald-100 text-emerald-700"
+      : opp.score >= 60
+        ? "bg-amber-100 text-amber-700"
+        : "bg-muted text-muted-foreground";
+
+  return (
+    <div className="rounded-xl border border-border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <a
+          href={opp.tweet_url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline"
+        >
+          {opp.author_handle} <ExternalLink className="h-3 w-3" />
+        </a>
+        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", scoreColor)}>{opp.score}</span>
+      </div>
+      <p className="mt-1.5 whitespace-pre-line text-[13px] leading-relaxed text-foreground/90">{opp.tweet_text}</p>
+      {opp.reason && <p className="mt-1.5 text-[11.5px] italic text-muted-foreground">Why: {opp.reason}</p>}
+
+      <div className="mt-2.5 rounded-lg border border-border bg-muted/30 p-2.5">
+        {options.length === 0 ? (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={draftReplies} disabled={drafting}>
+              {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              Draft replies
+            </Button>
+            <Button size="sm" variant="ghost" onClick={dismiss}>
+              Dismiss
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-1">
+              {options.map((o, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => pick(i)}
+                  title={o.reply}
+                  className={cn(
+                    "rounded-md px-2 py-1 text-[11px] font-medium transition",
+                    i === selectedIdx
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background text-foreground/80 hover:bg-muted",
+                  )}
+                >
+                  {i + 1}
+                  {o.note ? ` · ${o.note}` : ""}
+                </button>
+              ))}
+            </div>
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              className="mt-1.5 min-h-[64px] resize-none bg-background text-[13px]"
+            />
+            <div className="mt-1.5 flex items-center gap-2">
+              <Button size="sm" variant="success" onClick={post} disabled={posting || !draft.trim() || draft.length > 280}>
+                {posting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Post reply
+              </Button>
+              <Button size="sm" variant="ghost" onClick={dismiss}>
+                Dismiss
+              </Button>
+              <span
+                className={cn(
+                  "ml-auto text-[11px] tabular-nums",
+                  draft.length > 280 ? "font-semibold text-destructive" : "text-muted-foreground",
+                )}
+              >
+                {draft.length}/280
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+      {err && <p className="mt-1.5 text-[11.5px] text-amber-600">{err}</p>}
+    </div>
   );
 }
 
