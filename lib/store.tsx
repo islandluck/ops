@@ -26,6 +26,7 @@ import {
   runNotionTriageAction,
   runTaskAction,
   runTaskExecutionAction,
+  approveScheduledPostAction,
   scheduleTaskAction,
   unscheduleTaskAction,
   saveWorkspace,
@@ -516,6 +517,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const approve = useCallback(
     (id: string, comment?: string, withEdits = false) => {
       const snap = latest.current;
+      // A post already queued for a future time (bulk composer / growth campaign)
+      // must stay scheduled — approving it flips sign-off only; the cron publishes
+      // it at its time. Executing live here would fire it early.
+      const t = snap?.tasks.find((task) => task.id === id);
+      if (
+        serverMode &&
+        t &&
+        t.execution_status === "queued" &&
+        t.scheduled_at &&
+        new Date(t.scheduled_at).getTime() > Date.now()
+      ) {
+        setBusyTaskId(id);
+        pushToast({ tone: "working", title: "Approving — staying scheduled…" });
+        void approveScheduledPostAction(id)
+          .then(async (res) => {
+            await loadServer();
+            setBusyTaskId(null);
+            if (res.ok) pushToast({ tone: "success", title: "Approved — it'll auto-publish on schedule" });
+            else pushToast({ tone: "error", title: "Couldn't approve", description: res.error });
+          })
+          .catch(() => {
+            setBusyTaskId(null);
+            pushToast({ tone: "error", title: "Couldn't approve" });
+          });
+        return;
+      }
       if (serverMode && snap && taskUsesLiveIntegration(snap, id)) {
         executeLive(id, "Approved — executing live…");
         return;
@@ -550,7 +577,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Kick off execution on the next tick so state has settled.
       schedule(() => runExecution(id), 350);
     },
-    [serverMode, executeLive, patchState, updateTask, logEvent, schedule, runExecution],
+    [serverMode, executeLive, patchState, updateTask, logEvent, schedule, runExecution, pushToast, loadServer],
   );
 
   /* ---------------- AI drafting (Phase 2, server mode) ------------- */

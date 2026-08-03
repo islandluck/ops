@@ -296,8 +296,48 @@ export interface ProjectPhase {
   steps: ProjectStep[];
 }
 
+/** Weekly cadence a growth campaign runs on. */
+export interface GrowthCadence {
+  tweets_per_day: number;
+  replies_per_day: number;
+  blogs_per_week: number;
+}
+
+/** Config for a follower-growth campaign, stored on its ProjectPlan. */
+export interface GrowthConfig {
+  cadence: GrowthCadence;
+  /** The weekly follower target (e.g. 100 = "+100 followers/week"). */
+  follower_goal_per_week: number;
+  weeks: number;
+}
+
 export interface ProjectPlan {
   phases: ProjectPhase[];
+  /** Present on growth-campaign projects (project.kind === "growth"). */
+  growth?: GrowthConfig;
+}
+
+/** A follower-count reading over the life of a growth campaign. */
+export interface FollowerSnapshot {
+  followers: number;
+  created_at: string;
+}
+
+/** A scheduled X post belonging to a growth campaign, for the review surface. */
+export interface CampaignPost {
+  id: string;
+  text: string;
+  scheduled_at: string | null;
+  approval_status: ApprovalStatus;
+  execution_status: ExecutionStatus;
+  /** Campaign week (0-based) this post belongs to. */
+  phase: number | null;
+}
+
+/** Everything the campaign drawer needs beyond the base Project. */
+export interface CampaignData {
+  followers: FollowerSnapshot[];
+  posts: CampaignPost[];
 }
 
 /** A multi-step project a leadership agent (Manager/Executive) plans and runs. */
@@ -310,6 +350,8 @@ export interface Project {
   status: ProjectStatus;
   owner_kind: "manager" | "executive";
   owner_agent_id: string | null;
+  /** null (standard project) | "growth" (a follower-growth campaign). */
+  kind?: string | null;
   plan: ProjectPlan;
   /** Index of the phase currently being worked (0-based). */
   current_phase: number;

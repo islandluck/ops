@@ -60,7 +60,7 @@ import {
 } from "@/lib/agents/run";
 import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
 import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
-import { scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
+import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
   advanceProject,
   approveProjectPlan,
@@ -69,6 +69,7 @@ import {
   getProject,
   listProjects,
 } from "@/lib/agents/project";
+import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   createProduct,
   deletePage,
@@ -82,6 +83,7 @@ import {
 } from "@/lib/pages";
 import type {
   AppState,
+  CampaignData,
   DraftRequest,
   OnboardingInput,
   Order,
@@ -386,6 +388,53 @@ export async function getProjectAction(projectId: string): Promise<Project | nul
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   return getProject(ws, projectId);
+}
+
+/* --------------------------- growth campaigns ---------------------------- */
+
+/** Plan + create an Executive-run follower-growth campaign (awaits plan approval). */
+export async function createGrowthCampaignAction(input: {
+  goal: string;
+  weeks: number;
+  followerGoalPerWeek: number;
+}): Promise<{ ok: boolean; projectId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return createGrowthCampaign(ws, input);
+}
+
+/** Follower trend + scheduled posts for a campaign's drawer. */
+export async function getCampaignDataAction(projectId: string): Promise<CampaignData> {
+  const user = await getCurrentUser();
+  if (!user) return { followers: [], posts: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { followers: [], posts: [] };
+  return getCampaignData(ws, projectId);
+}
+
+/** Approve a single scheduled post, keeping its schedule (auto-publishes on time). */
+export async function approveScheduledPostAction(
+  taskId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return approveScheduledPost(ws, taskId, { name: displayName(user) });
+}
+
+/** Approve every pending scheduled post in a campaign at once. */
+export async function approveAllCampaignPostsAction(
+  projectId: string,
+): Promise<{ ok: boolean; approved?: number; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const r = await approveAllCampaignPosts(ws, projectId, { name: displayName(user) });
+  return { ok: true, approved: r.approved };
 }
 
 /* --------------------------- pages & commerce ---------------------------- */

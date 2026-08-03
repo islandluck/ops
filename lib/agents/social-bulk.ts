@@ -62,6 +62,7 @@ export async function scheduleBulkTweets(
   items: BulkTweetItem[],
   config: BulkScheduleConfig,
   actor: { name: string },
+  opts: { requireApproval?: boolean; projectId?: string | null; projectPhase?: number | null } = {},
 ): Promise<BulkScheduleResult> {
   const clean = items
     .map((it) => ({ text: fitToX(it.text.trim()), mediaId: it.mediaId ?? null }))
@@ -115,15 +116,17 @@ export async function scheduleBulkTweets(
       description:
         "Scheduled from your bulk composer to auto-publish to X. Cancel any time before it posts.",
       rationale: "Bulk-scheduled in your voice.",
-      status: "approved",
+      status: opts.requireApproval ? "ready" : "approved",
       risk_level: "low",
       priority: "medium",
       due_at: null,
       scheduled_at: slot,
+      project_id: opts.projectId ?? null,
+      project_phase: opts.projectPhase ?? null,
       agent_id: authorId,
       created_by_type: "human",
-      requires_approval: false,
-      approval_status: "approved",
+      requires_approval: opts.requireApproval ?? false,
+      approval_status: opts.requireApproval ? "pending" : "approved",
       execution_status: "queued",
       affected_systems: ["X (Twitter)"],
       proposed_actions: 1,

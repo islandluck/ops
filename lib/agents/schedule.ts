@@ -83,6 +83,54 @@ export async function scheduleTask(
   return { ok: true };
 }
 
+/**
+ * Approve a task that is already queued for a future time, KEEPING its schedule.
+ * Unlike a normal board approval (which executes immediately), this only flips
+ * approval so the scheduler publishes it at its scheduled instant — the correct
+ * path for growth-campaign posts and any pre-scheduled draft awaiting sign-off.
+ */
+export async function approveScheduledPost(
+  workspaceId: string,
+  taskId: string,
+  actor: { name: string },
+): Promise<ScheduleResult> {
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId)))
+    .limit(1);
+  if (!task) return { ok: false, error: "Task not found." };
+  if (task.execution_status !== "queued") {
+    return { ok: false, error: "That post isn't scheduled." };
+  }
+  if (task.approval_status === "approved") return { ok: true };
+
+  const now = new Date();
+  await db
+    .update(tasks)
+    .set({ approval_status: "approved", status: "approved", requires_approval: false, updated_at: now })
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId), eq(tasks.execution_status, "queued")));
+  await db.insert(approvalDecisions).values({
+    id: randomUUID(),
+    task_id: taskId,
+    decided_by: actor.name,
+    decision_type: "approve",
+    comment: task.scheduled_at ? `Approved; stays scheduled for ${new Date(task.scheduled_at).toISOString()}` : "Approved for its scheduled time",
+    created_at: now,
+  });
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: taskId,
+    event_type: "approved",
+    actor_type: "human",
+    actor_id: actor.name,
+    summary: `${actor.name} approved “${task.title}” — it stays scheduled and will auto-publish.`,
+    created_at: now,
+  });
+  return { ok: true };
+}
+
 /** Cancel a scheduled task, returning it to the board for review. */
 export async function unscheduleTask(
   workspaceId: string,

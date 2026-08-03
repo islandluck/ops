@@ -311,6 +311,8 @@ export const projects = pgTable("projects", {
   status: text("status").$type<ProjectStatus>().notNull().default("planning"),
   owner_kind: text("owner_kind").$type<"manager" | "executive">().notNull().default("manager"),
   owner_agent_id: uuid("owner_agent_id"),
+  /** null (standard project) | "growth" (a follower-growth campaign). */
+  kind: text("kind"),
   /** The phased blueprint the leadership agent authored (steps → tasks). */
   plan: jsonb("plan").$type<ProjectPlan>().notNull().default({ phases: [] }),
   /** 0-based index of the phase currently being worked. */
@@ -318,6 +320,17 @@ export const projects = pgTable("projects", {
   created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
   created_at: createdAt,
   updated_at: updatedAt,
+});
+
+/** Follower-count snapshots for a growth campaign — the progress trend vs goal. */
+export const followerSnapshots = pgTable("follower_snapshots", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  project_id: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  followers: integer("followers").notNull().default(0),
+  created_at: createdAt,
 });
 
 /** A sellable offer — what a buy button charges for (Stripe price = price_cents). */

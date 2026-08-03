@@ -8,6 +8,7 @@ import { getPlanningContext } from "@/lib/db/queries";
 import { planProjectWithClaude } from "@/lib/ai/project";
 import { generateAndSavePage } from "@/lib/pages";
 import { runTaskWithAgent } from "./run";
+import { materializeGrowthPhase, snapshotFollowers } from "./growth";
 import type { Category, Project, ProjectPlan, ProjectStatus, ProjectStep } from "@/lib/types";
 
 /**
@@ -34,6 +35,7 @@ function toProject(row: ProjectRow, progress?: { total: number; done: number }):
     status: row.status,
     owner_kind: row.owner_kind,
     owner_agent_id: row.owner_agent_id,
+    kind: row.kind,
     plan: row.plan,
     current_phase: row.current_phase,
     created_by_type: row.created_by_type,
@@ -55,6 +57,17 @@ async function progressFor(
     .from(tasks)
     .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.project_id, projectId)));
   return { total, done: rows.filter((r) => r.status === "done").length };
+}
+
+/** Progress for a project card. Growth campaigns are measured in weeks elapsed
+ *  (their phases hold no steps); everything else in done tasks over total steps. */
+async function computeProgress(row: ProjectRow): Promise<{ total: number; done: number }> {
+  if (row.plan?.growth) {
+    const weeks = row.plan.growth.weeks || row.plan.phases.length || 1;
+    const done = row.status === "done" ? weeks : Math.min(row.current_phase, weeks);
+    return { total: weeks, done };
+  }
+  return progressFor(row.workspace_id, row.id, row.plan);
 }
 
 async function logProject(
@@ -154,6 +167,12 @@ export async function createProject(
 
 /** Materialize one phase's steps into tasks; draft the deliverables in parallel. */
 async function materializePhase(workspaceId: string, project: Project, phaseIndex: number): Promise<void> {
+  // Growth campaigns run on their own weekly engine (schedule tweets, draft
+  // blogs, set the reply target) — their phases carry no generic steps.
+  if (project.kind === "growth") {
+    await materializeGrowthPhase(workspaceId, project, phaseIndex);
+    return;
+  }
   const phase = project.plan.phases[phaseIndex];
   if (!phase || !phase.steps.length) return;
   const now = new Date();
@@ -293,8 +312,14 @@ export async function approveProjectPlan(
   if (row.status !== "planning") return { ok: false, error: "This plan was already approved." };
 
   const now = new Date();
-  await db.update(projects).set({ status: "active", current_phase: 0, updated_at: now }).where(eq(projects.id, projectId));
-  await materializePhase(workspaceId, toProject(row), 0);
+  // Growth campaigns advance on a weekly clock — anchor week 1 to go-live so the
+  // timeline doesn't drift from a plan that sat unapproved for a while.
+  const isGrowth = row.plan?.growth != null;
+  await db
+    .update(projects)
+    .set({ status: "active", current_phase: 0, updated_at: now, ...(isGrowth ? { created_at: now } : {}) })
+    .where(eq(projects.id, projectId));
+  await materializePhase(workspaceId, toProject(isGrowth ? { ...row, created_at: now } : row), 0);
   await logProject(
     workspaceId,
     "approved",
@@ -320,6 +345,42 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
   if (!row || row.status !== "active") return { advanced: false, status: row?.status ?? "cancelled" };
 
   const phaseIdx = row.current_phase;
+
+  // Growth campaigns advance on a weekly clock (content auto-publishes across the
+  // week), not on task completion. Week N ends 7 days after go-live × (N+1).
+  if (row.plan?.growth) {
+    const weekMs = 7 * 24 * 60 * 60 * 1000;
+    const project = toProject(row);
+    const weeks = row.plan.growth.weeks || project.plan.phases.length || 1;
+    const phaseEndsAt = new Date(row.created_at).getTime() + (phaseIdx + 1) * weekMs;
+    if (Date.now() < phaseEndsAt) return { advanced: false, status: "active" };
+
+    const now = new Date();
+    const nextIdx = phaseIdx + 1;
+    if (nextIdx >= weeks) {
+      await db.update(projects).set({ status: "done", updated_at: now }).where(eq(projects.id, projectId));
+      await snapshotFollowers(workspaceId, projectId).catch(() => null);
+      await logProject(
+        workspaceId,
+        "status_changed",
+        "system",
+        "sys",
+        `Growth campaign “${row.title}” wrapped after ${weeks} week${weeks === 1 ? "" : "s"}. 🎉`,
+      );
+      return { advanced: true, status: "done" };
+    }
+    await db.update(projects).set({ current_phase: nextIdx, updated_at: now }).where(eq(projects.id, projectId));
+    await materializePhase(workspaceId, project, nextIdx);
+    await logProject(
+      workspaceId,
+      "status_changed",
+      "system",
+      "sys",
+      `“${row.title}” → week ${nextIdx + 1}: ${project.plan.phases[nextIdx]?.title ?? ""}.`,
+    );
+    return { advanced: true, status: "active" };
+  }
+
   const phaseTasks = await db
     .select({ status: tasks.status, approval_status: tasks.approval_status })
     .from(tasks)
@@ -405,7 +466,7 @@ export async function listProjects(workspaceId: string): Promise<Project[]> {
     .from(projects)
     .where(eq(projects.workspace_id, workspaceId))
     .orderBy(desc(projects.created_at));
-  return Promise.all(rows.map(async (r) => toProject(r, await progressFor(r.workspace_id, r.id, r.plan))));
+  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
 }
 
 export async function getProject(workspaceId: string, projectId: string): Promise<Project | null> {
@@ -415,5 +476,5 @@ export async function getProject(workspaceId: string, projectId: string): Promis
     .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
     .limit(1);
   if (!r) return null;
-  return toProject(r, await progressFor(r.workspace_id, r.id, r.plan));
+  return toProject(r, await computeProgress(r));
 }

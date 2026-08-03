@@ -241,3 +241,19 @@ export async function getUserRecentTweets(
     return null;
   }
 }
+
+/** The connected account's current follower count (works on the free tier —
+ *  it's the user's own account). Null on error. */
+export async function getFollowerCount(accessToken: string): Promise<number | null> {
+  try {
+    const res = await fetch("https://api.x.com/2/users/me?user.fields=public_metrics", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { data?: { public_metrics?: { followers_count?: number } } };
+    const n = json.data?.public_metrics?.followers_count;
+    return typeof n === "number" ? n : null;
+  } catch {
+    return null;
+  }
+}
