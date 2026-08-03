@@ -1,7 +1,11 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { ExecBriefContent } from "@/lib/types";
+import type { BriefSuggestion, BriefSuggestionKind, Category, ExecBriefContent } from "@/lib/types";
+
+const CATEGORIES: Category[] = ["growth", "admin", "content", "research", "finance"];
+const SUGGESTION_KINDS: BriefSuggestionKind[] = ["project", "campaign", "task"];
 
 /**
  * The Executive Agent's conversational brain — a tool-using chat loop. The engine
@@ -118,8 +122,9 @@ export async function generateBrief(dossier: string, companyName: string): Promi
     "- in_motion: what's currently underway (active projects/campaigns, work in progress).",
     "- next: what's next or needs the founder's attention (approvals, decisions, upcoming).",
     "- insights: 2–4 forward-looking ideas or observations — patterns you notice plus concrete, specific, original suggestions for the future. This is where you add the most value; be genuinely useful, not generic.",
+    "- suggestions: 2–4 concrete NEXT ACTIONS the founder could greenlight, each tied to what's outstanding or to one of your insights. Each has a kind: \"project\" (a multi-step initiative — e.g. building a fundraising narrative, a launch), \"campaign\" (a follower-growth push), or \"task\" (a single discrete to-do). Give each a clear title, a one-line rationale (why now), and a 'goal': for project/campaign the outcome to accomplish (specific enough to plan against), for a task the concrete thing to do. For task suggestions also give a category (one of: growth, admin, content, research, finance). Propose real, high-leverage moves — not busywork. If nothing is worth proposing, return an empty array.",
     "",
-    'Respond with ONLY this JSON (no markdown, no code fences): {"headline": string, "kpi_review": string, "shipped": string[], "in_motion": string[], "next": string[], "insights": [{"title": string, "detail": string}]}',
+    'Respond with ONLY this JSON (no markdown, no code fences): {"headline": string, "kpi_review": string, "shipped": string[], "in_motion": string[], "next": string[], "insights": [{"title": string, "detail": string}], "suggestions": [{"kind": "project"|"campaign"|"task", "title": string, "rationale": string, "goal": string, "category": string (task only, optional)}]}',
   ].join("\n");
 
   const msg = await client.messages.create({
@@ -147,6 +152,30 @@ export async function generateBrief(dossier: string, companyName: string): Promi
         .slice(0, 5)
     : [];
 
+  const suggestions: BriefSuggestion[] = Array.isArray(raw.suggestions)
+    ? (raw.suggestions as Record<string, unknown>[])
+        .map((s): BriefSuggestion => {
+          const kind = SUGGESTION_KINDS.includes(s.kind as BriefSuggestionKind)
+            ? (s.kind as BriefSuggestionKind)
+            : "task";
+          const cat = typeof s.category === "string" && CATEGORIES.includes(s.category as Category)
+            ? (s.category as Category)
+            : null;
+          return {
+            id: randomUUID(),
+            kind,
+            title: typeof s.title === "string" ? s.title.trim().slice(0, 140) : "",
+            rationale: typeof s.rationale === "string" ? s.rationale.trim().slice(0, 300) : "",
+            goal: typeof s.goal === "string" ? s.goal.trim().slice(0, 600) : "",
+            category: kind === "task" ? cat : null,
+            status: "proposed",
+            ref_href: null,
+          };
+        })
+        .filter((s) => s.title && s.goal)
+        .slice(0, 5)
+    : [];
+
   return {
     headline: typeof raw.headline === "string" ? raw.headline.trim().slice(0, 240) : "Here's where things stand.",
     kpi_review: typeof raw.kpi_review === "string" ? raw.kpi_review.trim().slice(0, 900) : "",
@@ -154,5 +183,6 @@ export async function generateBrief(dossier: string, companyName: string): Promi
     in_motion: strArray(raw.in_motion),
     next: strArray(raw.next),
     insights,
+    suggestions,
   };
 }

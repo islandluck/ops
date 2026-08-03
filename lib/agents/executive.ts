@@ -21,8 +21,11 @@ import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
+  BriefSuggestion,
+  Category,
   CompanyGoal,
   ExecBrief,
+  ExecBriefContent,
   ExecKpi,
   ExecMemory,
   ExecMessage,
@@ -435,6 +438,26 @@ export async function generateDailyBrief(
   return { ok: true, brief: { id, content, created_at: iso(now) } };
 }
 
+type BriefRow = typeof executiveBriefs.$inferSelect;
+
+/** Map a stored brief row, tolerating older rows saved before newer fields. */
+function toBrief(row: BriefRow): ExecBrief {
+  const c = (row.content ?? {}) as Partial<ExecBriefContent>;
+  return {
+    id: row.id,
+    created_at: iso(row.created_at),
+    content: {
+      headline: c.headline ?? "",
+      kpi_review: c.kpi_review ?? "",
+      shipped: c.shipped ?? [],
+      in_motion: c.in_motion ?? [],
+      next: c.next ?? [],
+      insights: c.insights ?? [],
+      suggestions: c.suggestions ?? [],
+    },
+  };
+}
+
 export async function getLatestBrief(workspaceId: string): Promise<ExecBrief | null> {
   const [row] = await db
     .select()
@@ -442,7 +465,133 @@ export async function getLatestBrief(workspaceId: string): Promise<ExecBrief | n
     .where(eq(executiveBriefs.workspace_id, workspaceId))
     .orderBy(desc(executiveBriefs.created_at))
     .limit(1);
-  return row ? { id: row.id, content: row.content, created_at: iso(row.created_at) } : null;
+  return row ? toBrief(row) : null;
+}
+
+/** Recent briefs, newest first — the archive. */
+export async function listBriefs(workspaceId: string, limit = 30): Promise<ExecBrief[]> {
+  const rows = await db
+    .select()
+    .from(executiveBriefs)
+    .where(eq(executiveBriefs.workspace_id, workspaceId))
+    .orderBy(desc(executiveBriefs.created_at))
+    .limit(limit);
+  return rows.map(toBrief);
+}
+
+/* --------------------------- brief suggestions -------------------------- */
+
+/** Create a board task from a brief's task suggestion (lands "new" for approval). */
+async function createBriefTask(workspaceId: string, s: BriefSuggestion): Promise<void> {
+  const category = (s.category ?? "admin") as Category;
+  const [agent] = await db
+    .select({ id: agents.id })
+    .from(agents)
+    .where(
+      and(
+        eq(agents.workspace_id, workspaceId),
+        eq(agents.category, category),
+        eq(agents.premium, false),
+        eq(agents.archived, false),
+      ),
+    )
+    .limit(1);
+  const now = new Date();
+  await db.insert(tasks).values({
+    id: uid(),
+    workspace_id: workspaceId,
+    category,
+    title: s.title.slice(0, 120),
+    description: s.goal,
+    rationale: `Proposed by the Executive Agent in your daily brief. ${s.rationale}`.trim().slice(0, 300),
+    status: "new",
+    risk_level: "low",
+    priority: "medium",
+    due_at: null,
+    agent_id: agent?.id ?? null,
+    created_by_type: "agent",
+    requires_approval: true,
+    approval_status: "pending",
+    execution_status: "none",
+    affected_systems: [],
+    proposed_actions: 0,
+    impact_score: 45,
+    archived: false,
+    created_at: now,
+    updated_at: now,
+  });
+}
+
+/** Approve a brief suggestion → create the project/campaign/task; mark it accepted. */
+export async function approveBriefSuggestion(
+  workspaceId: string,
+  briefId: string,
+  suggestionId: string,
+): Promise<{ ok: boolean; href?: string; error?: string }> {
+  const [row] = await db
+    .select()
+    .from(executiveBriefs)
+    .where(and(eq(executiveBriefs.workspace_id, workspaceId), eq(executiveBriefs.id, briefId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Brief not found." };
+  const content = toBrief(row).content;
+  const s = content.suggestions.find((x) => x.id === suggestionId);
+  if (!s) return { ok: false, error: "Suggestion not found." };
+  if (s.status === "accepted") return { ok: true, href: s.ref_href ?? undefined };
+
+  let href: string;
+  try {
+    if (s.kind === "project") {
+      const res = await createProject(workspaceId, s.goal || s.title, "executive");
+      if (!res.ok) return { ok: false, error: res.error };
+      href = "/projects";
+    } else if (s.kind === "campaign") {
+      const res = await createGrowthCampaign(workspaceId, {
+        goal: s.goal || s.title,
+        weeks: 6,
+        followerGoalPerWeek: 100,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      href = "/projects";
+    } else {
+      await createBriefTask(workspaceId, s);
+      href = "/approvals";
+    }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't act on that suggestion." };
+  }
+
+  const suggestions = content.suggestions.map((x) =>
+    x.id === suggestionId ? { ...x, status: "accepted" as const, ref_href: href } : x,
+  );
+  await db
+    .update(executiveBriefs)
+    .set({ content: { ...content, suggestions } })
+    .where(and(eq(executiveBriefs.workspace_id, workspaceId), eq(executiveBriefs.id, briefId)));
+  return { ok: true, href };
+}
+
+/** Dismiss a brief suggestion (don't act on it). */
+export async function dismissBriefSuggestion(
+  workspaceId: string,
+  briefId: string,
+  suggestionId: string,
+): Promise<{ ok: boolean }> {
+  const [row] = await db
+    .select()
+    .from(executiveBriefs)
+    .where(and(eq(executiveBriefs.workspace_id, workspaceId), eq(executiveBriefs.id, briefId)))
+    .limit(1);
+  if (!row) return { ok: false };
+  const content = toBrief(row).content;
+  const suggestions = content.suggestions.map((x) =>
+    x.id === suggestionId ? { ...x, status: "dismissed" as const } : x,
+  );
+  await db
+    .update(executiveBriefs)
+    .set({ content: { ...content, suggestions } })
+    .where(and(eq(executiveBriefs.workspace_id, workspaceId), eq(executiveBriefs.id, briefId)));
+  return { ok: true };
 }
 
 /** Cron heartbeat: generate a fresh daily brief for each workspace whose latest
@@ -478,7 +627,7 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis, latestBrief] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, briefs] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -501,7 +650,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
       .where(eq(companyGoals.workspace_id, workspaceId))
       .orderBy(desc(companyGoals.created_at)),
     computeKpis(workspaceId),
-    getLatestBrief(workspaceId),
+    listBriefs(workspaceId, 30),
   ]);
 
   return {
@@ -510,7 +659,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     memory: memory.map(toMem),
     goals: goals.map(toGoal),
     kpis,
-    latestBrief,
+    briefs,
   };
 }
 

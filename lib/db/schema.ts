@@ -529,7 +529,7 @@ export const executiveBriefs = pgTable("executive_briefs", {
   content: jsonb("content")
     .$type<ExecBriefContent>()
     .notNull()
-    .default({ headline: "", kpi_review: "", shipped: [], in_motion: [], next: [], insights: [] }),
+    .default({ headline: "", kpi_review: "", shipped: [], in_motion: [], next: [], insights: [], suggestions: [] }),
   created_at: createdAt,
 });
 

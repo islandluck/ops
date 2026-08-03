@@ -74,8 +74,10 @@ import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "
 import {
   addGoal,
   addMemory,
+  approveBriefSuggestion,
   deleteGoal,
   deleteMemory,
+  dismissBriefSuggestion,
   generateDailyBrief,
   getExecutiveBundle,
   sendExecutiveMessage,
@@ -623,6 +625,30 @@ export async function generateBriefAction(): Promise<{ ok: boolean; brief?: Exec
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return generateDailyBrief(ws);
+}
+
+/** Approve a brief suggestion — create the project/campaign/task it proposes. */
+export async function approveBriefSuggestionAction(
+  briefId: string,
+  suggestionId: string,
+): Promise<{ ok: boolean; href?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return approveBriefSuggestion(ws, briefId, suggestionId);
+}
+
+/** Dismiss a brief suggestion. */
+export async function dismissBriefSuggestionAction(
+  briefId: string,
+  suggestionId: string,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return dismissBriefSuggestion(ws, briefId, suggestionId);
 }
 
 /** Talk to the Executive Agent — a tool-using reply grounded in live business data. */

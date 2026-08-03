@@ -10,7 +10,9 @@ import {
   CheckCircle2,
   Compass,
   FileText,
+  FolderKanban,
   Lightbulb,
+  ListChecks,
   Loader2,
   Paperclip,
   Pin,
@@ -28,12 +30,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
+import { useStore } from "@/lib/store";
 import { markdownToHtml } from "@/lib/content/format";
 import {
   addGoalAction,
   addMemoryAction,
+  approveBriefSuggestionAction,
   deleteGoalAction,
   deleteMemoryAction,
+  dismissBriefSuggestionAction,
   generateBriefAction,
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
@@ -41,9 +46,9 @@ import {
   togglePinMemoryAction,
 } from "@/app/actions";
 import type {
+  BriefSuggestion,
   CompanyGoal,
   ExecBrief,
-  ExecBriefContent,
   ExecKpi,
   ExecMemory,
   ExecMessage,
@@ -80,8 +85,11 @@ export default function ExecutivePage() {
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"chat" | "brief">("chat");
-  const [brief, setBrief] = useState<ExecBrief | null>(null);
+  const [briefs, setBriefs] = useState<ExecBrief[]>([]);
+  const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [busySug, setBusySug] = useState<string | null>(null);
+  const { reloadWorkspace } = useStore();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachment, setAttachment] = useState<{ name: string; text: string } | null>(null);
@@ -115,7 +123,7 @@ export default function ExecutivePage() {
     if (b) {
       setBundle(b);
       setMessages(b.messages);
-      setBrief(b.latestBrief);
+      setBriefs(b.briefs);
     }
     setLoading(false);
   }, []);
@@ -125,10 +133,34 @@ export default function ExecutivePage() {
     const res = await generateBriefAction();
     setGenerating(false);
     if (res.ok && res.brief) {
-      setBrief(res.brief);
+      await loadBundle();
+      setSelectedBriefId(res.brief.id);
       setView("brief");
     }
-  }, []);
+  }, [loadBundle]);
+
+  const approveSug = useCallback(
+    async (briefId: string, sug: BriefSuggestion) => {
+      setBusySug(sug.id);
+      const res = await approveBriefSuggestionAction(briefId, sug.id);
+      setBusySug(null);
+      if (res.ok) {
+        if (sug.kind === "task") reloadWorkspace(); // surface the new board task
+        await loadBundle();
+      }
+    },
+    [loadBundle, reloadWorkspace],
+  );
+
+  const dismissSug = useCallback(
+    async (briefId: string, sugId: string) => {
+      setBusySug(sugId);
+      await dismissBriefSuggestionAction(briefId, sugId);
+      setBusySug(null);
+      await loadBundle();
+    },
+    [loadBundle],
+  );
   useEffect(() => {
     void loadBundle();
   }, [loadBundle]);
@@ -170,6 +202,7 @@ export default function ExecutivePage() {
   }, [input, attachment, sending, send]);
 
   const agentName = bundle?.agentName ?? "Executive Agent";
+  const shownBrief = briefs.find((b) => b.id === selectedBriefId) ?? briefs[0] ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -310,7 +343,18 @@ export default function ExecutivePage() {
         </div>
         </>
         ) : (
-          <BriefView brief={brief} generating={generating} onGenerate={generateBrief} agentName={agentName} />
+          <BriefView
+            brief={shownBrief}
+            briefs={briefs}
+            selectedId={shownBrief?.id ?? null}
+            onSelect={setSelectedBriefId}
+            generating={generating}
+            onGenerate={generateBrief}
+            agentName={agentName}
+            onApprove={(sug) => shownBrief && approveSug(shownBrief.id, sug)}
+            onDismiss={(sugId) => shownBrief && dismissSug(shownBrief.id, sugId)}
+            busySug={busySug}
+          />
         )}
       </div>
 
@@ -442,29 +486,58 @@ function fmtBriefDate(iso: string): string {
 
 function BriefView({
   brief,
+  briefs,
+  selectedId,
+  onSelect,
   generating,
   onGenerate,
   agentName,
+  onApprove,
+  onDismiss,
+  busySug,
 }: {
   brief: ExecBrief | null;
+  briefs: ExecBrief[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   generating: boolean;
   onGenerate: () => void;
   agentName: string;
+  onApprove: (sug: BriefSuggestion) => void;
+  onDismiss: (sugId: string) => void;
+  busySug: string | null;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
       <div className="mx-auto max-w-2xl">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-[18px] font-semibold">Daily Brief</h2>
             <p className="text-[12px] text-muted-foreground">
               {brief ? `Prepared ${fmtBriefDate(brief.created_at)}` : "Not generated yet"}
             </p>
           </div>
-          <Button size="sm" variant={brief ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
-            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {generating ? "Preparing…" : brief ? "Regenerate" : "Generate brief"}
-          </Button>
+          <div className="flex items-center gap-2">
+            {briefs.length > 1 && (
+              <select
+                value={selectedId ?? briefs[0]?.id}
+                onChange={(e) => onSelect(e.target.value)}
+                className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px] font-medium outline-none"
+                title="Brief archive"
+              >
+                {briefs.map((b, i) => (
+                  <option key={b.id} value={b.id}>
+                    {i === 0 ? "Latest · " : ""}
+                    {fmtBriefDate(b.created_at)}
+                  </option>
+                ))}
+              </select>
+            )}
+            <Button size="sm" variant={brief ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {generating ? "Preparing…" : brief ? "Regenerate" : "Generate brief"}
+            </Button>
+          </div>
         </div>
 
         {generating && !brief ? (
@@ -473,7 +546,7 @@ function BriefView({
             <p className="text-[13px]">{agentName} is reviewing the business…</p>
           </div>
         ) : brief ? (
-          <BriefBody content={brief.content} />
+          <BriefBody brief={brief} onApprove={onApprove} onDismiss={onDismiss} busySug={busySug} />
         ) : (
           <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border p-10 text-center">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white">
@@ -496,7 +569,19 @@ function BriefView({
   );
 }
 
-function BriefBody({ content }: { content: ExecBriefContent }) {
+function BriefBody({
+  brief,
+  onApprove,
+  onDismiss,
+  busySug,
+}: {
+  brief: ExecBrief;
+  onApprove: (sug: BriefSuggestion) => void;
+  onDismiss: (sugId: string) => void;
+  busySug: string | null;
+}) {
+  const content = brief.content;
+  const openSuggestions = content.suggestions.filter((s) => s.status !== "dismissed");
   return (
     <div className="mt-5 space-y-6">
       {content.headline && (
@@ -508,6 +593,24 @@ function BriefBody({ content }: { content: ExecBriefContent }) {
             <TrendingUp className="h-3.5 w-3.5" /> KPI review
           </p>
           <p className="text-[13.5px] leading-relaxed text-foreground/90">{content.kpi_review}</p>
+        </div>
+      )}
+      {openSuggestions.length > 0 && (
+        <div className="rounded-2xl border border-violet-200 bg-violet-50/40 p-4">
+          <p className="mb-2.5 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700">
+            <Sparkles className="h-3.5 w-3.5" /> Proposed next steps
+          </p>
+          <div className="space-y-2.5">
+            {openSuggestions.map((s) => (
+              <SuggestionCard
+                key={s.id}
+                sug={s}
+                busy={busySug === s.id}
+                onApprove={() => onApprove(s)}
+                onDismiss={() => onDismiss(s.id)}
+              />
+            ))}
+          </div>
         </div>
       )}
       <BriefList title="Shipped" icon={<CheckCircle2 className="h-3.5 w-3.5" />} items={content.shipped} accent="text-emerald-600" empty="Nothing completed recently." />
@@ -528,6 +631,72 @@ function BriefBody({ content }: { content: ExecBriefContent }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const SUG_META: Record<BriefSuggestion["kind"], { label: string; icon: typeof FolderKanban }> = {
+  project: { label: "Project", icon: FolderKanban },
+  campaign: { label: "Campaign", icon: TrendingUp },
+  task: { label: "Task", icon: ListChecks },
+};
+
+function SuggestionCard({
+  sug,
+  busy,
+  onApprove,
+  onDismiss,
+}: {
+  sug: BriefSuggestion;
+  busy: boolean;
+  onApprove: () => void;
+  onDismiss: () => void;
+}) {
+  const meta = SUG_META[sug.kind];
+  const Icon = meta.icon;
+  const accepted = sug.status === "accepted";
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <div className="flex items-start gap-2.5">
+        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {meta.label}
+            </span>
+            <p className="text-[13.5px] font-semibold leading-snug">{sug.title}</p>
+          </div>
+          {sug.rationale && <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">{sug.rationale}</p>}
+          <div className="mt-2">
+            {accepted ? (
+              sug.ref_href ? (
+                <Link
+                  href={sug.ref_href}
+                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11.5px] font-medium text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  <Check className="h-3 w-3" /> Created — open <ArrowUpRight className="h-3 w-3" />
+                </Link>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-emerald-600">
+                  <Check className="h-3 w-3" /> Created
+                </span>
+              )
+            ) : (
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="success" disabled={busy} onClick={onApprove}>
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                  Approve &amp; create
+                </Button>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={onDismiss}>
+                  <X className="h-3.5 w-3.5" /> Dismiss
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

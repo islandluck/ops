@@ -668,6 +668,26 @@ export interface ExecBriefInsight {
   detail: string;
 }
 
+export type BriefSuggestionKind = "project" | "campaign" | "task";
+export type BriefSuggestionStatus = "proposed" | "accepted" | "dismissed";
+
+/** A concrete next action the brief proposes — the founder approves (which
+ *  creates it) or dismisses it. */
+export interface BriefSuggestion {
+  id: string;
+  kind: BriefSuggestionKind;
+  title: string;
+  /** Why the agent is proposing this. */
+  rationale: string;
+  /** The outcome to accomplish (project/campaign) or the task's description. */
+  goal: string;
+  /** For a task suggestion — which department it belongs to. */
+  category?: Category | null;
+  status: BriefSuggestionStatus;
+  /** Deep link to the created project/task once approved. */
+  ref_href?: string | null;
+}
+
 /** The structured content of a daily executive brief. */
 export interface ExecBriefContent {
   /** One-line read on where the business stands today. */
@@ -682,6 +702,8 @@ export interface ExecBriefContent {
   next: string[];
   /** Patterns + new ideas for the future. */
   insights: ExecBriefInsight[];
+  /** Concrete next actions the founder can greenlight from the brief. */
+  suggestions: BriefSuggestion[];
 }
 
 export interface ExecBrief {
@@ -697,6 +719,6 @@ export interface ExecutiveBundle {
   memory: ExecMemory[];
   goals: CompanyGoal[];
   kpis: ExecKpi[];
-  /** The most recent daily brief, if one has been generated. */
-  latestBrief: ExecBrief | null;
+  /** Recent daily briefs, newest first (for the archive + the current view). */
+  briefs: ExecBrief[];
 }
