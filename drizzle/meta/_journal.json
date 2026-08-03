@@ -169,6 +169,13 @@
       "when": 1785781884660,
       "tag": "0023_slippery_the_santerians",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1785784630223,
+      "tag": "0024_medical_zarek",
+      "breakpoints": true
     }
   ]
 }

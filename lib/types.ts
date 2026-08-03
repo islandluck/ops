@@ -804,3 +804,102 @@ export interface ExecutiveBundle {
   /** Recent investor updates, newest first. */
   investorUpdates: InvestorUpdate[];
 }
+
+/* ----------------------------- Deep Dive -------------------------------- */
+
+/** A Deep Dive run's lifecycle. `wiring` = folding findings into brief + memory. */
+export type DeepDiveStatus =
+  | "queued"
+  | "collecting"
+  | "distilling"
+  | "synthesizing"
+  | "wiring"
+  | "complete"
+  | "failed";
+
+export type DeepDiveSourceKind = "upload" | "text" | "email" | "notion";
+export type DeepDiveSourceStatus = "pending" | "distilled" | "failed";
+
+/** Token/cost accounting for a run (metered even though the feature is free). */
+export interface DeepDiveUsage {
+  input_tokens: number;
+  output_tokens: number;
+  est_cost_cents: number;
+  calls: number;
+}
+
+/** Distill progress — done/total sources processed in the map stage. */
+export interface DeepDiveProgress {
+  done: number;
+  total: number;
+}
+
+/** A person surfaced from ingested material. */
+export interface ContextPerson {
+  name: string;
+  role?: string;
+  note?: string;
+}
+
+export interface ContextTimelineEntry {
+  when: string;
+  what: string;
+}
+
+export interface ContextItem {
+  title: string;
+  detail?: string;
+}
+
+/** The synthesized understanding of the company — the "Context Pack". */
+export interface CompanyContextPack {
+  people: ContextPerson[];
+  timeline: ContextTimelineEntry[];
+  themes: ContextItem[];
+  decisions: ContextItem[];
+  open_threads: ContextItem[];
+  risks: ContextItem[];
+  products: ContextItem[];
+}
+
+/** Per-source extraction from the map (distill) stage. */
+export interface SourceDistillation {
+  summary: string;
+  people: ContextPerson[];
+  decisions: string[];
+  dates: ContextTimelineEntry[];
+  topics: string[];
+  status_notes: string[];
+}
+
+export interface DeepDive {
+  id: string;
+  title: string;
+  status: DeepDiveStatus;
+  stage_detail: string;
+  progress: DeepDiveProgress;
+  usage: DeepDiveUsage;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface DeepDiveSource {
+  id: string;
+  deep_dive_id: string;
+  kind: DeepDiveSourceKind;
+  title: string;
+  char_count: number;
+  status: DeepDiveSourceStatus;
+  created_at: string;
+}
+
+/** The current Context Pack for a workspace (versioned + cumulative). */
+export interface CompanyContext {
+  id: string;
+  version: number;
+  summary: string;
+  pack: CompanyContextPack;
+  created_at: string;
+}

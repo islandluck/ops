@@ -25,8 +25,14 @@ import type {
   BriefKind,
   ChannelKind,
   ChannelStatus,
+  CompanyContextPack,
   CreatedByType,
   DecisionType,
+  DeepDiveProgress,
+  DeepDiveSourceKind,
+  DeepDiveSourceStatus,
+  DeepDiveStatus,
+  DeepDiveUsage,
   EventType,
   ExecAction,
   ExecBriefContent,
@@ -49,6 +55,7 @@ import type {
   ProjectPlan,
   ProjectStatus,
   RiskLevel,
+  SourceDistillation,
   TaskStatus,
 } from "@/lib/types";
 
@@ -541,6 +548,68 @@ export const investorUpdates = pgTable("investor_updates", {
     .notNull()
     .default({ period: "", tldr: "", highlights: [], metrics: [], lowlights: [], whats_next: [], asks: [], closing: "" }),
   archived: boolean("archived").notNull().default(false),
+  created_at: createdAt,
+});
+
+/** A Deep Dive run — ingests company material (docs/text; later email/Notion) and
+ *  synthesizes the Company Context Pack. Runnable anytime, not just at onboarding. */
+export const deepDives = pgTable("deep_dives", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  status: text("status").$type<DeepDiveStatus>().notNull().default("queued"),
+  stage_detail: text("stage_detail").notNull().default(""),
+  progress: jsonb("progress").$type<DeepDiveProgress>().notNull().default({ done: 0, total: 0 }),
+  usage: jsonb("usage")
+    .$type<DeepDiveUsage>()
+    .notNull()
+    .default({ input_tokens: 0, output_tokens: 0, est_cost_cents: 0, calls: 0 }),
+  error: text("error"),
+  // Worker lock so overlapping cron ticks never double-process one run.
+  worker_locked_at: timestamp("worker_locked_at", { withTimezone: true }),
+  started_at: timestamp("started_at", { withTimezone: true }),
+  completed_at: timestamp("completed_at", { withTimezone: true }),
+  created_at: createdAt,
+});
+
+/** One ingested unit for a Deep Dive. `status` is the resumable distill cursor;
+ *  `raw_text` is purged once the run completes (we keep only the distillation). */
+export const deepDiveSources = pgTable("deep_dive_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  deep_dive_id: uuid("deep_dive_id")
+    .notNull()
+    .references(() => deepDives.id, { onDelete: "cascade" }),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<DeepDiveSourceKind>().notNull().default("upload"),
+  title: text("title").notNull().default(""),
+  raw_text: text("raw_text"),
+  char_count: integer("char_count").notNull().default(0),
+  status: text("status").$type<DeepDiveSourceStatus>().notNull().default("pending"),
+  distilled: jsonb("distilled").$type<SourceDistillation>(),
+  error: text("error"),
+  created_at: createdAt,
+});
+
+/** The synthesized understanding of the company (the "Context Pack"). Versioned
+ *  and cumulative — each Deep Dive builds on the prior current pack; one row is
+ *  is_current per workspace and feeds every agent through getPlanningContext. */
+export const companyContext = pgTable("company_context", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  deep_dive_id: uuid("deep_dive_id").references(() => deepDives.id, { onDelete: "set null" }),
+  version: integer("version").notNull().default(1),
+  is_current: boolean("is_current").notNull().default(true),
+  summary: text("summary").notNull().default(""),
+  pack: jsonb("pack")
+    .$type<CompanyContextPack>()
+    .notNull()
+    .default({ people: [], timeline: [], themes: [], decisions: [], open_threads: [], risks: [], products: [] }),
   created_at: createdAt,
 });
 
