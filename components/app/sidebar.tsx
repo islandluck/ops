@@ -7,6 +7,7 @@ import {
   CheckCheck,
   ChevronsUpDown,
   CircleDot,
+  Compass,
   FileText,
   FolderKanban,
   FolderOpen,
@@ -33,6 +34,7 @@ import type { Category } from "@/lib/types";
 
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/approvals", label: "Approval Center", icon: SquareKanban },
+  { href: "/executive", label: "Executive", icon: Compass },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/agents", label: "Agents", icon: Users },
   { href: "/projects", label: "Projects", icon: FolderKanban },

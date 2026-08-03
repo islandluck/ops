@@ -72,6 +72,16 @@ import {
 } from "@/lib/agents/project";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
+  addGoal,
+  addMemory,
+  deleteGoal,
+  deleteMemory,
+  getExecutiveBundle,
+  sendExecutiveMessage,
+  setGoalStatus,
+  togglePinMemory,
+} from "@/lib/agents/executive";
+import {
   boostPost,
   createPost,
   deletePost as deletePostEngine,
@@ -101,6 +111,10 @@ import type {
   CampaignData,
   ChannelKind,
   DraftRequest,
+  ExecMessage,
+  ExecutiveBundle,
+  GoalStatus,
+  MemoryKind,
   OnboardingInput,
   Order,
   Page,
@@ -588,6 +602,80 @@ export async function deletePostAction(postId: string): Promise<{ ok: boolean }>
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   return deletePostEngine(ws, postId);
+}
+
+/* --------------------------- executive office ---------------------------- */
+
+export async function getExecutiveBundleAction(): Promise<ExecutiveBundle | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getExecutiveBundle(ws);
+}
+
+/** Talk to the Executive Agent — a tool-using reply grounded in live business data. */
+export async function sendExecutiveMessageAction(
+  text: string,
+): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return sendExecutiveMessage(ws, text);
+}
+
+export async function addGoalAction(input: {
+  title: string;
+  detail?: string;
+  metric?: string;
+  target?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return addGoal(ws, input);
+}
+
+export async function setGoalStatusAction(id: string, status: GoalStatus): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return setGoalStatus(ws, id, status);
+}
+
+export async function deleteGoalAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteGoal(ws, id);
+}
+
+export async function addMemoryAction(content: string, kind?: MemoryKind): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return addMemory(ws, content, kind);
+}
+
+export async function togglePinMemoryAction(id: string, pinned: boolean): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return togglePinMemory(ws, id, pinned);
+}
+
+export async function deleteMemoryAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteMemory(ws, id);
 }
 
 /* --------------------------- pages & commerce ---------------------------- */

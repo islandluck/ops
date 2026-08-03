@@ -1,0 +1,440 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  ArrowUpRight,
+  Brain,
+  Check,
+  Compass,
+  ExternalLink,
+  Loader2,
+  Pin,
+  Plus,
+  Send,
+  Sparkles,
+  Target,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+import {
+  addGoalAction,
+  addMemoryAction,
+  deleteGoalAction,
+  deleteMemoryAction,
+  getExecutiveBundleAction,
+  sendExecutiveMessageAction,
+  setGoalStatusAction,
+  togglePinMemoryAction,
+} from "@/app/actions";
+import type { CompanyGoal, ExecKpi, ExecMemory, ExecMessage, ExecutiveBundle } from "@/lib/types";
+
+const STARTERS = [
+  "How are we doing this week?",
+  "What should I focus on next?",
+  "Help me set a company goal",
+  "Where are we leaving money on the table?",
+];
+
+export default function ExecutivePage() {
+  const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
+  const [messages, setMessages] = useState<ExecMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const loadBundle = useCallback(async () => {
+    const b = await getExecutiveBundleAction();
+    if (b) {
+      setBundle(b);
+      setMessages(b.messages);
+    }
+    setLoading(false);
+  }, []);
+  useEffect(() => {
+    void loadBundle();
+  }, [loadBundle]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, sending]);
+
+  const send = useCallback(
+    async (text: string) => {
+      const clean = text.trim();
+      if (!clean || sending) return;
+      setInput("");
+      setMessages((m) => [
+        ...m,
+        { id: `tmp-${m.length}`, role: "user", content: clean, actions: [], created_at: "" },
+      ]);
+      setSending(true);
+      const res = await sendExecutiveMessageAction(clean);
+      setSending(false);
+      if (res.ok) {
+        await loadBundle(); // authoritative messages + refreshed KPIs/goals/memory
+      } else {
+        setMessages((m) => [
+          ...m,
+          { id: `err-${m.length}`, role: "assistant", content: res.error ?? "I couldn't respond — try again.", actions: [], created_at: "" },
+        ]);
+      }
+    },
+    [sending, loadBundle],
+  );
+
+  const agentName = bundle?.agentName ?? "Executive Agent";
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      {/* Conversation */}
+      <div className="flex min-h-0 flex-1 flex-col border-b border-border lg:border-b-0 lg:border-r">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-3.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
+            <Compass className="h-5 w-5" />
+          </span>
+          <div>
+            <h1 className="text-[15px] font-semibold leading-tight">{agentName}</h1>
+            <p className="text-[12px] text-muted-foreground">Your Chief of Staff — grounded in your live business data</p>
+          </div>
+        </div>
+
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+          {loading ? (
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : messages.length === 0 ? (
+            <EmptyState onPick={(t) => void send(t)} />
+          ) : (
+            <div className="mx-auto max-w-2xl space-y-4">
+              {messages.map((m) => (
+                <MessageBubble key={m.id} message={m} agentName={agentName} />
+              ))}
+              {sending && (
+                <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {agentName} is thinking…
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6">
+          <div className="mx-auto flex max-w-2xl items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(input);
+                }
+              }}
+              rows={1}
+              placeholder={`Message ${agentName}…`}
+              className="max-h-40 min-h-[44px] flex-1 resize-none rounded-xl border border-input bg-background px-3.5 py-3 text-[14px] outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
+            />
+            <Button
+              size="lg"
+              className="h-11 shrink-0"
+              disabled={sending || !input.trim()}
+              onClick={() => void send(input)}
+            >
+              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Context rail */}
+      <aside className="min-h-0 w-full shrink-0 overflow-y-auto bg-muted/30 lg:w-[360px]">
+        <div className="space-y-6 p-5">
+          <KpiStrip kpis={bundle?.kpis ?? []} />
+          <GoalsPanel goals={bundle?.goals ?? []} onChanged={loadBundle} />
+          <MemoryPanel memory={bundle?.memory ?? []} onChanged={loadBundle} />
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function EmptyState({ onPick }: { onPick: (t: string) => void }) {
+  return (
+    <div className="mx-auto flex h-full max-w-lg flex-col items-center justify-center gap-5 text-center">
+      <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md">
+        <Compass className="h-7 w-7" />
+      </span>
+      <div>
+        <h2 className="text-[17px] font-semibold">Talk to your Chief of Staff</h2>
+        <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-relaxed text-muted-foreground">
+          Set company goals, ask for strategy, and get a partner who sees across every agent, project, and metric — and
+          remembers what matters. It can kick off projects and campaigns for you, right from here.
+        </p>
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {STARTERS.map((s) => (
+          <button
+            key={s}
+            onClick={() => onPick(s)}
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[12.5px] font-medium text-foreground/80 transition hover:border-primary/40 hover:text-primary"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ message, agentName }: { message: ExecMessage; agentName: string }) {
+  const isUser = message.role === "user";
+  return (
+    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
+      <div className={cn("max-w-[85%] space-y-2", isUser ? "items-end" : "items-start")}>
+        {!isUser && (
+          <p className="mb-0.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
+            <Compass className="h-3 w-3" /> {agentName}
+          </p>
+        )}
+        <div
+          className={cn(
+            "whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed",
+            isUser ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground",
+          )}
+        >
+          {message.content}
+        </div>
+        {message.actions?.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {message.actions.map((a, i) =>
+              a.href ? (
+                <Link
+                  key={i}
+                  href={a.href}
+                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11.5px] font-medium text-emerald-700 transition hover:bg-emerald-100"
+                >
+                  <Check className="h-3 w-3" /> {a.summary} <ArrowUpRight className="h-3 w-3" />
+                </Link>
+              ) : (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11.5px] font-medium text-emerald-700"
+                >
+                  <Check className="h-3 w-3" /> {a.summary}
+                </span>
+              ),
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------- KPIs ---------------------------------- */
+
+function KpiStrip({ kpis }: { kpis: ExecKpi[] }) {
+  if (!kpis.length) return null;
+  return (
+    <div>
+      <RailHeading icon={<TrendingUp className="h-3.5 w-3.5" />} label="KPIs" />
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        {kpis.map((k) => (
+          <div key={k.key} className="rounded-xl border border-border bg-card p-3">
+            <p className="text-[11px] font-medium text-muted-foreground">{k.label}</p>
+            <p className="mt-0.5 text-[19px] font-semibold leading-tight tabular-nums">{k.value}</p>
+            {k.delta ? (
+              <p
+                className={cn(
+                  "mt-0.5 inline-flex items-center gap-0.5 text-[11px] font-medium",
+                  k.tone === "up" ? "text-emerald-600" : k.tone === "down" ? "text-amber-600" : "text-muted-foreground",
+                )}
+              >
+                {k.tone === "up" ? <TrendingUp className="h-3 w-3" /> : k.tone === "down" ? <TrendingDown className="h-3 w-3" /> : null}
+                {k.delta}
+              </p>
+            ) : (
+              k.hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{k.hint}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------- Goals --------------------------------- */
+
+function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () => Promise<void> }) {
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState(false);
+  const active = goals.filter((g) => g.status === "active");
+
+  async function add() {
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    await addGoalAction({ title: title.trim(), target: target.trim() || undefined });
+    setTitle("");
+    setTarget("");
+    setAdding(false);
+    setBusy(false);
+    await onChanged();
+  }
+
+  return (
+    <div>
+      <RailHeading
+        icon={<Target className="h-3.5 w-3.5" />}
+        label="Company goals"
+        action={
+          <button onClick={() => setAdding((v) => !v)} className="text-muted-foreground hover:text-foreground" title="Add goal">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+      {adding && (
+        <div className="mt-2 space-y-1.5 rounded-xl border border-border bg-card p-2.5">
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Goal (e.g. Reach $10k MRR)" className="h-8 text-[13px]" autoFocus />
+          <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="Target (optional)" className="h-8 text-[13px]" />
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="success" className="flex-1" onClick={add} disabled={busy || !title.trim()}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Add
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      <div className="mt-2 space-y-2">
+        {active.length === 0 && !adding && (
+          <p className="rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
+            No goals yet. Add one, or ask the Executive Agent to help you set them.
+          </p>
+        )}
+        {active.map((g) => (
+          <div key={g.id} className="group rounded-xl border border-border bg-card p-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-[13px] font-medium leading-snug">{g.title}</p>
+              <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                <button onClick={async () => { await setGoalStatusAction(g.id, "achieved"); await onChanged(); }} title="Mark achieved" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-emerald-600">
+                  <Check className="h-3.5 w-3.5" />
+                </button>
+                <button onClick={async () => { await deleteGoalAction(g.id); await onChanged(); }} title="Delete" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+            {g.target && <p className="mt-0.5 text-[11.5px] font-medium text-primary">Target: {g.target}</p>}
+            {g.detail && <p className="mt-1 text-[12px] text-muted-foreground">{g.detail}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------- Memory -------------------------------- */
+
+const MEMORY_TONE: Record<string, string> = {
+  fact: "bg-slate-100 text-slate-600",
+  preference: "bg-sky-50 text-sky-700",
+  decision: "bg-violet-50 text-violet-700",
+  insight: "bg-amber-50 text-amber-700",
+};
+
+function MemoryPanel({ memory, onChanged }: { memory: ExecMemory[]; onChanged: () => Promise<void> }) {
+  const [adding, setAdding] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function add() {
+    if (!note.trim() || busy) return;
+    setBusy(true);
+    await addMemoryAction(note.trim());
+    setNote("");
+    setAdding(false);
+    setBusy(false);
+    await onChanged();
+  }
+
+  return (
+    <div>
+      <RailHeading
+        icon={<Brain className="h-3.5 w-3.5" />}
+        label="What it knows"
+        action={
+          <button onClick={() => setAdding((v) => !v)} className="text-muted-foreground hover:text-foreground" title="Add a note">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+      {adding && (
+        <div className="mt-2 space-y-1.5 rounded-xl border border-border bg-card p-2.5">
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Something the Executive should always remember…"
+            rows={2}
+            className="w-full resize-none rounded-lg border border-input bg-background p-2 text-[13px] outline-none focus:border-primary/50"
+            autoFocus
+          />
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="success" className="flex-1" onClick={add} disabled={busy || !note.trim()}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Remember
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      <div className="mt-2 space-y-2">
+        {memory.length === 0 && !adding && (
+          <p className="rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
+            The Executive builds this up as you talk — decisions, preferences, and what's working. You can add notes too.
+          </p>
+        )}
+        {memory.map((m) => (
+          <div key={m.id} className="group rounded-xl border border-border bg-card p-2.5">
+            <div className="flex items-start gap-2">
+              <span className={cn("mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold capitalize", MEMORY_TONE[m.kind] ?? MEMORY_TONE.fact)}>
+                {m.kind}
+              </span>
+              <p className="min-w-0 flex-1 text-[12.5px] leading-snug text-foreground/90">{m.content}</p>
+              <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                <button
+                  onClick={async () => { await togglePinMemoryAction(m.id, !m.pinned); await onChanged(); }}
+                  title={m.pinned ? "Unpin" : "Pin"}
+                  className={cn("rounded p-1 hover:bg-accent", m.pinned ? "text-primary" : "text-muted-foreground hover:text-foreground")}
+                >
+                  <Pin className="h-3 w-3" />
+                </button>
+                <button onClick={async () => { await deleteMemoryAction(m.id); await onChanged(); }} title="Forget" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RailHeading({ icon, label, action }: { icon: React.ReactNode; label: string; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-muted-foreground/70">{icon}</span>
+      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{label}</h3>
+      {action && <span className="ml-auto">{action}</span>}
+    </div>
+  );
+}

@@ -602,3 +602,71 @@ export interface DraftRequest {
   agentName?: string;
   agentInstructions?: string;
 }
+
+/* --------------------------- executive office ---------------------------- */
+
+export type ExecRole = "user" | "assistant";
+
+/** An action the Executive Agent took while replying (a tool call). */
+export interface ExecAction {
+  tool: string;
+  summary: string;
+  /** Optional deep link to what it created (e.g. /projects). */
+  href?: string;
+}
+
+/** One turn in the conversation with the Executive Agent. */
+export interface ExecMessage {
+  id: string;
+  role: ExecRole;
+  content: string;
+  actions: ExecAction[];
+  created_at: string;
+}
+
+export type MemoryKind = "fact" | "preference" | "decision" | "insight";
+
+/** A durable thing the Executive Agent knows about the business. */
+export interface ExecMemory {
+  id: string;
+  content: string;
+  kind: MemoryKind;
+  source: "user" | "agent";
+  pinned: boolean;
+  created_at: string;
+}
+
+export type GoalStatus = "active" | "achieved" | "archived";
+
+/** A company-wide goal the owner sets with the Executive Agent. */
+export interface CompanyGoal {
+  id: string;
+  title: string;
+  detail: string;
+  /** What to watch, free text (e.g. "MRR", "X followers"). */
+  metric: string;
+  target: string;
+  status: GoalStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A single computed business metric for the KPI strip. */
+export interface ExecKpi {
+  key: string;
+  label: string;
+  value: string;
+  /** Week-over-week change, pre-formatted (e.g. "+12%"). */
+  delta?: string;
+  tone?: "up" | "down" | "neutral";
+  hint?: string;
+}
+
+/** Everything the Executive Office page loads. */
+export interface ExecutiveBundle {
+  agentName: string;
+  messages: ExecMessage[];
+  memory: ExecMemory[];
+  goals: CompanyGoal[];
+  kpis: ExecKpi[];
+}

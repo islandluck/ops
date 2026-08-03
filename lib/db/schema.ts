@@ -27,8 +27,12 @@ import type {
   CreatedByType,
   DecisionType,
   EventType,
+  ExecAction,
+  ExecRole,
   ExecutionStatus,
   ExecutionStep,
+  GoalStatus,
+  MemoryKind,
   PackagedVariant,
   PageContent,
   PageStatus,
@@ -484,4 +488,48 @@ export const orders = pgTable("orders", {
   currency: text("currency").notNull().default("usd"),
   customer_email: text("customer_email"),
   created_at: createdAt,
+});
+
+/* ---------------------------- executive office --------------------------- */
+
+/** The conversation with the Executive Agent (Chief of Staff). */
+export const executiveMessages = pgTable("executive_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  role: text("role").$type<ExecRole>().notNull(),
+  content: text("content").notNull().default(""),
+  /** Tool calls the agent made while producing an assistant turn. */
+  actions: jsonb("actions").$type<ExecAction[]>().notNull().default([]),
+  created_at: createdAt,
+});
+
+/** Durable things the Executive Agent knows about the business. */
+export const executiveMemory = pgTable("executive_memory", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  content: text("content").notNull().default(""),
+  kind: text("kind").$type<MemoryKind>().notNull().default("fact"),
+  source: text("source").$type<"user" | "agent">().notNull().default("agent"),
+  pinned: boolean("pinned").notNull().default(false),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
+
+/** Company-wide goals the owner sets with the Executive Agent. */
+export const companyGoals = pgTable("company_goals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  detail: text("detail").notNull().default(""),
+  metric: text("metric").notNull().default(""),
+  target: text("target").notNull().default(""),
+  status: text("status").$type<GoalStatus>().notNull().default("active"),
+  created_at: createdAt,
+  updated_at: updatedAt,
 });
