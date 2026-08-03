@@ -22,6 +22,7 @@ import {
   Settings,
   ShieldAlert,
   SquareKanban,
+  Telescope,
   Users,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
@@ -37,6 +38,7 @@ import type { Category } from "@/lib/types";
 const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/approvals", label: "Approval Center", icon: SquareKanban },
   { href: "/executive", label: "Executive", icon: Compass },
+  { href: "/deep-dive", label: "Deep Dive", icon: Telescope },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/agents", label: "Agents", icon: Users },
   { href: "/projects", label: "Projects", icon: FolderKanban },
