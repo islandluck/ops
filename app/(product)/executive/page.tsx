@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowRight,
   ArrowUpRight,
+  Bell,
   Brain,
   Check,
   CheckCircle2,
@@ -12,6 +14,7 @@ import {
   Download,
   FileText,
   FolderKanban,
+  Info,
   Lightbulb,
   ListChecks,
   Loader2,
@@ -56,6 +59,7 @@ import type {
   ExecKpi,
   ExecMemory,
   ExecMessage,
+  ExecNudge,
   ExecutiveBundle,
 } from "@/lib/types";
 
@@ -383,6 +387,7 @@ export default function ExecutivePage() {
       {/* Context rail */}
       <aside className="min-h-0 w-full shrink-0 overflow-y-auto bg-muted/30 lg:w-[360px]">
         <div className="space-y-6 p-5">
+          <NudgesPanel nudges={bundle?.nudges ?? []} />
           <KpiStrip kpis={bundle?.kpis ?? []} />
           <GoalsPanel goals={bundle?.goals ?? []} onChanged={loadBundle} />
           <MemoryPanel memory={bundle?.memory ?? []} onChanged={loadBundle} />
@@ -871,6 +876,47 @@ function BriefList({
       ) : (
         <p className="text-[12.5px] text-muted-foreground">{empty}</p>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------- Nudges --------------------------------- */
+
+const NUDGE_META: Record<ExecNudge["severity"], { card: string; icon: typeof Bell; color: string }> = {
+  attention: { card: "border-amber-200 bg-amber-50/60", icon: AlertTriangle, color: "text-amber-600" },
+  positive: { card: "border-emerald-200 bg-emerald-50/60", icon: CheckCircle2, color: "text-emerald-600" },
+  info: { card: "border-border bg-card", icon: Info, color: "text-muted-foreground" },
+};
+
+function NudgesPanel({ nudges }: { nudges: ExecNudge[] }) {
+  if (!nudges.length) return null;
+  return (
+    <div>
+      <RailHeading icon={<Bell className="h-3.5 w-3.5" />} label="Needs your attention" />
+      <div className="mt-2 space-y-2">
+        {nudges.map((n) => {
+          const m = NUDGE_META[n.severity];
+          const Icon = m.icon;
+          const inner = (
+            <div className={cn("rounded-xl border p-2.5", m.card)}>
+              <div className="flex items-start gap-2">
+                <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", m.color)} />
+                <div className="min-w-0">
+                  <p className="text-[12.5px] font-semibold leading-snug">{n.title}</p>
+                  <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{n.detail}</p>
+                </div>
+              </div>
+            </div>
+          );
+          return n.href ? (
+            <Link key={n.id} href={n.href} className="block transition hover:opacity-90">
+              {inner}
+            </Link>
+          ) : (
+            <div key={n.id}>{inner}</div>
+          );
+        })}
+      </div>
     </div>
   );
 }

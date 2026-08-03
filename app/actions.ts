@@ -85,6 +85,7 @@ import {
   startNewExecutiveChat,
   togglePinMemory,
 } from "@/lib/agents/executive";
+import { countAttention } from "@/lib/executive/nudges";
 import {
   boostPost,
   createPost,
@@ -617,6 +618,15 @@ export async function getExecutiveBundleAction(): Promise<ExecutiveBundle | null
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   return getExecutiveBundle(ws);
+}
+
+/** Count of things needing the founder's attention (for the sidebar badge). */
+export async function getExecutiveAttentionAction(): Promise<number> {
+  const user = await getCurrentUser();
+  if (!user) return 0;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return 0;
+  return countAttention(ws);
 }
 
 /** Generate a fresh daily executive brief. */

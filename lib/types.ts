@@ -712,6 +712,17 @@ export interface ExecBrief {
   created_at: string;
 }
 
+export type NudgeSeverity = "attention" | "info" | "positive";
+
+/** A real-time alert the Executive Agent surfaces without being asked. */
+export interface ExecNudge {
+  id: string;
+  severity: NudgeSeverity;
+  title: string;
+  detail: string;
+  href?: string | null;
+}
+
 /** Everything the Executive Office page loads. */
 export interface ExecutiveBundle {
   agentName: string;
@@ -719,6 +730,8 @@ export interface ExecutiveBundle {
   memory: ExecMemory[];
   goals: CompanyGoal[];
   kpis: ExecKpi[];
-  /** Recent daily briefs, newest first (for the archive + the current view). */
+  /** Real-time things needing the founder's attention. */
+  nudges: ExecNudge[];
+  /** Recent briefs, newest first (for the archive + the current view). */
   briefs: ExecBrief[];
 }

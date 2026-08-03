@@ -17,6 +17,7 @@ import {
 } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { computeKpis } from "@/lib/executive/kpis";
+import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
@@ -637,7 +638,7 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis, briefs] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -660,6 +661,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
       .where(eq(companyGoals.workspace_id, workspaceId))
       .orderBy(desc(companyGoals.created_at)),
     computeKpis(workspaceId),
+    computeNudges(workspaceId),
     listBriefs(workspaceId, 30),
   ]);
 
@@ -669,6 +671,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     memory: memory.map(toMem),
     goals: goals.map(toGoal),
     kpis,
+    nudges,
     briefs,
   };
 }

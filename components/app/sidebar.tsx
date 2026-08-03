@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -27,6 +28,7 @@ import { Logo } from "@/components/brand";
 import { CATEGORY_ICONS } from "@/components/badges";
 import { Avatar } from "@/components/ui/misc";
 import { useStore } from "@/lib/store";
+import { getExecutiveAttentionAction } from "@/app/actions";
 import { categoryCounts } from "@/lib/filters";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/constants";
 import { cn } from "@/lib/cn";
@@ -68,6 +70,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
 
   const counts = state ? categoryCounts(state.tasks) : null;
+
+  // Executive "needs attention" badge — refreshed as you move around the app.
+  const [attention, setAttention] = useState(0);
+  useEffect(() => {
+    getExecutiveAttentionAction()
+      .then(setAttention)
+      .catch(() => {});
+  }, [pathname]);
 
   function go(path: string) {
     router.push(path);
@@ -134,6 +144,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               item.href === "/approvals" && counts
                 ? Object.values(counts).reduce((a, c) => a + c.ready, 0)
                 : 0;
+            const badge = item.href === "/executive" ? attention : ready;
             return (
               <button
                 key={item.href}
@@ -147,9 +158,9 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               >
                 <item.icon className={cn("h-4.5 w-4.5", active ? "text-primary" : "text-muted-foreground")} />
                 <span className="flex-1 text-left">{item.label}</span>
-                {ready > 0 && (
+                {badge > 0 && (
                   <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-700">
-                    {ready}
+                    {badge}
                   </span>
                 )}
               </button>
