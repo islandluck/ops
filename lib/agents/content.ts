@@ -473,7 +473,31 @@ export async function markChannelPublished(
   return { ok: true };
 }
 
+/**
+ * Discard a post entirely. Cancels any still-queued scheduled thread so a deleted
+ * post can never auto-publish later; post_channels rows cascade with the post.
+ * Already-published article pages stay live (remove those from Pages).
+ */
 export async function deletePost(workspaceId: string, postId: string): Promise<{ ok: boolean }> {
+  const chans = await db
+    .select()
+    .from(postChannels)
+    .where(and(eq(postChannels.workspace_id, workspaceId), eq(postChannels.post_id, postId)));
+
+  for (const c of chans) {
+    if (c.channel !== "x_thread" || c.status !== "scheduled" || !c.ref_id) continue;
+    const [tk] = await db
+      .select({ exec: tasks.execution_status })
+      .from(tasks)
+      .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, c.ref_id)))
+      .limit(1);
+    if (tk?.exec === "queued") {
+      await db.delete(approvalDecisions).where(eq(approvalDecisions.task_id, c.ref_id));
+      await db.delete(taskAssets).where(eq(taskAssets.task_id, c.ref_id));
+      await db.delete(tasks).where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, c.ref_id)));
+    }
+  }
+
   await db.delete(posts).where(and(eq(posts.workspace_id, workspaceId), eq(posts.id, postId)));
   return { ok: true };
 }

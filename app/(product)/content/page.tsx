@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Globe, Loader2, MessageCircle, Newspaper, Plus, Sparkles, TrendingUp } from "lucide-react";
+import { FileText, Globe, Loader2, MessageCircle, Newspaper, Plus, Sparkles, Trash2, TrendingUp } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
-import { createPostAction, getPostsAction } from "@/app/actions";
+import { createPostAction, deletePostAction, getPostsAction } from "@/app/actions";
 import { markdownToPlainText } from "@/lib/content/format";
 import type { ChannelKind, Post, PostChannel } from "@/lib/types";
 
@@ -81,7 +81,12 @@ export default function ContentPage() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {posts.map((p) => (
-              <PostCard key={p.id} post={p} onOpen={() => router.push(`/content/${p.id}`)} />
+              <PostCard
+                key={p.id}
+                post={p}
+                onOpen={() => router.push(`/content/${p.id}`)}
+                onDeleted={reload}
+              />
             ))}
           </div>
         )}
@@ -100,12 +105,50 @@ export default function ContentPage() {
   );
 }
 
-function PostCard({ post, onOpen }: { post: Post; onOpen: () => void }) {
+function PostCard({ post, onOpen, onDeleted }: { post: Post; onOpen: () => void; onDeleted: () => void }) {
   const excerpt = post.dek || markdownToPlainText(post.body_md).slice(0, 140);
   const channels = post.channels ?? [];
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function del(e: React.MouseEvent) {
+    e.stopPropagation();
+    setDeleting(true);
+    await deletePostAction(post.id);
+    onDeleted();
+  }
+
   return (
-    <Card className="card-interactive flex cursor-pointer flex-col p-4" onClick={onOpen}>
-      <div className="flex items-center justify-between gap-2">
+    <Card className="card-interactive group relative flex cursor-pointer flex-col p-4" onClick={onOpen}>
+      {confirming ? (
+        <div
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-card/95 p-5 text-center backdrop-blur-[1px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-[12.5px] text-foreground/80">Delete this post? Any scheduled thread is canceled.</p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="destructive" onClick={del} disabled={deleting}>
+              {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Delete
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={deleting}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirming(true);
+          }}
+          className="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-muted-foreground/50 opacity-0 transition hover:bg-accent hover:text-destructive group-hover:opacity-100"
+          aria-label="Delete post"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <div className="flex items-center justify-between gap-2 pr-6">
         <span
           className={cn(
             "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",

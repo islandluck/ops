@@ -28,6 +28,7 @@ import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
   boostPostAction,
+  deletePostAction,
   getPostAction,
   markChannelPublishedAction,
   packagePostAction,
@@ -67,6 +68,8 @@ export default function ContentEditor() {
   const [suggestion, setSuggestion] = useState<BoostedLongform | null>(null);
   const [packaging, setPackaging] = useState(false);
   const [busyKey, setBusyKey] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [err, setErr] = useState("");
 
   const load = useCallback(async () => {
@@ -164,6 +167,17 @@ export default function ContentEditor() {
     if (!res.ok) setErr(res.error ?? "That didn't complete.");
     await load();
     setBusyKey("");
+  }
+
+  async function discard() {
+    setDeleting(true);
+    const res = await deletePostAction(id);
+    if (res.ok) {
+      router.push("/content");
+    } else {
+      setDeleting(false);
+      setErr("Couldn't delete the post.");
+    }
   }
 
   if (loading) {
@@ -331,6 +345,34 @@ export default function ContentEditor() {
                 />
               </div>
             )}
+
+            {/* Discard */}
+            <div className="border-t border-border pt-4">
+              {confirmDelete ? (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+                  <p className="text-[12px] leading-relaxed text-foreground/80">
+                    Delete this post permanently? Any scheduled thread is canceled. Published articles stay live — remove
+                    those from Pages.
+                  </p>
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <Button size="sm" variant="destructive" onClick={discard} disabled={deleting}>
+                      {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      Delete permanently
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDelete(true)}
+                  className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground transition hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete this post
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
