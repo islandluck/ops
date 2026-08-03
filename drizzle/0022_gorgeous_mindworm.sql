@@ -1,0 +1,1 @@
+ALTER TABLE "investor_updates" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;

@@ -779,12 +779,15 @@ export interface InvestorUpdateContent {
 export interface InvestorUpdate {
   id: string;
   content: InvestorUpdateContent;
+  archived: boolean;
   created_at: string;
 }
 
 /** Everything the Executive Office page loads. */
 export interface ExecutiveBundle {
   agentName: string;
+  /** The company name (for outward artifacts like the investor-update subject line). */
+  companyName: string;
   messages: ExecMessage[];
   memory: ExecMemory[];
   goals: CompanyGoal[];

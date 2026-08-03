@@ -79,10 +79,12 @@ import {
   deleteMemory,
   dismissBriefSuggestion,
   generateDailyBrief,
+  deleteInvestorUpdate,
   generateInvestorUpdate,
   getExecutiveBundle,
   sendExecutiveMessage,
   setGoalStatus,
+  setInvestorUpdateArchived,
   startNewExecutiveChat,
   togglePinMemory,
   updateInvestorUpdate,
@@ -659,6 +661,27 @@ export async function updateInvestorUpdateAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return updateInvestorUpdate(ws, id, content);
+}
+
+/** Archive or unarchive an investor update. */
+export async function archiveInvestorUpdateAction(
+  id: string,
+  archived: boolean,
+): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return setInvestorUpdateArchived(ws, id, archived);
+}
+
+/** Permanently delete an investor update. */
+export async function deleteInvestorUpdateAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteInvestorUpdate(ws, id);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */

@@ -713,6 +713,7 @@ function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
   const c = (row.content ?? {}) as Partial<InvestorUpdateContent>;
   return {
     id: row.id,
+    archived: row.archived,
     created_at: iso(row.created_at),
     content: {
       period: c.period ?? "",
@@ -827,10 +828,10 @@ export async function generateInvestorUpdate(
   const id = uid();
   const now = new Date();
   await db.insert(investorUpdates).values({ id, workspace_id: workspaceId, content, created_at: now });
-  return { ok: true, update: { id, content, created_at: iso(now) } };
+  return { ok: true, update: { id, content, archived: false, created_at: iso(now) } };
 }
 
-export async function listInvestorUpdates(workspaceId: string, limit = 12): Promise<InvestorUpdate[]> {
+export async function listInvestorUpdates(workspaceId: string, limit = 50): Promise<InvestorUpdate[]> {
   const rows = await db
     .select()
     .from(investorUpdates)
@@ -838,6 +839,33 @@ export async function listInvestorUpdates(workspaceId: string, limit = 12): Prom
     .orderBy(desc(investorUpdates.created_at))
     .limit(limit);
   return rows.map(toInvestorUpdate);
+}
+
+/** Archive or unarchive an investor update (soft-hide from the default list). */
+export async function setInvestorUpdateArchived(
+  workspaceId: string,
+  id: string,
+  archived: boolean,
+): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
+  try {
+    const [row] = await db
+      .update(investorUpdates)
+      .set({ archived })
+      .where(and(eq(investorUpdates.id, id), eq(investorUpdates.workspace_id, workspaceId)))
+      .returning();
+    if (!row) return { ok: false, error: "Update not found." };
+    return { ok: true, update: toInvestorUpdate(row) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't archive the update." };
+  }
+}
+
+/** Permanently delete an investor update. */
+export async function deleteInvestorUpdate(workspaceId: string, id: string): Promise<{ ok: boolean }> {
+  await db
+    .delete(investorUpdates)
+    .where(and(eq(investorUpdates.id, id), eq(investorUpdates.workspace_id, workspaceId)));
+  return { ok: true };
 }
 
 /** Save founder edits to an investor update (content + optional hero image). */
@@ -863,7 +891,8 @@ export async function updateInvestorUpdate(
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates] = await Promise.all([
+  // prettier-ignore
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, planning] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -889,11 +918,13 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     computeNudges(workspaceId),
     listBriefs(workspaceId, 30),
     computeMetricValues(workspaceId),
-    listInvestorUpdates(workspaceId, 12),
+    listInvestorUpdates(workspaceId, 50),
+    getPlanningContext(workspaceId),
   ]);
 
   return {
     agentName: execAgent?.name ?? "Executive Agent",
+    companyName: planning.brief.company_name,
     messages: messages.map(toMsg),
     memory: memory.map(toMem),
     goals: goals.map((g) => toGoal(g, metricValues)),

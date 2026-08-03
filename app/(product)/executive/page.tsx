@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   ArrowRight,
   ArrowUpRight,
   Bell,
@@ -13,6 +15,7 @@ import {
   ChevronDown,
   ChevronUp,
   Compass,
+  Copy,
   Download,
   FileText,
   FolderKanban,
@@ -23,6 +26,7 @@ import {
   Loader2,
   Mail,
   MessageSquarePlus,
+  MoreHorizontal,
   Paperclip,
   Pencil,
   Pin,
@@ -48,7 +52,9 @@ import {
   addGoalAction,
   addMemoryAction,
   approveBriefSuggestionAction,
+  archiveInvestorUpdateAction,
   deleteGoalAction,
+  deleteInvestorUpdateAction,
   deleteMemoryAction,
   dismissBriefSuggestionAction,
   generateBriefAction,
@@ -174,6 +180,24 @@ export default function ExecutivePage() {
     return res;
   }, []);
 
+  const archiveUpdate = useCallback(async (id: string, archived: boolean) => {
+    const res = await archiveInvestorUpdateAction(id, archived);
+    if (res.ok) {
+      setUpdates((prev) => prev.map((u) => (u.id === id ? { ...u, archived } : u)));
+      setSelectedUpdateId(null);
+    }
+    return res;
+  }, []);
+
+  const deleteUpdate = useCallback(async (id: string) => {
+    const res = await deleteInvestorUpdateAction(id);
+    if (res.ok) {
+      setUpdates((prev) => prev.filter((u) => u.id !== id));
+      setSelectedUpdateId(null);
+    }
+    return res;
+  }, []);
+
   const generateBrief = useCallback(async () => {
     setGenerating(true);
     const res = await generateBriefAction(cadence);
@@ -256,7 +280,8 @@ export default function ExecutivePage() {
   const agentName = bundle?.agentName ?? "Executive Agent";
   const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
   const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;
-  const shownUpdate = updates.find((u) => u.id === selectedUpdateId) ?? updates[0] ?? null;
+  const shownUpdate =
+    updates.find((u) => u.id === selectedUpdateId) ?? updates.find((u) => !u.archived) ?? updates[0] ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -428,14 +453,15 @@ export default function ExecutivePage() {
           />
         ) : (
           <InvestorView
-            key={shownUpdate?.id ?? "none"}
             update={shownUpdate}
             updates={updates}
-            selectedId={shownUpdate?.id ?? null}
             onSelect={setSelectedUpdateId}
             generating={genUpdate}
             onGenerate={generateUpdate}
             onSave={saveUpdate}
+            onArchive={archiveUpdate}
+            onDelete={deleteUpdate}
+            companyName={bundle?.companyName ?? ""}
             agentName={agentName}
           />
         )}
@@ -1013,6 +1039,16 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Suggested email subject, e.g. "Andros investor update — August 2026". */
+function investorEmailSubject(companyName: string, period: string): string {
+  const co = companyName.trim();
+  const p = period.trim();
+  if (co && p) return `${co} investor update — ${p}`;
+  if (co) return `${co} investor update`;
+  if (p) return `Investor update — ${p}`;
+  return "Investor update";
+}
+
 /** Build an email-ready HTML fragment (inline styles) to paste into a mail client. */
 function investorUpdateEmailHtml(u: InvestorUpdate): string {
   const c = u.content;
@@ -1103,16 +1139,17 @@ async function copyRichText(html: string, plain: string): Promise<boolean> {
 function InvestorView({
   update,
   updates,
-  selectedId,
   onSelect,
   generating,
   onGenerate,
   onSave,
+  onArchive,
+  onDelete,
+  companyName,
   agentName,
 }: {
   update: InvestorUpdate | null;
   updates: InvestorUpdate[];
-  selectedId: string | null;
   onSelect: (id: string) => void;
   generating: boolean;
   onGenerate: () => void;
@@ -1120,6 +1157,9 @@ function InvestorView({
     id: string,
     content: InvestorUpdateContent,
   ) => Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }>;
+  onArchive: (id: string, archived: boolean) => Promise<{ ok: boolean; error?: string }>;
+  onDelete: (id: string) => Promise<{ ok: boolean }>;
+  companyName: string;
   agentName: string;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1127,6 +1167,20 @@ function InvestorView({
   const [saving, setSaving] = useState(false);
   const [editErr, setEditErr] = useState("");
   const [copied, setCopied] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [busyMenu, setBusyMenu] = useState(false);
+
+  // Leave edit mode whenever the shown update changes (e.g. picking another one).
+  const shownId = update?.id ?? null;
+  useEffect(() => {
+    setEditing(false);
+    setDraft(null);
+    setEditErr("");
+  }, [shownId]);
+
+  const archivedCount = updates.filter((u) => u.archived).length;
+  const visible = updates.filter((u) => !u.archived || showArchived || u.id === shownId);
+  const subject = update ? investorEmailSubject(companyName, update.content.period) : "";
 
   function startEdit() {
     if (!update) return;
@@ -1163,6 +1217,18 @@ function InvestorView({
       setTimeout(() => setCopied(false), 2000);
     }
   }
+  async function toggleArchive() {
+    if (!update) return;
+    setBusyMenu(true);
+    await onArchive(update.id, !update.archived);
+    setBusyMenu(false);
+  }
+  async function doDelete() {
+    if (!update) return;
+    setBusyMenu(true);
+    await onDelete(update.id);
+    setBusyMenu(false);
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
@@ -1174,7 +1240,7 @@ function InvestorView({
               {editing
                 ? "Editing — changes save to this update"
                 : update
-                  ? `${update.content.period} · prepared ${fmtBriefDate(update.created_at)}`
+                  ? `${update.content.period} · prepared ${fmtBriefDate(update.created_at)}${update.archived ? " · archived" : ""}`
                   : "Not generated yet"}
             </p>
           </div>
@@ -1191,17 +1257,32 @@ function InvestorView({
               </>
             ) : (
               <>
-                {updates.length > 1 && (
+                {archivedCount > 0 && (
+                  <button
+                    onClick={() => setShowArchived((v) => !v)}
+                    title={showArchived ? "Hide archived updates" : "Show archived updates"}
+                    className={cn(
+                      "inline-flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors",
+                      showArchived
+                        ? "border-primary/40 bg-primary/5 text-foreground"
+                        : "border-input bg-background text-muted-foreground hover:bg-accent",
+                    )}
+                  >
+                    <Archive className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{showArchived ? "Hide archived" : `Archived (${archivedCount})`}</span>
+                  </button>
+                )}
+                {visible.length > 1 && (
                   <select
-                    value={selectedId ?? updates[0]?.id}
+                    value={shownId ?? visible[0]?.id}
                     onChange={(e) => onSelect(e.target.value)}
                     className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px] font-medium outline-none"
-                    title="Update archive"
+                    title="Update history"
                   >
-                    {updates.map((u, i) => (
+                    {visible.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {i === 0 ? "Latest · " : ""}
                         {u.content.period || fmtBriefDate(u.created_at)}
+                        {u.archived ? " · archived" : ""}
                       </option>
                     ))}
                   </select>
@@ -1251,6 +1332,12 @@ function InvestorView({
                       <Pencil className="h-4 w-4" />
                       <span className="hidden sm:inline">Edit</span>
                     </Button>
+                    <UpdateMenu
+                      archived={update.archived}
+                      busy={busyMenu}
+                      onArchive={toggleArchive}
+                      onDelete={doDelete}
+                    />
                   </>
                 )}
                 <Button size="sm" variant={update ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
@@ -1277,7 +1364,7 @@ function InvestorView({
             <InvestorEditor draft={draft} onChange={setDraft} />
           </>
         ) : update ? (
-          <InvestorBody update={update} />
+          <InvestorBody update={update} subject={subject} />
         ) : (
           <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border p-10 text-center">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
@@ -1301,10 +1388,11 @@ function InvestorView({
   );
 }
 
-function InvestorBody({ update }: { update: InvestorUpdate }) {
+function InvestorBody({ update, subject }: { update: InvestorUpdate; subject: string }) {
   const c = update.content;
   return (
     <div className="mt-5 space-y-6">
+      <SubjectRow subject={subject} />
       {c.image_url && (
         <div className="overflow-hidden rounded-2xl border border-border bg-muted">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1393,6 +1481,133 @@ function InvestorList({
         </ul>
       ) : (
         <p className="text-[12.5px] text-muted-foreground">{empty}</p>
+      )}
+    </div>
+  );
+}
+
+/** The suggested email subject line, with a one-click copy. */
+function SubjectRow({ subject }: { subject: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(subject);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard unavailable — no-op */
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Subject</span>
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{subject}</span>
+      <button
+        type="button"
+        onClick={copy}
+        title="Copy subject line"
+        className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+        <span className="hidden sm:inline">{copied ? "Copied" : "Copy"}</span>
+      </button>
+    </div>
+  );
+}
+
+/** Overflow menu for an investor update: archive / unarchive and delete. */
+function UpdateMenu({
+  archived,
+  busy,
+  onArchive,
+  onDelete,
+}: {
+  archived: boolean;
+  busy: boolean;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <Popover
+      align="end"
+      className="inline-flex"
+      trigger={
+        <span
+          className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-input bg-background transition-colors hover:bg-accent"
+          title="More actions"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </span>
+      }
+    >
+      {(close) => (
+        <UpdateMenuBody archived={archived} busy={busy} onArchive={onArchive} onDelete={onDelete} close={close} />
+      )}
+    </Popover>
+  );
+}
+
+function UpdateMenuBody({
+  archived,
+  busy,
+  onArchive,
+  onDelete,
+  close,
+}: {
+  archived: boolean;
+  busy: boolean;
+  onArchive: () => void;
+  onDelete: () => void;
+  close: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="min-w-[190px]">
+      <button
+        onClick={() => {
+          onArchive();
+          close();
+        }}
+        disabled={busy}
+        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-accent disabled:opacity-50"
+      >
+        {archived ? (
+          <ArchiveRestore className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : (
+          <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+        {archived ? "Unarchive" : "Archive"}
+      </button>
+      {confirming ? (
+        <div className="mt-1 rounded-md bg-destructive/5 p-2">
+          <p className="mb-1.5 px-0.5 text-[12px] text-muted-foreground">Delete permanently?</p>
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              variant="destructive"
+              className="flex-1"
+              disabled={busy}
+              onClick={() => {
+                onDelete();
+                close();
+              }}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Delete
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => setConfirming(true)}
+          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] text-destructive transition-colors hover:bg-destructive/10"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete…
+        </button>
       )}
     </div>
   );

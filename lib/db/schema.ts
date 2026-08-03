@@ -536,6 +536,7 @@ export const investorUpdates = pgTable("investor_updates", {
     .$type<InvestorUpdateContent>()
     .notNull()
     .default({ period: "", tldr: "", highlights: [], metrics: [], lowlights: [], whats_next: [], asks: [], closing: "" }),
+  archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
 });
 
