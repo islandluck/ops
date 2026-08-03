@@ -748,6 +748,9 @@ export interface ExecNudge {
 /* --------------------------- investor updates ---------------------------- */
 
 /** A single metric line in an investor update. */
+/** Who a stakeholder update is written for. Drives tone, dossier scope, and labels. */
+export type UpdateAudience = "investor" | "team" | "advisor";
+
 export interface InvestorMetric {
   label: string;
   value: string;
@@ -778,6 +781,8 @@ export interface InvestorUpdateContent {
 
 export interface InvestorUpdate {
   id: string;
+  /** Which stakeholder audience this update is written for. */
+  audience: UpdateAudience;
   content: InvestorUpdateContent;
   archived: boolean;
   created_at: string;

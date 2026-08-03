@@ -38,6 +38,7 @@ import type {
   GoalStatus,
   InvestorUpdateContent,
   MemoryKind,
+  UpdateAudience,
   PackagedVariant,
   PageContent,
   PageStatus,
@@ -527,11 +528,14 @@ export const executiveMemory = pgTable("executive_memory", {
 });
 
 /** A generated monthly investor / stakeholder update (outward-facing). */
+// Holds stakeholder updates for every audience (investor / team / advisor);
+// the `audience` column discriminates. Table name is historical.
 export const investorUpdates = pgTable("investor_updates", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  audience: text("audience").$type<UpdateAudience>().notNull().default("investor"),
   content: jsonb("content")
     .$type<InvestorUpdateContent>()
     .notNull()

@@ -38,6 +38,7 @@ import {
   Trash2,
   TrendingDown,
   TrendingUp,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -81,6 +82,7 @@ import type {
   InvestorMetric,
   InvestorUpdate,
   InvestorUpdateContent,
+  UpdateAudience,
 } from "@/lib/types";
 
 const STARTERS = [
@@ -112,7 +114,7 @@ export default function ExecutivePage() {
   const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"chat" | "brief" | "investor">("chat");
+  const [view, setView] = useState<"chat" | "brief" | "investor" | "team" | "advisor">("chat");
   const [briefs, setBriefs] = useState<ExecBrief[]>([]);
   const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
   const [cadence, setCadence] = useState<BriefKind>("daily");
@@ -161,9 +163,9 @@ export default function ExecutivePage() {
     setLoading(false);
   }, []);
 
-  const generateUpdate = useCallback(async () => {
+  const generateUpdate = useCallback(async (audience: UpdateAudience) => {
     setGenUpdate(true);
-    const res = await generateInvestorUpdateAction();
+    const res = await generateInvestorUpdateAction(audience);
     setGenUpdate(false);
     if (res.ok && res.update) {
       await loadBundle();
@@ -280,8 +282,14 @@ export default function ExecutivePage() {
   const agentName = bundle?.agentName ?? "Executive Agent";
   const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
   const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;
+  const currentAudience: UpdateAudience | null =
+    view === "investor" || view === "team" || view === "advisor" ? view : null;
+  const audienceUpdates = currentAudience ? updates.filter((u) => u.audience === currentAudience) : [];
   const shownUpdate =
-    updates.find((u) => u.id === selectedUpdateId) ?? updates.find((u) => !u.archived) ?? updates[0] ?? null;
+    audienceUpdates.find((u) => u.id === selectedUpdateId) ??
+    audienceUpdates.find((u) => !u.archived) ??
+    audienceUpdates[0] ??
+    null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -313,12 +321,17 @@ export default function ExecutivePage() {
                 [
                   ["chat", "Conversation"],
                   ["brief", "Briefs"],
-                  ["investor", "Investor update"],
+                  ["investor", "Investor"],
+                  ["team", "Team"],
+                  ["advisor", "Advisor"],
                 ] as const
               ).map(([v, label]) => (
                 <button
                   key={v}
-                  onClick={() => setView(v)}
+                  onClick={() => {
+                    setView(v);
+                    setSelectedUpdateId(null);
+                  }}
                   className={cn(
                     "rounded-md px-3 py-1 transition",
                     view === v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
@@ -452,18 +465,22 @@ export default function ExecutivePage() {
             busySug={busySug}
           />
         ) : (
-          <InvestorView
-            update={shownUpdate}
-            updates={updates}
-            onSelect={setSelectedUpdateId}
-            generating={genUpdate}
-            onGenerate={generateUpdate}
-            onSave={saveUpdate}
-            onArchive={archiveUpdate}
-            onDelete={deleteUpdate}
-            companyName={bundle?.companyName ?? ""}
-            agentName={agentName}
-          />
+          currentAudience && (
+            <InvestorView
+              key={currentAudience}
+              config={AUDIENCE_CONFIG[currentAudience]}
+              update={shownUpdate}
+              updates={audienceUpdates}
+              onSelect={setSelectedUpdateId}
+              generating={genUpdate}
+              onGenerate={() => generateUpdate(currentAudience)}
+              onSave={saveUpdate}
+              onArchive={archiveUpdate}
+              onDelete={deleteUpdate}
+              companyName={bundle?.companyName ?? ""}
+              agentName={agentName}
+            />
+          )
         )}
       </div>
 
@@ -990,12 +1007,53 @@ function BriefList({
   );
 }
 
-/* --------------------------- investor update ---------------------------- */
+/* ------------------------- stakeholder updates -------------------------- */
 
-/** Serialize an investor update to Markdown (the canonical export). */
+type AudienceConfig = {
+  tab: string;
+  title: string;
+  noun: string;
+  labels: { highlights: string; challenges: string; asks: string };
+  emptyLead: string;
+  icon: typeof Handshake;
+};
+
+/** Per-audience labels + copy. One generic update view is rendered for each. */
+const AUDIENCE_CONFIG: Record<UpdateAudience, AudienceConfig> = {
+  investor: {
+    tab: "Investor",
+    title: "Investor Update",
+    noun: "investor update",
+    labels: { highlights: "Highlights", challenges: "Challenges", asks: "The ask" },
+    emptyLead:
+      "draft a monthly update from your live metrics, goals, and progress — highlights, the honest challenges, what's next, and specific asks. Then edit it, add a photo, and copy it as an email ready to send.",
+    icon: Handshake,
+  },
+  team: {
+    tab: "Team",
+    title: "Team Update",
+    noun: "team update",
+    labels: { highlights: "What went well", challenges: "What to work on", asks: "Where we need to step up" },
+    emptyLead:
+      "draft a monthly update for the team — what we did well, what we need to work on, the numbers, and where to focus next. Candid and motivating, grounded in the real work.",
+    icon: Users,
+  },
+  advisor: {
+    tab: "Advisor",
+    title: "Advisor Update",
+    noun: "advisor update",
+    labels: { highlights: "Highlights", challenges: "Challenges", asks: "How you can help" },
+    emptyLead:
+      "draft a monthly update for your advisors — progress, the honest challenges, and direct call-outs where their intros, expertise, or judgment would help most.",
+    icon: Compass,
+  },
+};
+
+/** Serialize a stakeholder update to Markdown (the canonical export). */
 function investorUpdateToMarkdown(u: InvestorUpdate): string {
   const c = u.content;
-  const out: string[] = [`# Investor Update — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
+  const cfg = AUDIENCE_CONFIG[u.audience];
+  const out: string[] = [`# ${cfg.title} — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
   if (c.image_url) out.push(`![](${c.image_url})`, "");
   if (c.tldr) out.push(c.tldr, "");
   const bullets = (title: string, items: string[]) => {
@@ -1005,23 +1063,24 @@ function investorUpdateToMarkdown(u: InvestorUpdate): string {
       out.push("");
     }
   };
-  bullets("Highlights", c.highlights);
+  bullets(cfg.labels.highlights, c.highlights);
   if (c.metrics.length) {
     out.push("## Metrics");
     c.metrics.forEach((m) => out.push(`- **${m.label}:** ${m.value}${m.note ? ` — ${m.note}` : ""}`));
     out.push("");
   }
-  bullets("Challenges", c.lowlights);
+  bullets(cfg.labels.challenges, c.lowlights);
   bullets("What's next", c.whats_next);
-  bullets("The ask", c.asks);
+  bullets(cfg.labels.asks, c.asks);
   if (c.closing) out.push("---", "", c.closing, "");
   return out.join("\n").trim() + "\n";
 }
 
 function downloadInvestorUpdate(u: InvestorUpdate, fmt: "md" | "txt" | "doc" | "pdf") {
   const md = investorUpdateToMarkdown(u);
-  const slug = (u.content.period || "investor-update").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const base = `investor-update-${slug}`;
+  const cfg = AUDIENCE_CONFIG[u.audience];
+  const slug = (u.content.period || cfg.noun).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const base = `${u.audience}-update-${slug}`;
   if (fmt === "md") downloadBlob(`${base}.md`, md, "text/markdown");
   else if (fmt === "txt") downloadBlob(`${base}.txt`, markdownToPlainText(md), "text/plain");
   else if (fmt === "doc")
@@ -1030,7 +1089,7 @@ function downloadInvestorUpdate(u: InvestorUpdate, fmt: "md" | "txt" | "doc" | "
       `<!doctype html><html><head><meta charset="utf-8"></head><body>${markdownToHtml(md)}</body></html>`,
       "application/msword",
     );
-  else printBriefPdf(markdownToHtml(md), `Investor Update — ${u.content.period}`);
+  else printBriefPdf(markdownToHtml(md), `${cfg.title} — ${u.content.period}`);
 }
 
 const EMAIL_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -1040,18 +1099,20 @@ function escapeHtml(s: string): string {
 }
 
 /** Suggested email subject, e.g. "Andros investor update — August 2026". */
-function investorEmailSubject(companyName: string, period: string): string {
+function investorEmailSubject(companyName: string, period: string, noun: string): string {
   const co = companyName.trim();
   const p = period.trim();
-  if (co && p) return `${co} investor update — ${p}`;
-  if (co) return `${co} investor update`;
-  if (p) return `Investor update — ${p}`;
-  return "Investor update";
+  const Noun = noun.charAt(0).toUpperCase() + noun.slice(1);
+  if (co && p) return `${co} ${noun} — ${p}`;
+  if (co) return `${co} ${noun}`;
+  if (p) return `${Noun} — ${p}`;
+  return Noun;
 }
 
 /** Build an email-ready HTML fragment (inline styles) to paste into a mail client. */
 function investorUpdateEmailHtml(u: InvestorUpdate): string {
   const c = u.content;
+  const cfg = AUDIENCE_CONFIG[u.audience];
   const parts: string[] = [];
   const H2 = (t: string) =>
     `<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin:28px 0 8px;">${escapeHtml(t)}</h2>`;
@@ -1066,7 +1127,7 @@ function investorUpdateEmailHtml(u: InvestorUpdate): string {
   };
 
   parts.push(
-    `<p style="text-transform:uppercase;letter-spacing:.08em;font-size:12px;color:#64748b;margin:0 0 4px;">Investor Update</p>`,
+    `<p style="text-transform:uppercase;letter-spacing:.08em;font-size:12px;color:#64748b;margin:0 0 4px;">${escapeHtml(cfg.title)}</p>`,
     `<h1 style="font-size:24px;margin:0 0 16px;color:#0f172a;">${escapeHtml(c.period)}</h1>`,
   );
   if (c.image_url)
@@ -1075,7 +1136,7 @@ function investorUpdateEmailHtml(u: InvestorUpdate): string {
     );
   if (c.tldr) parts.push(`<p style="font-size:16px;line-height:1.6;margin:0 0 8px;color:#0f172a;">${escapeHtml(c.tldr)}</p>`);
 
-  list("Highlights", c.highlights);
+  list(cfg.labels.highlights, c.highlights);
 
   if (c.metrics.length) {
     parts.push(H2("Metrics"));
@@ -1093,11 +1154,11 @@ function investorUpdateEmailHtml(u: InvestorUpdate): string {
     );
   }
 
-  list("Challenges", c.lowlights);
+  list(cfg.labels.challenges, c.lowlights);
   list("What's next", c.whats_next);
 
   if (c.asks.length) {
-    parts.push(H2("The ask"));
+    parts.push(H2(cfg.labels.asks));
     parts.push(
       `<ul style="margin:0;padding-left:20px;">${c.asks
         .map((a) => `<li style="margin:4px 0;font-weight:600;color:#0f172a;">${escapeHtml(a)}</li>`)
@@ -1137,6 +1198,7 @@ async function copyRichText(html: string, plain: string): Promise<boolean> {
 }
 
 function InvestorView({
+  config,
   update,
   updates,
   onSelect,
@@ -1148,6 +1210,7 @@ function InvestorView({
   companyName,
   agentName,
 }: {
+  config: AudienceConfig;
   update: InvestorUpdate | null;
   updates: InvestorUpdate[];
   onSelect: (id: string) => void;
@@ -1180,7 +1243,8 @@ function InvestorView({
 
   const archivedCount = updates.filter((u) => u.archived).length;
   const visible = updates.filter((u) => !u.archived || showArchived || u.id === shownId);
-  const subject = update ? investorEmailSubject(companyName, update.content.period) : "";
+  const subject = update ? investorEmailSubject(companyName, update.content.period, config.noun) : "";
+  const EmptyIcon = config.icon;
 
   function startEdit() {
     if (!update) return;
@@ -1235,7 +1299,7 @@ function InvestorView({
       <div className="mx-auto max-w-2xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-[18px] font-semibold">Investor Update</h2>
+            <h2 className="text-[18px] font-semibold">{config.title}</h2>
             <p className="text-[12px] text-muted-foreground">
               {editing
                 ? "Editing — changes save to this update"
@@ -1352,7 +1416,7 @@ function InvestorView({
         {generating && !update ? (
           <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
-            <p className="text-[13px]">{agentName} is drafting your investor update…</p>
+            <p className="text-[13px]">{agentName} is drafting your {config.noun}…</p>
           </div>
         ) : editing && draft ? (
           <>
@@ -1361,25 +1425,23 @@ function InvestorView({
                 {editErr}
               </p>
             )}
-            <InvestorEditor draft={draft} onChange={setDraft} />
+            <InvestorEditor draft={draft} onChange={setDraft} config={config} />
           </>
         ) : update ? (
-          <InvestorBody update={update} subject={subject} />
+          <InvestorBody update={update} subject={subject} config={config} />
         ) : (
           <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border p-10 text-center">
             <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
-              <Handshake className="h-6 w-6" />
+              <EmptyIcon className="h-6 w-6" />
             </span>
             <div>
-              <h3 className="text-[15px] font-semibold">No investor update yet</h3>
+              <h3 className="text-[15px] font-semibold">No {config.noun} yet</h3>
               <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
-                Have {agentName} draft a monthly update from your live metrics, goals, and progress — highlights, the
-                honest challenges, what&apos;s next, and specific asks. Then edit it, add a photo, and copy it as an
-                email ready to send.
+                Have {agentName} {config.emptyLead}
               </p>
             </div>
             <Button size="sm" onClick={onGenerate} disabled={generating}>
-              <Handshake className="h-4 w-4" /> Generate this month&apos;s update
+              <EmptyIcon className="h-4 w-4" /> Generate this month&apos;s update
             </Button>
           </div>
         )}
@@ -1388,7 +1450,15 @@ function InvestorView({
   );
 }
 
-function InvestorBody({ update, subject }: { update: InvestorUpdate; subject: string }) {
+function InvestorBody({
+  update,
+  subject,
+  config,
+}: {
+  update: InvestorUpdate;
+  subject: string;
+  config: AudienceConfig;
+}) {
   const c = update.content;
   return (
     <div className="mt-5 space-y-6">
@@ -1423,14 +1493,14 @@ function InvestorBody({ update, subject }: { update: InvestorUpdate; subject: st
         </div>
       )}
 
-      <InvestorList title="Highlights" icon={<Sparkles className="h-3.5 w-3.5" />} items={c.highlights} accent="text-emerald-600" empty="No highlights captured." />
-      <InvestorList title="Challenges" icon={<AlertTriangle className="h-3.5 w-3.5" />} items={c.lowlights} accent="text-amber-600" empty="No challenges flagged." />
+      <InvestorList title={config.labels.highlights} icon={<Sparkles className="h-3.5 w-3.5" />} items={c.highlights} accent="text-emerald-600" empty="Nothing captured here." />
+      <InvestorList title={config.labels.challenges} icon={<AlertTriangle className="h-3.5 w-3.5" />} items={c.lowlights} accent="text-amber-600" empty="Nothing flagged." />
       <InvestorList title="What's next" icon={<ArrowRight className="h-3.5 w-3.5" />} items={c.whats_next} accent="text-sky-600" empty="Nothing queued." />
 
       {c.asks.length > 0 && (
         <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
           <p className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-indigo-700">
-            <Handshake className="h-3.5 w-3.5" /> The ask
+            <Handshake className="h-3.5 w-3.5" /> {config.labels.asks}
           </p>
           <ul className="space-y-1.5">
             {c.asks.map((a, i) => (
@@ -1618,9 +1688,11 @@ function UpdateMenuBody({
 function InvestorEditor({
   draft,
   onChange,
+  config,
 }: {
   draft: InvestorUpdateContent;
   onChange: (next: InvestorUpdateContent) => void;
+  config: AudienceConfig;
 }) {
   const set = (partial: Partial<InvestorUpdateContent>) => onChange({ ...draft, ...partial });
   return (
@@ -1640,21 +1712,21 @@ function InvestorEditor({
           value={draft.tldr}
           onChange={(e) => set({ tldr: e.target.value })}
           className="min-h-[84px]"
-          placeholder="Two or three sentences an investor could skim in ten seconds."
+          placeholder="Two or three sentences a reader could skim in ten seconds."
         />
       </EditGroup>
       <ListEditor
-        label="Highlights"
+        label={config.labels.highlights}
         items={draft.highlights}
         onChange={(v) => set({ highlights: v })}
         placeholder="A concrete win or milestone this period."
       />
       <MetricsEditor metrics={draft.metrics} onChange={(v) => set({ metrics: v })} />
       <ListEditor
-        label="Challenges"
+        label={config.labels.challenges}
         items={draft.lowlights}
         onChange={(v) => set({ lowlights: v })}
-        placeholder="An honest risk, blocker, or miss."
+        placeholder="An honest gap, risk, or miss."
       />
       <ListEditor
         label="What's next"
@@ -1663,10 +1735,10 @@ function InvestorEditor({
         placeholder="A priority or plan for next period."
       />
       <ListEditor
-        label="The ask"
+        label={config.labels.asks}
         items={draft.asks}
         onChange={(v) => set({ asks: v })}
-        placeholder="A specific ask — an intro, a hire, advice, capital."
+        placeholder="A specific, easy-to-act-on ask."
       />
       <EditGroup label="Closing note">
         <Textarea

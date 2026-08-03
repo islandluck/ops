@@ -9,6 +9,7 @@ import type {
   Category,
   ExecBriefContent,
   InvestorUpdateContent,
+  UpdateAudience,
 } from "@/lib/types";
 
 const CATEGORIES: Category[] = ["growth", "admin", "content", "research", "finance"];
@@ -211,20 +212,57 @@ export async function generateBrief(
  * and specific, with a clear ask. Grounded: it must not invent metrics, customers,
  * revenue, or outcomes, and must not expose internal ops.
  */
-export async function writeInvestorUpdate(
-  dossier: string,
-  companyName: string,
-  period: string,
-): Promise<InvestorUpdateContent> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+/** Per-audience framing for a stakeholder update. Same JSON shape; different voice + section intent. */
+function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, period: string): string {
+  const co = companyName || "the company";
+  const json =
+    'Respond with ONLY this JSON (no markdown, no code fences): {"tldr": string, "highlights": string[], "metrics": [{"label": string, "value": string, "note": string}], "lowlights": string[], "whats_next": string[], "asks": string[], "closing": string}';
+  const groundingOutward =
+    "Ground EVERYTHING in the DATA dossier — never invent metrics, customers, revenue, partnerships, or outcomes. If the company is pre-revenue or very early, state exactly where it stands; do not inflate. Do NOT expose raw internal plumbing (task queues, agent memory, tooling) — translate the work into what this audience actually cares about.";
 
-  const system = [
-    `You are writing a monthly INVESTOR UPDATE for ${companyName || "the company"}, covering ${period}.`,
-    "Audience: the founder's investors and close advisors (outward-facing). Voice: how the best founders write — honest, confident, concise, specific. No hype, no filler, no jargon-as-smokescreen.",
+  if (audience === "team") {
+    return [
+      `You are writing a monthly TEAM UPDATE for ${co}, covering ${period}.`,
+      "Audience: the whole team (internal). Voice: a founder leveling with the people building the company — candid, direct, and motivating. Use 'we'. Celebrate real wins, name what needs work honestly (no blame), keep it informative and grounded.",
+      "This is internal, so operational specifics are welcome — what shipped, what's in flight, what's stuck. Still, ground EVERYTHING in the DATA dossier; never invent metrics or outcomes.",
+      "",
+      "Produce:",
+      "- tldr: 2–3 sentences — where we are and the tenor of the month.",
+      "- highlights: what we did well — concrete wins to celebrate; give the work credit.",
+      "- metrics: the numbers that matter internally — each {label, value, note}. Real numbers only; empty array if none.",
+      "- lowlights: what we need to work on — honest gaps, misses, or areas to improve, framed constructively.",
+      "- whats_next: priorities and the plan for next period, tied to our goals.",
+      "- asks: where we need the team to step up — specific focus areas or help needed across the team.",
+      "- closing: one motivating, brief closing line.",
+      "",
+      json,
+    ].join("\n");
+  }
+
+  if (audience === "advisor") {
+    return [
+      `You are writing a monthly ADVISOR UPDATE for ${co}, covering ${period}.`,
+      "Audience: the company's advisors (trusted, close). Voice: honest, concise, specific — like an investor update, but the POINT is to enlist their help. Make direct, concrete call-outs where an advisor's expertise, intros, or judgment would move the needle.",
+      groundingOutward,
+      "",
+      "Produce:",
+      "- tldr: 2–3 sentences — the headline of the month.",
+      "- highlights: concrete wins / progress this period (specific, not vague).",
+      "- metrics: the numbers that matter — each {label, value, note}. Real numbers only; empty array if none.",
+      "- lowlights: honest challenges or open questions this month — especially ones an advisor could help with.",
+      "- whats_next: the plan and priorities for next period, tied to our goals.",
+      "- asks: DIRECT, specific requests for the advisors' help — an intro (to whom / what kind), expertise on a named problem, a review or decision, or time on a concrete task. Make each easy to say yes to.",
+      "- closing: one warm, brief closing line.",
+      "",
+      json,
+    ].join("\n");
+  }
+
+  return [
+    `You are writing a monthly INVESTOR UPDATE for ${co}, covering ${period}.`,
+    "Audience: the founder's investors (outward-facing). Voice: how the best founders write — honest, confident, concise, specific. No hype, no filler, no jargon-as-smokescreen.",
     "Investors value CANDOR — include the real challenges and risks, not just wins; that's what builds trust.",
-    "Ground EVERYTHING in the DATA dossier — never invent metrics, customers, revenue, partnerships, or outcomes. If the company is pre-revenue or very early, state exactly where it stands; do not inflate. Do NOT expose internal operations (task queues, agent memory, tooling) — translate the work into what an investor actually cares about.",
+    groundingOutward,
     "",
     "Produce:",
     "- tldr: 2–3 sentences — the headline of the month.",
@@ -235,14 +273,28 @@ export async function writeInvestorUpdate(
     "- asks: 2–3 SPECIFIC, easy-to-act-on asks appropriate to their stage — intros (to whom/what kind), a hire (which role), advice (on what), or fundraising status. If unsure, propose asks their business would genuinely benefit from.",
     "- closing: one warm, brief closing line.",
     "",
-    'Respond with ONLY this JSON (no markdown, no code fences): {"tldr": string, "highlights": string[], "metrics": [{"label": string, "value": string, "note": string}], "lowlights": string[], "whats_next": string[], "asks": string[], "closing": string}',
+    json,
   ].join("\n");
+}
+
+export async function writeInvestorUpdate(
+  dossier: string,
+  companyName: string,
+  period: string,
+  audience: UpdateAudience = "investor",
+): Promise<InvestorUpdateContent> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = new Anthropic({ apiKey, maxRetries: 2 });
+
+  const system = stakeholderUpdatePrompt(audience, companyName, period);
+  const noun = audience === "team" ? "team update" : audience === "advisor" ? "advisor update" : "investor update";
 
   const msg = await client.messages.create({
     model: MODEL,
     max_tokens: 2500,
     system,
-    messages: [{ role: "user", content: `Data dossier for ${period}:\n\n${dossier}\n\nWrite the investor update now.` }],
+    messages: [{ role: "user", content: `Data dossier for ${period}:\n\n${dossier}\n\nWrite the ${noun} now.` }],
   });
   const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
 
@@ -250,7 +302,7 @@ export async function writeInvestorUpdate(
   try {
     raw = JSON.parse(stripFences(text)) as Record<string, unknown>;
   } catch {
-    throw new Error("The investor update came back unreadable. Please try again.");
+    throw new Error(`The ${noun} came back unreadable. Please try again.`);
   }
 
   const metrics = Array.isArray(raw.metrics)

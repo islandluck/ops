@@ -130,6 +130,7 @@ import type {
   InvestorUpdate,
   InvestorUpdateContent,
   MemoryKind,
+  UpdateAudience,
   OnboardingInput,
   Order,
   Page,
@@ -638,8 +639,8 @@ export async function getExecutiveAttentionAction(): Promise<number> {
   return countAttention(ws);
 }
 
-/** Generate a monthly investor / stakeholder update (on-demand). */
-export async function generateInvestorUpdateAction(): Promise<{
+/** Generate a monthly stakeholder update for an audience (on-demand). */
+export async function generateInvestorUpdateAction(audience: UpdateAudience = "investor"): Promise<{
   ok: boolean;
   update?: InvestorUpdate;
   error?: string;
@@ -648,7 +649,7 @@ export async function generateInvestorUpdateAction(): Promise<{
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return generateInvestorUpdate(ws);
+  return generateInvestorUpdate(ws, audience);
 }
 
 /** Save founder edits to an investor update (content + optional hero image). */

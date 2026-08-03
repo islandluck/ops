@@ -39,6 +39,7 @@ import type {
   InvestorUpdate,
   InvestorUpdateContent,
   MemoryKind,
+  UpdateAudience,
 } from "@/lib/types";
 
 /**
@@ -713,6 +714,7 @@ function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
   const c = (row.content ?? {}) as Partial<InvestorUpdateContent>;
   return {
     id: row.id,
+    audience: (row.audience ?? "investor") as UpdateAudience,
     archived: row.archived,
     created_at: iso(row.created_at),
     content: {
@@ -754,11 +756,16 @@ function normalizeInvestorContent(input: Partial<InvestorUpdateContent>): Invest
   };
 }
 
-/** Investor-appropriate dossier — metrics, goals, and a month of progress.
- *  Deliberately excludes internal ops (approvals, memory, task queues). */
-async function gatherInvestorDossier(workspaceId: string): Promise<{ dossier: string; companyName: string }> {
+/** Dossier for a stakeholder update. For investors it stays outward-safe;
+ *  for team/advisor it also surfaces the internal work in flight (so the update
+ *  can speak to what needs work and where help is wanted). */
+async function gatherInvestorDossier(
+  workspaceId: string,
+  audience: UpdateAudience = "investor",
+): Promise<{ dossier: string; companyName: string }> {
   const { brief } = await getPlanningContext(workspaceId);
   const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const internal = audience === "team" || audience === "advisor";
 
   const [kpis, mv, goals, taskRows, postRows, pageRows, activeProjects] = await Promise.all([
     computeKpis(workspaceId),
@@ -788,6 +795,14 @@ async function gatherInvestorDossier(workspaceId: string): Promise<{ dossier: st
     ...postRows.filter((p) => p.status === "distributed").map((p) => p.title),
     ...pageRows.filter((p) => p.status === "published").map((p) => p.title),
   ].slice(0, 20);
+  // Internal view (team / advisor only): what's still open, so the update can
+  // speak to what needs work and where help is wanted.
+  const inFlight = internal
+    ? taskRows
+        .filter((t) => t.status !== "done" && !t.archived)
+        .map((t) => t.title)
+        .slice(0, 15)
+    : [];
 
   const lines = [
     `COMPANY: ${brief.company_name || "the company"}. ${[brief.business_description, brief.core_offer].filter(Boolean).join(" ")}`.trim(),
@@ -809,29 +824,37 @@ async function gatherInvestorDossier(workspaceId: string): Promise<{ dossier: st
     ...(activeProjects.length
       ? activeProjects.map((p) => `- ${p.kind === "growth" ? "Growth campaign" : "Project"}: ${p.title}`)
       : ["- None active."]),
+    ...(internal
+      ? [
+          "",
+          "WORK IN FLIGHT (internal — not yet shipped):",
+          ...(inFlight.length ? inFlight.map((t) => `- ${t}`) : ["- Nothing open."]),
+        ]
+      : []),
   ];
   return { dossier: lines.join("\n"), companyName: brief.company_name };
 }
 
-/** Generate + store a monthly investor update (on-demand only). */
+/** Generate + store a monthly stakeholder update for an audience (on-demand only). */
 export async function generateInvestorUpdate(
   workspaceId: string,
+  audience: UpdateAudience = "investor",
 ): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
   const period = monthLabel();
-  const { dossier, companyName } = await gatherInvestorDossier(workspaceId);
+  const { dossier, companyName } = await gatherInvestorDossier(workspaceId, audience);
   let content;
   try {
-    content = await writeInvestorUpdate(dossier, companyName, period);
+    content = await writeInvestorUpdate(dossier, companyName, period, audience);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't generate the update." };
   }
   const id = uid();
   const now = new Date();
-  await db.insert(investorUpdates).values({ id, workspace_id: workspaceId, content, created_at: now });
-  return { ok: true, update: { id, content, archived: false, created_at: iso(now) } };
+  await db.insert(investorUpdates).values({ id, workspace_id: workspaceId, audience, content, created_at: now });
+  return { ok: true, update: { id, audience, content, archived: false, created_at: iso(now) } };
 }
 
-export async function listInvestorUpdates(workspaceId: string, limit = 50): Promise<InvestorUpdate[]> {
+export async function listInvestorUpdates(workspaceId: string, limit = 120): Promise<InvestorUpdate[]> {
   const rows = await db
     .select()
     .from(investorUpdates)
@@ -918,7 +941,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     computeNudges(workspaceId),
     listBriefs(workspaceId, 30),
     computeMetricValues(workspaceId),
-    listInvestorUpdates(workspaceId, 50),
+    listInvestorUpdates(workspaceId, 120),
     getPlanningContext(workspaceId),
   ]);
 

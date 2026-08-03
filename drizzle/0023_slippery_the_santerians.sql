@@ -1,0 +1,1 @@
+ALTER TABLE "investor_updates" ADD COLUMN "audience" text DEFAULT 'investor' NOT NULL;
