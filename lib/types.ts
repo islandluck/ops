@@ -772,6 +772,8 @@ export interface InvestorUpdateContent {
   asks: string[];
   /** Optional closing note. */
   closing: string;
+  /** Optional hero image (uploaded or stock), shown at the top and in the email. */
+  image_url?: string;
 }
 
 export interface InvestorUpdate {

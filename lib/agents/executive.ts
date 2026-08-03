@@ -723,7 +723,33 @@ function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
       whats_next: c.whats_next ?? [],
       asks: c.asks ?? [],
       closing: c.closing ?? "",
+      image_url: c.image_url,
     },
+  };
+}
+
+/** Normalize arbitrary edited content into a well-formed InvestorUpdateContent. */
+function normalizeInvestorContent(input: Partial<InvestorUpdateContent>): InvestorUpdateContent {
+  const strList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
+  return {
+    period: String(input.period ?? "").trim(),
+    tldr: String(input.tldr ?? "").trim(),
+    highlights: strList(input.highlights),
+    metrics: Array.isArray(input.metrics)
+      ? input.metrics
+          .map((m) => ({
+            label: String(m?.label ?? "").trim(),
+            value: String(m?.value ?? "").trim(),
+            note: m?.note ? String(m.note).trim() : undefined,
+          }))
+          .filter((m) => m.label || m.value)
+      : [],
+    lowlights: strList(input.lowlights),
+    whats_next: strList(input.whats_next),
+    asks: strList(input.asks),
+    closing: String(input.closing ?? "").trim(),
+    image_url: input.image_url ? String(input.image_url) : undefined,
   };
 }
 
@@ -812,6 +838,26 @@ export async function listInvestorUpdates(workspaceId: string, limit = 12): Prom
     .orderBy(desc(investorUpdates.created_at))
     .limit(limit);
   return rows.map(toInvestorUpdate);
+}
+
+/** Save founder edits to an investor update (content + optional hero image). */
+export async function updateInvestorUpdate(
+  workspaceId: string,
+  id: string,
+  content: Partial<InvestorUpdateContent>,
+): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
+  try {
+    const clean = normalizeInvestorContent(content);
+    const [row] = await db
+      .update(investorUpdates)
+      .set({ content: clean })
+      .where(and(eq(investorUpdates.id, id), eq(investorUpdates.workspace_id, workspaceId)))
+      .returning();
+    if (!row) return { ok: false, error: "Update not found." };
+    return { ok: true, update: toInvestorUpdate(row) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't save the update." };
+  }
 }
 
 /* ------------------------------- bundle --------------------------------- */

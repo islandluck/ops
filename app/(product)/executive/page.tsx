@@ -10,6 +10,8 @@ import {
   Brain,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Compass,
   Download,
   FileText,
@@ -19,8 +21,10 @@ import {
   Lightbulb,
   ListChecks,
   Loader2,
+  Mail,
   MessageSquarePlus,
   Paperclip,
+  Pencil,
   Pin,
   Plus,
   RefreshCw,
@@ -34,8 +38,9 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Popover } from "@/components/ui/popover";
+import { ImageSlot } from "@/components/media/image-slot";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/lib/store";
 import { markdownToHtml, markdownToPlainText } from "@/lib/content/format";
@@ -53,6 +58,7 @@ import {
   setGoalStatusAction,
   startNewExecutiveChatAction,
   togglePinMemoryAction,
+  updateInvestorUpdateAction,
 } from "@/app/actions";
 import type {
   BriefKind,
@@ -66,7 +72,9 @@ import type {
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
+  InvestorMetric,
   InvestorUpdate,
+  InvestorUpdateContent,
 } from "@/lib/types";
 
 const STARTERS = [
@@ -156,6 +164,15 @@ export default function ExecutivePage() {
       setSelectedUpdateId(res.update.id);
     }
   }, [loadBundle]);
+
+  const saveUpdate = useCallback(async (id: string, content: InvestorUpdateContent) => {
+    const res = await updateInvestorUpdateAction(id, content);
+    if (res.ok && res.update) {
+      const updated = res.update;
+      setUpdates((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+    }
+    return res;
+  }, []);
 
   const generateBrief = useCallback(async () => {
     setGenerating(true);
@@ -411,12 +428,14 @@ export default function ExecutivePage() {
           />
         ) : (
           <InvestorView
+            key={shownUpdate?.id ?? "none"}
             update={shownUpdate}
             updates={updates}
             selectedId={shownUpdate?.id ?? null}
             onSelect={setSelectedUpdateId}
             generating={genUpdate}
             onGenerate={generateUpdate}
+            onSave={saveUpdate}
             agentName={agentName}
           />
         )}
@@ -951,6 +970,7 @@ function BriefList({
 function investorUpdateToMarkdown(u: InvestorUpdate): string {
   const c = u.content;
   const out: string[] = [`# Investor Update — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
+  if (c.image_url) out.push(`![](${c.image_url})`, "");
   if (c.tldr) out.push(c.tldr, "");
   const bullets = (title: string, items: string[]) => {
     if (items.length) {
@@ -987,6 +1007,99 @@ function downloadInvestorUpdate(u: InvestorUpdate, fmt: "md" | "txt" | "doc" | "
   else printBriefPdf(markdownToHtml(md), `Investor Update — ${u.content.period}`);
 }
 
+const EMAIL_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** Build an email-ready HTML fragment (inline styles) to paste into a mail client. */
+function investorUpdateEmailHtml(u: InvestorUpdate): string {
+  const c = u.content;
+  const parts: string[] = [];
+  const H2 = (t: string) =>
+    `<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin:28px 0 8px;">${escapeHtml(t)}</h2>`;
+  const list = (title: string, items: string[]) => {
+    if (!items.length) return;
+    parts.push(H2(title));
+    parts.push(
+      `<ul style="margin:0;padding-left:20px;">${items
+        .map((i) => `<li style="margin:4px 0;">${escapeHtml(i)}</li>`)
+        .join("")}</ul>`,
+    );
+  };
+
+  parts.push(
+    `<p style="text-transform:uppercase;letter-spacing:.08em;font-size:12px;color:#64748b;margin:0 0 4px;">Investor Update</p>`,
+    `<h1 style="font-size:24px;margin:0 0 16px;color:#0f172a;">${escapeHtml(c.period)}</h1>`,
+  );
+  if (c.image_url)
+    parts.push(
+      `<img src="${escapeHtml(c.image_url)}" alt="" style="width:100%;max-width:600px;border-radius:12px;margin:0 0 20px;display:block;" />`,
+    );
+  if (c.tldr) parts.push(`<p style="font-size:16px;line-height:1.6;margin:0 0 8px;color:#0f172a;">${escapeHtml(c.tldr)}</p>`);
+
+  list("Highlights", c.highlights);
+
+  if (c.metrics.length) {
+    parts.push(H2("Metrics"));
+    parts.push(
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0;">${c.metrics
+        .map(
+          (m) =>
+            `<tr><td style="padding:6px 0;border-bottom:1px solid #e2e8f0;font-weight:600;color:#0f172a;">${escapeHtml(
+              m.label,
+            )}</td><td style="padding:6px 0;border-bottom:1px solid #e2e8f0;text-align:right;color:#0f172a;white-space:nowrap;">${escapeHtml(
+              m.value,
+            )}${m.note ? ` <span style="color:#94a3b8;font-weight:400;">(${escapeHtml(m.note)})</span>` : ""}</td></tr>`,
+        )
+        .join("")}</table>`,
+    );
+  }
+
+  list("Challenges", c.lowlights);
+  list("What's next", c.whats_next);
+
+  if (c.asks.length) {
+    parts.push(H2("The ask"));
+    parts.push(
+      `<ul style="margin:0;padding-left:20px;">${c.asks
+        .map((a) => `<li style="margin:4px 0;font-weight:600;color:#0f172a;">${escapeHtml(a)}</li>`)
+        .join("")}</ul>`,
+    );
+  }
+
+  if (c.closing)
+    parts.push(
+      `<p style="margin:28px 0 0;padding-top:16px;border-top:1px solid #e2e8f0;font-style:italic;color:#475569;line-height:1.6;">${escapeHtml(
+        c.closing,
+      )}</p>`,
+    );
+
+  return `<div style="max-width:600px;margin:0 auto;font-family:${EMAIL_FONT};color:#0f172a;line-height:1.6;font-size:15px;">${parts.join(
+    "",
+  )}</div>`;
+}
+
+/** Copy rich text (HTML + a plain-text fallback) to the clipboard. */
+async function copyRichText(html: string, plain: string): Promise<boolean> {
+  try {
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+      return true;
+    }
+    await navigator.clipboard.writeText(plain);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function InvestorView({
   update,
   updates,
@@ -994,6 +1107,7 @@ function InvestorView({
   onSelect,
   generating,
   onGenerate,
+  onSave,
   agentName,
 }: {
   update: InvestorUpdate | null;
@@ -1002,8 +1116,54 @@ function InvestorView({
   onSelect: (id: string) => void;
   generating: boolean;
   onGenerate: () => void;
+  onSave: (
+    id: string,
+    content: InvestorUpdateContent,
+  ) => Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }>;
   agentName: string;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<InvestorUpdateContent | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editErr, setEditErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  function startEdit() {
+    if (!update) return;
+    setDraft({ ...update.content });
+    setEditErr("");
+    setEditing(true);
+  }
+  function cancelEdit() {
+    setEditing(false);
+    setDraft(null);
+    setEditErr("");
+  }
+  async function saveEdit() {
+    if (!update || !draft) return;
+    setSaving(true);
+    setEditErr("");
+    const res = await onSave(update.id, draft);
+    setSaving(false);
+    if (res.ok) {
+      setEditing(false);
+      setDraft(null);
+    } else {
+      setEditErr(res.error ?? "Couldn't save your changes.");
+    }
+  }
+  async function copyEmail() {
+    if (!update) return;
+    const ok = await copyRichText(
+      investorUpdateEmailHtml(update),
+      markdownToPlainText(investorUpdateToMarkdown(update)),
+    );
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  }
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
       <div className="mx-auto max-w-2xl">
@@ -1011,66 +1171,94 @@ function InvestorView({
           <div>
             <h2 className="text-[18px] font-semibold">Investor Update</h2>
             <p className="text-[12px] text-muted-foreground">
-              {update ? `${update.content.period} · prepared ${fmtBriefDate(update.created_at)}` : "Not generated yet"}
+              {editing
+                ? "Editing — changes save to this update"
+                : update
+                  ? `${update.content.period} · prepared ${fmtBriefDate(update.created_at)}`
+                  : "Not generated yet"}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {updates.length > 1 && (
-              <select
-                value={selectedId ?? updates[0]?.id}
-                onChange={(e) => onSelect(e.target.value)}
-                className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px] font-medium outline-none"
-                title="Update archive"
-              >
-                {updates.map((u, i) => (
-                  <option key={u.id} value={u.id}>
-                    {i === 0 ? "Latest · " : ""}
-                    {u.content.period || fmtBriefDate(u.created_at)}
-                  </option>
-                ))}
-              </select>
-            )}
-            {update && (
-              <Popover
-                align="end"
-                className="inline-flex"
-                trigger={
-                  <span className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
-                    <Download className="h-4 w-4" />
-                    <span className="hidden sm:inline">Download</span>
-                  </span>
-                }
-              >
-                {(close) => (
-                  <div className="min-w-[150px]">
-                    {(
-                      [
-                        ["md", "Markdown (.md)"],
-                        ["txt", "Text (.txt)"],
-                        ["doc", "Word (.doc)"],
-                        ["pdf", "PDF"],
-                      ] as const
-                    ).map(([fmt, label]) => (
-                      <button
-                        key={fmt}
-                        onClick={() => {
-                          downloadInvestorUpdate(update, fmt);
-                          close();
-                        }}
-                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-accent"
-                      >
-                        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                        {label}
-                      </button>
+            {editing ? (
+              <>
+                <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={saving}>
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={saveEdit} disabled={saving}>
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <>
+                {updates.length > 1 && (
+                  <select
+                    value={selectedId ?? updates[0]?.id}
+                    onChange={(e) => onSelect(e.target.value)}
+                    className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px] font-medium outline-none"
+                    title="Update archive"
+                  >
+                    {updates.map((u, i) => (
+                      <option key={u.id} value={u.id}>
+                        {i === 0 ? "Latest · " : ""}
+                        {u.content.period || fmtBriefDate(u.created_at)}
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 )}
-              </Popover>
+                {update && (
+                  <>
+                    <Button size="sm" variant="outline" onClick={copyEmail} title="Copy as a formatted email">
+                      {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Mail className="h-4 w-4" />}
+                      <span className="hidden sm:inline">{copied ? "Copied" : "Copy email"}</span>
+                    </Button>
+                    <Popover
+                      align="end"
+                      className="inline-flex"
+                      trigger={
+                        <span className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
+                          <Download className="h-4 w-4" />
+                          <span className="hidden sm:inline">Download</span>
+                        </span>
+                      }
+                    >
+                      {(close) => (
+                        <div className="min-w-[150px]">
+                          {(
+                            [
+                              ["md", "Markdown (.md)"],
+                              ["txt", "Text (.txt)"],
+                              ["doc", "Word (.doc)"],
+                              ["pdf", "PDF"],
+                            ] as const
+                          ).map(([fmt, label]) => (
+                            <button
+                              key={fmt}
+                              onClick={() => {
+                                downloadInvestorUpdate(update, fmt);
+                                close();
+                              }}
+                              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-accent"
+                            >
+                              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </Popover>
+                    <Button size="sm" variant="outline" onClick={startEdit} title="Edit this update">
+                      <Pencil className="h-4 w-4" />
+                      <span className="hidden sm:inline">Edit</span>
+                    </Button>
+                  </>
+                )}
+                <Button size="sm" variant={update ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
+                  {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {generating ? "Drafting…" : update ? "Regenerate" : "Generate update"}
+                </Button>
+              </>
             )}
-            <Button size="sm" variant={update ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {generating ? "Drafting…" : update ? "Regenerate" : "Generate update"}
-            </Button>
           </div>
         </div>
 
@@ -1079,6 +1267,15 @@ function InvestorView({
             <Loader2 className="h-6 w-6 animate-spin" />
             <p className="text-[13px]">{agentName} is drafting your investor update…</p>
           </div>
+        ) : editing && draft ? (
+          <>
+            {editErr && (
+              <p className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12.5px] text-destructive">
+                {editErr}
+              </p>
+            )}
+            <InvestorEditor draft={draft} onChange={setDraft} />
+          </>
         ) : update ? (
           <InvestorBody update={update} />
         ) : (
@@ -1090,7 +1287,8 @@ function InvestorView({
               <h3 className="text-[15px] font-semibold">No investor update yet</h3>
               <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
                 Have {agentName} draft a monthly update from your live metrics, goals, and progress — highlights, the
-                honest challenges, what&apos;s next, and specific asks. Ready to download and send.
+                honest challenges, what&apos;s next, and specific asks. Then edit it, add a photo, and copy it as an
+                email ready to send.
               </p>
             </div>
             <Button size="sm" onClick={onGenerate} disabled={generating}>
@@ -1107,6 +1305,12 @@ function InvestorBody({ update }: { update: InvestorUpdate }) {
   const c = update.content;
   return (
     <div className="mt-5 space-y-6">
+      {c.image_url && (
+        <div className="overflow-hidden rounded-2xl border border-border bg-muted">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={c.image_url} alt="" className="aspect-[16/9] w-full object-cover" />
+        </div>
+      )}
       {c.tldr && (
         <div className="rounded-2xl border border-sky-200/70 bg-gradient-to-b from-sky-50/70 to-transparent p-4">
           <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-sky-700">The short version</p>
@@ -1191,6 +1395,241 @@ function InvestorList({
         <p className="text-[12.5px] text-muted-foreground">{empty}</p>
       )}
     </div>
+  );
+}
+
+/* --------------------------- investor editor ---------------------------- */
+
+function InvestorEditor({
+  draft,
+  onChange,
+}: {
+  draft: InvestorUpdateContent;
+  onChange: (next: InvestorUpdateContent) => void;
+}) {
+  const set = (partial: Partial<InvestorUpdateContent>) => onChange({ ...draft, ...partial });
+  return (
+    <div className="mt-5 space-y-6">
+      <EditGroup label="Period">
+        <Input value={draft.period} onChange={(e) => set({ period: e.target.value })} placeholder="e.g. August 2026" />
+      </EditGroup>
+      <EditGroup label="Hero image" hint="Optional — shown at the top of the update and in the email.">
+        <ImageSlot
+          label="hero image"
+          value={draft.image_url}
+          onChange={(url) => set({ image_url: url ?? undefined })}
+        />
+      </EditGroup>
+      <EditGroup label="The short version (TL;DR)">
+        <Textarea
+          value={draft.tldr}
+          onChange={(e) => set({ tldr: e.target.value })}
+          className="min-h-[84px]"
+          placeholder="Two or three sentences an investor could skim in ten seconds."
+        />
+      </EditGroup>
+      <ListEditor
+        label="Highlights"
+        items={draft.highlights}
+        onChange={(v) => set({ highlights: v })}
+        placeholder="A concrete win or milestone this period."
+      />
+      <MetricsEditor metrics={draft.metrics} onChange={(v) => set({ metrics: v })} />
+      <ListEditor
+        label="Challenges"
+        items={draft.lowlights}
+        onChange={(v) => set({ lowlights: v })}
+        placeholder="An honest risk, blocker, or miss."
+      />
+      <ListEditor
+        label="What's next"
+        items={draft.whats_next}
+        onChange={(v) => set({ whats_next: v })}
+        placeholder="A priority or plan for next period."
+      />
+      <ListEditor
+        label="The ask"
+        items={draft.asks}
+        onChange={(v) => set({ asks: v })}
+        placeholder="A specific ask — an intro, a hire, advice, capital."
+      />
+      <EditGroup label="Closing note">
+        <Textarea
+          value={draft.closing}
+          onChange={(e) => set({ closing: e.target.value })}
+          className="min-h-[70px]"
+          placeholder="A brief, warm sign-off (optional)."
+        />
+      </EditGroup>
+    </div>
+  );
+}
+
+function EditGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {hint && <p className="text-[11.5px] text-muted-foreground">{hint}</p>}
+      {children}
+    </div>
+  );
+}
+
+function ListEditor({
+  label,
+  items,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  items: string[];
+  onChange: (items: string[]) => void;
+  placeholder: string;
+}) {
+  const setAt = (i: number, v: string) => onChange(items.map((it, j) => (j === i ? v : it)));
+  const removeAt = (i: number) => onChange(items.filter((_, j) => j !== i));
+  const add = () => onChange([...items, ""]);
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= items.length) return;
+    const arr = items.slice();
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    onChange(arr);
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label>{label}</Label>
+        <AddBtn onClick={add} />
+      </div>
+      {items.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[12px] text-muted-foreground">
+          Nothing here yet.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {items.map((it, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <Textarea
+                value={it}
+                onChange={(e) => setAt(i, e.target.value)}
+                placeholder={placeholder}
+                className="min-h-[44px] flex-1"
+              />
+              <div className="flex flex-col">
+                <EditIconBtn label="Move up" disabled={i === 0} onClick={() => move(i, -1)}>
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </EditIconBtn>
+                <EditIconBtn label="Move down" disabled={i === items.length - 1} onClick={() => move(i, 1)}>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </EditIconBtn>
+                <EditIconBtn label="Remove" danger onClick={() => removeAt(i)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </EditIconBtn>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MetricsEditor({
+  metrics,
+  onChange,
+}: {
+  metrics: InvestorMetric[];
+  onChange: (metrics: InvestorMetric[]) => void;
+}) {
+  const setAt = (i: number, p: Partial<InvestorMetric>) =>
+    onChange(metrics.map((m, j) => (j === i ? { ...m, ...p } : m)));
+  const removeAt = (i: number) => onChange(metrics.filter((_, j) => j !== i));
+  const add = () => onChange([...metrics, { label: "", value: "" }]);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <Label>Metrics</Label>
+        <AddBtn onClick={add} />
+      </div>
+      {metrics.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[12px] text-muted-foreground">
+          No metrics yet.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {metrics.map((m, i) => (
+            <div key={i} className="space-y-2 rounded-lg border border-border p-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-muted-foreground">Metric {i + 1}</span>
+                <EditIconBtn label="Remove metric" danger onClick={() => removeAt(i)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </EditIconBtn>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  value={m.label}
+                  onChange={(e) => setAt(i, { label: e.target.value })}
+                  placeholder="Label (e.g. MRR)"
+                />
+                <Input
+                  value={m.value}
+                  onChange={(e) => setAt(i, { value: e.target.value })}
+                  placeholder="Value (e.g. $12k)"
+                />
+              </div>
+              <Input
+                value={m.note ?? ""}
+                onChange={(e) => setAt(i, { note: e.target.value || undefined })}
+                placeholder="Note (optional, e.g. +18% MoM)"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AddBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-primary transition hover:bg-primary/10"
+    >
+      <Plus className="h-3.5 w-3.5" /> Add
+    </button>
+  );
+}
+
+function EditIconBtn({
+  label,
+  onClick,
+  disabled,
+  danger,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className={cn(
+        "rounded-md p-1 text-muted-foreground transition hover:bg-accent disabled:pointer-events-none disabled:opacity-30",
+        danger && "hover:text-red-600",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

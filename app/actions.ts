@@ -85,6 +85,7 @@ import {
   setGoalStatus,
   startNewExecutiveChat,
   togglePinMemory,
+  updateInvestorUpdate,
 } from "@/lib/agents/executive";
 import { countAttention } from "@/lib/executive/nudges";
 import {
@@ -125,6 +126,7 @@ import type {
   GoalMetric,
   GoalStatus,
   InvestorUpdate,
+  InvestorUpdateContent,
   MemoryKind,
   OnboardingInput,
   Order,
@@ -645,6 +647,18 @@ export async function generateInvestorUpdateAction(): Promise<{
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return generateInvestorUpdate(ws);
+}
+
+/** Save founder edits to an investor update (content + optional hero image). */
+export async function updateInvestorUpdateAction(
+  id: string,
+  content: InvestorUpdateContent,
+): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return updateInvestorUpdate(ws, id, content);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */
