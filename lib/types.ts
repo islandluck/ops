@@ -745,6 +745,41 @@ export interface ExecNudge {
   href?: string | null;
 }
 
+/* --------------------------- investor updates ---------------------------- */
+
+/** A single metric line in an investor update. */
+export interface InvestorMetric {
+  label: string;
+  value: string;
+  note?: string;
+}
+
+/** The structured content of a monthly investor / stakeholder update. */
+export interface InvestorUpdateContent {
+  /** The period the update covers, e.g. "August 2026". */
+  period: string;
+  /** 2–3 sentence headline summary. */
+  tldr: string;
+  /** Concrete wins / progress this period. */
+  highlights: string[];
+  /** The numbers that matter, framed for investors. */
+  metrics: InvestorMetric[];
+  /** Honest challenges / risks (investors value candor). */
+  lowlights: string[];
+  /** The plan for next period. */
+  whats_next: string[];
+  /** Specific asks — intros, hires, advice, capital. */
+  asks: string[];
+  /** Optional closing note. */
+  closing: string;
+}
+
+export interface InvestorUpdate {
+  id: string;
+  content: InvestorUpdateContent;
+  created_at: string;
+}
+
 /** Everything the Executive Office page loads. */
 export interface ExecutiveBundle {
   agentName: string;
@@ -756,4 +791,6 @@ export interface ExecutiveBundle {
   nudges: ExecNudge[];
   /** Recent briefs, newest first (for the archive + the current view). */
   briefs: ExecBrief[];
+  /** Recent investor updates, newest first. */
+  investorUpdates: InvestorUpdate[];
 }

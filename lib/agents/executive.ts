@@ -10,6 +10,7 @@ import {
   executiveBriefs,
   executiveMemory,
   executiveMessages,
+  investorUpdates,
   pages,
   posts,
   projects,
@@ -18,7 +19,7 @@ import {
 import { getPlanningContext } from "@/lib/db/queries";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
-import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive";
+import { executiveReply, generateBrief, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
@@ -35,6 +36,8 @@ import type {
   GoalHorizon,
   GoalMetric,
   GoalStatus,
+  InvestorUpdate,
+  InvestorUpdateContent,
   MemoryKind,
 } from "@/lib/types";
 
@@ -698,10 +701,123 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
   return { generated };
 }
 
+/* -------------------------- investor updates ---------------------------- */
+
+function monthLabel(): string {
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date());
+}
+
+type InvestorRow = typeof investorUpdates.$inferSelect;
+
+function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
+  const c = (row.content ?? {}) as Partial<InvestorUpdateContent>;
+  return {
+    id: row.id,
+    created_at: iso(row.created_at),
+    content: {
+      period: c.period ?? "",
+      tldr: c.tldr ?? "",
+      highlights: c.highlights ?? [],
+      metrics: c.metrics ?? [],
+      lowlights: c.lowlights ?? [],
+      whats_next: c.whats_next ?? [],
+      asks: c.asks ?? [],
+      closing: c.closing ?? "",
+    },
+  };
+}
+
+/** Investor-appropriate dossier — metrics, goals, and a month of progress.
+ *  Deliberately excludes internal ops (approvals, memory, task queues). */
+async function gatherInvestorDossier(workspaceId: string): Promise<{ dossier: string; companyName: string }> {
+  const { brief } = await getPlanningContext(workspaceId);
+  const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  const [kpis, mv, goals, taskRows, postRows, pageRows, activeProjects] = await Promise.all([
+    computeKpis(workspaceId),
+    computeMetricValues(workspaceId),
+    db
+      .select()
+      .from(companyGoals)
+      .where(and(eq(companyGoals.workspace_id, workspaceId), eq(companyGoals.status, "active"))),
+    db
+      .select({ title: tasks.title, status: tasks.status, archived: tasks.archived, updated_at: tasks.updated_at })
+      .from(tasks)
+      .where(eq(tasks.workspace_id, workspaceId)),
+    db.select({ title: posts.title, status: posts.status }).from(posts).where(eq(posts.workspace_id, workspaceId)),
+    db.select({ title: pages.title, status: pages.status }).from(pages).where(eq(pages.workspace_id, workspaceId)),
+    db
+      .select({ title: projects.title, kind: projects.kind })
+      .from(projects)
+      .where(and(eq(projects.workspace_id, workspaceId), eq(projects.status, "active"))),
+  ]);
+
+  const gl = goalLines(goals, mv);
+  const shipped = taskRows
+    .filter((t) => t.status === "done" && !t.archived && new Date(t.updated_at).getTime() >= monthAgo)
+    .map((t) => t.title)
+    .slice(0, 25);
+  const contentLive = [
+    ...postRows.filter((p) => p.status === "distributed").map((p) => p.title),
+    ...pageRows.filter((p) => p.status === "published").map((p) => p.title),
+  ].slice(0, 20);
+
+  const lines = [
+    `COMPANY: ${brief.company_name || "the company"}. ${[brief.business_description, brief.core_offer].filter(Boolean).join(" ")}`.trim(),
+    brief.ideal_customer_profile ? `Market / customers: ${brief.ideal_customer_profile}` : "",
+    "",
+    "METRICS (current):",
+    ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),
+    "",
+    "GOALS / FOCUS:",
+    ...(gl.focus.length || gl.ongoing.length ? [...gl.focus, ...gl.ongoing] : ["- None set."]),
+    "",
+    "PROGRESS — SHIPPED (last 30 days):",
+    ...(shipped.length ? shipped.map((t) => `- ${t}`) : ["- Nothing formally completed in the last 30 days."]),
+    "",
+    "CONTENT / MARKET PRESENCE:",
+    ...(contentLive.length ? contentLive.map((t) => `- ${t}`) : ["- None live yet."]),
+    "",
+    "INITIATIVES UNDERWAY:",
+    ...(activeProjects.length
+      ? activeProjects.map((p) => `- ${p.kind === "growth" ? "Growth campaign" : "Project"}: ${p.title}`)
+      : ["- None active."]),
+  ];
+  return { dossier: lines.join("\n"), companyName: brief.company_name };
+}
+
+/** Generate + store a monthly investor update (on-demand only). */
+export async function generateInvestorUpdate(
+  workspaceId: string,
+): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
+  const period = monthLabel();
+  const { dossier, companyName } = await gatherInvestorDossier(workspaceId);
+  let content;
+  try {
+    content = await writeInvestorUpdate(dossier, companyName, period);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't generate the update." };
+  }
+  const id = uid();
+  const now = new Date();
+  await db.insert(investorUpdates).values({ id, workspace_id: workspaceId, content, created_at: now });
+  return { ok: true, update: { id, content, created_at: iso(now) } };
+}
+
+export async function listInvestorUpdates(workspaceId: string, limit = 12): Promise<InvestorUpdate[]> {
+  const rows = await db
+    .select()
+    .from(investorUpdates)
+    .where(eq(investorUpdates.workspace_id, workspaceId))
+    .orderBy(desc(investorUpdates.created_at))
+    .limit(limit);
+  return rows.map(toInvestorUpdate);
+}
+
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -727,6 +843,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     computeNudges(workspaceId),
     listBriefs(workspaceId, 30),
     computeMetricValues(workspaceId),
+    listInvestorUpdates(workspaceId, 12),
   ]);
 
   return {
@@ -737,6 +854,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     kpis,
     nudges,
     briefs,
+    investorUpdates: invUpdates,
   };
 }
 

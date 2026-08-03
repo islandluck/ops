@@ -79,6 +79,7 @@ import {
   deleteMemory,
   dismissBriefSuggestion,
   generateDailyBrief,
+  generateInvestorUpdate,
   getExecutiveBundle,
   sendExecutiveMessage,
   setGoalStatus,
@@ -123,6 +124,7 @@ import type {
   GoalHorizon,
   GoalMetric,
   GoalStatus,
+  InvestorUpdate,
   MemoryKind,
   OnboardingInput,
   Order,
@@ -630,6 +632,19 @@ export async function getExecutiveAttentionAction(): Promise<number> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return 0;
   return countAttention(ws);
+}
+
+/** Generate a monthly investor / stakeholder update (on-demand). */
+export async function generateInvestorUpdateAction(): Promise<{
+  ok: boolean;
+  update?: InvestorUpdate;
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return generateInvestorUpdate(ws);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */

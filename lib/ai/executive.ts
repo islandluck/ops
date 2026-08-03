@@ -2,7 +2,14 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { BriefKind, BriefSuggestion, BriefSuggestionKind, Category, ExecBriefContent } from "@/lib/types";
+import type {
+  BriefKind,
+  BriefSuggestion,
+  BriefSuggestionKind,
+  Category,
+  ExecBriefContent,
+  InvestorUpdateContent,
+} from "@/lib/types";
 
 const CATEGORIES: Category[] = ["growth", "admin", "content", "research", "finance"];
 const SUGGESTION_KINDS: BriefSuggestionKind[] = ["project", "campaign", "task"];
@@ -194,5 +201,77 @@ export async function generateBrief(
     next: strArray(raw.next),
     insights,
     suggestions,
+  };
+}
+
+/* --------------------------- investor update ---------------------------- */
+
+/**
+ * Write a monthly investor update from the data dossier — outward-facing, honest,
+ * and specific, with a clear ask. Grounded: it must not invent metrics, customers,
+ * revenue, or outcomes, and must not expose internal ops.
+ */
+export async function writeInvestorUpdate(
+  dossier: string,
+  companyName: string,
+  period: string,
+): Promise<InvestorUpdateContent> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = new Anthropic({ apiKey, maxRetries: 2 });
+
+  const system = [
+    `You are writing a monthly INVESTOR UPDATE for ${companyName || "the company"}, covering ${period}.`,
+    "Audience: the founder's investors and close advisors (outward-facing). Voice: how the best founders write — honest, confident, concise, specific. No hype, no filler, no jargon-as-smokescreen.",
+    "Investors value CANDOR — include the real challenges and risks, not just wins; that's what builds trust.",
+    "Ground EVERYTHING in the DATA dossier — never invent metrics, customers, revenue, partnerships, or outcomes. If the company is pre-revenue or very early, state exactly where it stands; do not inflate. Do NOT expose internal operations (task queues, agent memory, tooling) — translate the work into what an investor actually cares about.",
+    "",
+    "Produce:",
+    "- tldr: 2–3 sentences — the headline of the month.",
+    "- highlights: concrete wins / progress this period (specific, not vague).",
+    "- metrics: the numbers that matter to an investor — each {label, value, note}. Pull ONLY real numbers from the data and frame them (direction, growth, context). If a number is zero or early, present it honestly. Return an empty array if there truly are none.",
+    "- lowlights: honest challenges, blockers, or risks this month. Never fabricate — but don't hide the hard parts either.",
+    "- whats_next: the plan and priorities for next period, tied to the company's goals.",
+    "- asks: 2–3 SPECIFIC, easy-to-act-on asks appropriate to their stage — intros (to whom/what kind), a hire (which role), advice (on what), or fundraising status. If unsure, propose asks their business would genuinely benefit from.",
+    "- closing: one warm, brief closing line.",
+    "",
+    'Respond with ONLY this JSON (no markdown, no code fences): {"tldr": string, "highlights": string[], "metrics": [{"label": string, "value": string, "note": string}], "lowlights": string[], "whats_next": string[], "asks": string[], "closing": string}',
+  ].join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2500,
+    system,
+    messages: [{ role: "user", content: `Data dossier for ${period}:\n\n${dossier}\n\nWrite the investor update now.` }],
+  });
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(stripFences(text)) as Record<string, unknown>;
+  } catch {
+    throw new Error("The investor update came back unreadable. Please try again.");
+  }
+
+  const metrics = Array.isArray(raw.metrics)
+    ? (raw.metrics as Record<string, unknown>[])
+        .map((m) => ({
+          label: typeof m.label === "string" ? m.label.trim().slice(0, 80) : "",
+          value: typeof m.value === "string" ? m.value.trim().slice(0, 80) : "",
+          note: typeof m.note === "string" ? m.note.trim().slice(0, 200) : "",
+        }))
+        .filter((m) => m.label && m.value)
+        .slice(0, 8)
+    : [];
+
+  return {
+    period,
+    tldr: typeof raw.tldr === "string" ? raw.tldr.trim().slice(0, 700) : "",
+    highlights: strArray(raw.highlights, 8),
+    metrics,
+    lowlights: strArray(raw.lowlights, 6),
+    whats_next: strArray(raw.whats_next, 8),
+    asks: strArray(raw.asks, 5),
+    closing: typeof raw.closing === "string" ? raw.closing.trim().slice(0, 400) : "",
   };
 }

@@ -36,6 +36,7 @@ import type {
   GoalHorizon,
   GoalMetric,
   GoalStatus,
+  InvestorUpdateContent,
   MemoryKind,
   PackagedVariant,
   PageContent,
@@ -523,6 +524,19 @@ export const executiveMemory = pgTable("executive_memory", {
   pinned: boolean("pinned").notNull().default(false),
   created_at: createdAt,
   updated_at: updatedAt,
+});
+
+/** A generated monthly investor / stakeholder update (outward-facing). */
+export const investorUpdates = pgTable("investor_updates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  content: jsonb("content")
+    .$type<InvestorUpdateContent>()
+    .notNull()
+    .default({ period: "", tldr: "", highlights: [], metrics: [], lowlights: [], whats_next: [], asks: [], closing: "" }),
+  created_at: createdAt,
 });
 
 /** A generated daily executive brief (synthesized snapshot of the business). */

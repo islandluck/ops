@@ -14,6 +14,7 @@ import {
   Download,
   FileText,
   FolderKanban,
+  Handshake,
   Info,
   Lightbulb,
   ListChecks,
@@ -46,6 +47,7 @@ import {
   deleteMemoryAction,
   dismissBriefSuggestionAction,
   generateBriefAction,
+  generateInvestorUpdateAction,
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
   setGoalStatusAction,
@@ -64,6 +66,7 @@ import type {
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
+  InvestorUpdate,
 } from "@/lib/types";
 
 const STARTERS = [
@@ -95,12 +98,15 @@ export default function ExecutivePage() {
   const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<"chat" | "brief">("chat");
+  const [view, setView] = useState<"chat" | "brief" | "investor">("chat");
   const [briefs, setBriefs] = useState<ExecBrief[]>([]);
   const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
   const [cadence, setCadence] = useState<BriefKind>("daily");
   const [generating, setGenerating] = useState(false);
   const [busySug, setBusySug] = useState<string | null>(null);
+  const [updates, setUpdates] = useState<InvestorUpdate[]>([]);
+  const [selectedUpdateId, setSelectedUpdateId] = useState<string | null>(null);
+  const [genUpdate, setGenUpdate] = useState(false);
   const { reloadWorkspace } = useStore();
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -136,9 +142,20 @@ export default function ExecutivePage() {
       setBundle(b);
       setMessages(b.messages);
       setBriefs(b.briefs);
+      setUpdates(b.investorUpdates);
     }
     setLoading(false);
   }, []);
+
+  const generateUpdate = useCallback(async () => {
+    setGenUpdate(true);
+    const res = await generateInvestorUpdateAction();
+    setGenUpdate(false);
+    if (res.ok && res.update) {
+      await loadBundle();
+      setSelectedUpdateId(res.update.id);
+    }
+  }, [loadBundle]);
 
   const generateBrief = useCallback(async () => {
     setGenerating(true);
@@ -222,6 +239,7 @@ export default function ExecutivePage() {
   const agentName = bundle?.agentName ?? "Executive Agent";
   const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
   const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;
+  const shownUpdate = updates.find((u) => u.id === selectedUpdateId) ?? updates[0] ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -249,24 +267,24 @@ export default function ExecutivePage() {
               </button>
             )}
             <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-[12.5px] font-medium">
-              <button
-                onClick={() => setView("chat")}
-                className={cn(
-                  "rounded-md px-3 py-1 transition",
-                  view === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                Conversation
-              </button>
-              <button
-                onClick={() => setView("brief")}
-                className={cn(
-                  "rounded-md px-3 py-1 transition",
-                  view === "brief" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                Daily brief
-              </button>
+              {(
+                [
+                  ["chat", "Conversation"],
+                  ["brief", "Briefs"],
+                  ["investor", "Investor update"],
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={cn(
+                    "rounded-md px-3 py-1 transition",
+                    view === v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -373,7 +391,7 @@ export default function ExecutivePage() {
           </div>
         </div>
         </>
-        ) : (
+        ) : view === "brief" ? (
           <BriefView
             brief={shownBrief}
             briefs={cadenceBriefs}
@@ -390,6 +408,16 @@ export default function ExecutivePage() {
             onApprove={(sug) => shownBrief && approveSug(shownBrief.id, sug)}
             onDismiss={(sugId) => shownBrief && dismissSug(shownBrief.id, sugId)}
             busySug={busySug}
+          />
+        ) : (
+          <InvestorView
+            update={shownUpdate}
+            updates={updates}
+            selectedId={shownUpdate?.id ?? null}
+            onSelect={setSelectedUpdateId}
+            generating={genUpdate}
+            onGenerate={generateUpdate}
+            agentName={agentName}
           />
         )}
       </div>
@@ -566,8 +594,8 @@ function downloadBlob(filename: string, content: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Print a brief to PDF via a hidden iframe (the print dialog's "Save as PDF"). */
-function printBriefPdf(bodyHtml: string) {
+/** Print a document to PDF via a hidden iframe (the print dialog's "Save as PDF"). */
+function printBriefPdf(bodyHtml: string, docTitle = "Daily Brief") {
   const iframe = document.createElement("iframe");
   Object.assign(iframe.style, { position: "fixed", right: "0", bottom: "0", width: "0", height: "0", border: "0" });
   document.body.appendChild(iframe);
@@ -575,7 +603,7 @@ function printBriefPdf(bodyHtml: string) {
   if (!doc) return;
   doc.open();
   doc.write(
-    `<!doctype html><html><head><meta charset="utf-8"><title>Daily Brief</title><style>` +
+    `<!doctype html><html><head><meta charset="utf-8"><title>${docTitle}</title><style>` +
       `body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#0f172a;max-width:680px;margin:32px auto;padding:0 24px;line-height:1.6}` +
       `h1{font-size:24px;margin:0 0 4px}h2{font-size:14px;margin:1.7em 0 .4em;text-transform:uppercase;letter-spacing:.05em;color:#64748b}` +
       `h3{font-size:15px;margin:1.1em 0 .2em}ul{padding-left:1.3em}li{margin:.2em 0}` +
@@ -884,6 +912,255 @@ function SuggestionCard({
 }
 
 function BriefList({
+  title,
+  icon,
+  items,
+  accent,
+  empty,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: string[];
+  accent: string;
+  empty: string;
+}) {
+  return (
+    <div>
+      <p className={cn("mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider", accent)}>
+        {icon} {title}
+      </p>
+      {items.length ? (
+        <ul className="space-y-1.5">
+          {items.map((it, i) => (
+            <li key={i} className="flex items-start gap-2 text-[13.5px] leading-relaxed">
+              <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+              <span>{it}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[12.5px] text-muted-foreground">{empty}</p>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------- investor update ---------------------------- */
+
+/** Serialize an investor update to Markdown (the canonical export). */
+function investorUpdateToMarkdown(u: InvestorUpdate): string {
+  const c = u.content;
+  const out: string[] = [`# Investor Update — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
+  if (c.tldr) out.push(c.tldr, "");
+  const bullets = (title: string, items: string[]) => {
+    if (items.length) {
+      out.push(`## ${title}`);
+      items.forEach((i) => out.push(`- ${i}`));
+      out.push("");
+    }
+  };
+  bullets("Highlights", c.highlights);
+  if (c.metrics.length) {
+    out.push("## Metrics");
+    c.metrics.forEach((m) => out.push(`- **${m.label}:** ${m.value}${m.note ? ` — ${m.note}` : ""}`));
+    out.push("");
+  }
+  bullets("Challenges", c.lowlights);
+  bullets("What's next", c.whats_next);
+  bullets("The ask", c.asks);
+  if (c.closing) out.push("---", "", c.closing, "");
+  return out.join("\n").trim() + "\n";
+}
+
+function downloadInvestorUpdate(u: InvestorUpdate, fmt: "md" | "txt" | "doc" | "pdf") {
+  const md = investorUpdateToMarkdown(u);
+  const slug = (u.content.period || "investor-update").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const base = `investor-update-${slug}`;
+  if (fmt === "md") downloadBlob(`${base}.md`, md, "text/markdown");
+  else if (fmt === "txt") downloadBlob(`${base}.txt`, markdownToPlainText(md), "text/plain");
+  else if (fmt === "doc")
+    downloadBlob(
+      `${base}.doc`,
+      `<!doctype html><html><head><meta charset="utf-8"></head><body>${markdownToHtml(md)}</body></html>`,
+      "application/msword",
+    );
+  else printBriefPdf(markdownToHtml(md), `Investor Update — ${u.content.period}`);
+}
+
+function InvestorView({
+  update,
+  updates,
+  selectedId,
+  onSelect,
+  generating,
+  onGenerate,
+  agentName,
+}: {
+  update: InvestorUpdate | null;
+  updates: InvestorUpdate[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  generating: boolean;
+  onGenerate: () => void;
+  agentName: string;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+      <div className="mx-auto max-w-2xl">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[18px] font-semibold">Investor Update</h2>
+            <p className="text-[12px] text-muted-foreground">
+              {update ? `${update.content.period} · prepared ${fmtBriefDate(update.created_at)}` : "Not generated yet"}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {updates.length > 1 && (
+              <select
+                value={selectedId ?? updates[0]?.id}
+                onChange={(e) => onSelect(e.target.value)}
+                className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px] font-medium outline-none"
+                title="Update archive"
+              >
+                {updates.map((u, i) => (
+                  <option key={u.id} value={u.id}>
+                    {i === 0 ? "Latest · " : ""}
+                    {u.content.period || fmtBriefDate(u.created_at)}
+                  </option>
+                ))}
+              </select>
+            )}
+            {update && (
+              <Popover
+                align="end"
+                className="inline-flex"
+                trigger={
+                  <span className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 text-[12.5px] font-medium transition-colors hover:bg-accent">
+                    <Download className="h-4 w-4" />
+                    <span className="hidden sm:inline">Download</span>
+                  </span>
+                }
+              >
+                {(close) => (
+                  <div className="min-w-[150px]">
+                    {(
+                      [
+                        ["md", "Markdown (.md)"],
+                        ["txt", "Text (.txt)"],
+                        ["doc", "Word (.doc)"],
+                        ["pdf", "PDF"],
+                      ] as const
+                    ).map(([fmt, label]) => (
+                      <button
+                        key={fmt}
+                        onClick={() => {
+                          downloadInvestorUpdate(update, fmt);
+                          close();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-accent"
+                      >
+                        <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Popover>
+            )}
+            <Button size="sm" variant={update ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {generating ? "Drafting…" : update ? "Regenerate" : "Generate update"}
+            </Button>
+          </div>
+        </div>
+
+        {generating && !update ? (
+          <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <p className="text-[13px]">{agentName} is drafting your investor update…</p>
+          </div>
+        ) : update ? (
+          <InvestorBody update={update} />
+        ) : (
+          <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border p-10 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white">
+              <Handshake className="h-6 w-6" />
+            </span>
+            <div>
+              <h3 className="text-[15px] font-semibold">No investor update yet</h3>
+              <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
+                Have {agentName} draft a monthly update from your live metrics, goals, and progress — highlights, the
+                honest challenges, what&apos;s next, and specific asks. Ready to download and send.
+              </p>
+            </div>
+            <Button size="sm" onClick={onGenerate} disabled={generating}>
+              <Handshake className="h-4 w-4" /> Generate this month&apos;s update
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function InvestorBody({ update }: { update: InvestorUpdate }) {
+  const c = update.content;
+  return (
+    <div className="mt-5 space-y-6">
+      {c.tldr && (
+        <div className="rounded-2xl border border-sky-200/70 bg-gradient-to-b from-sky-50/70 to-transparent p-4">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-sky-700">The short version</p>
+          <p className="text-balance text-[15px] font-medium leading-relaxed text-foreground/90">{c.tldr}</p>
+        </div>
+      )}
+
+      {c.metrics.length > 0 && (
+        <div>
+          <p className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-indigo-600">
+            <TrendingUp className="h-3.5 w-3.5" /> Metrics
+          </p>
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {c.metrics.map((m, i) => (
+              <div key={i} className="rounded-xl border border-border bg-card p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{m.label}</p>
+                <p className="mt-0.5 text-[19px] font-semibold tabular-nums leading-tight">{m.value}</p>
+                {m.note && <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{m.note}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <InvestorList title="Highlights" icon={<Sparkles className="h-3.5 w-3.5" />} items={c.highlights} accent="text-emerald-600" empty="No highlights captured." />
+      <InvestorList title="Challenges" icon={<AlertTriangle className="h-3.5 w-3.5" />} items={c.lowlights} accent="text-amber-600" empty="No challenges flagged." />
+      <InvestorList title="What's next" icon={<ArrowRight className="h-3.5 w-3.5" />} items={c.whats_next} accent="text-sky-600" empty="Nothing queued." />
+
+      {c.asks.length > 0 && (
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4">
+          <p className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-indigo-700">
+            <Handshake className="h-3.5 w-3.5" /> The ask
+          </p>
+          <ul className="space-y-1.5">
+            {c.asks.map((a, i) => (
+              <li key={i} className="flex items-start gap-2 text-[13.5px] font-medium leading-relaxed">
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+                <span>{a}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {c.closing && (
+        <p className="border-t border-border pt-4 text-[13.5px] italic leading-relaxed text-muted-foreground">
+          {c.closing}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function InvestorList({
   title,
   icon,
   items,
