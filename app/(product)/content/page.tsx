@@ -224,7 +224,7 @@ function NewPostDrawer({ onClose, onCreated }: { onClose: () => void; onCreated:
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             className="min-h-[90px]"
-            placeholder="e.g. Why chemical-looping beats electrolysis for on-site ammonia — the economics nobody talks about."
+            placeholder="e.g. The biggest mistake people make with [your topic] — and how to avoid it."
           />
           <p className="text-[11.5px] text-muted-foreground">
             Your writer drafts a full longform post in your voice. You can edit every word next.
@@ -235,7 +235,7 @@ function NewPostDrawer({ onClose, onCreated }: { onClose: () => void; onCreated:
           <Input
             value={angle}
             onChange={(e) => setAngle(e.target.value)}
-            placeholder="e.g. Speak to plant engineers; end with a concrete pilot cost."
+            placeholder="e.g. Write for beginners; keep it practical and end with a clear takeaway."
           />
         </div>
         {error && <p className="text-[12.5px] text-destructive">{error}</p>}
