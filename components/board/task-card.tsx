@@ -1,18 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   CalendarClock,
   CheckCircle2,
   Layers,
   Loader2,
   MessageSquareDashed,
+  Trash2,
 } from "lucide-react";
 import { CategoryIcon } from "@/components/badges";
-import { Dot } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import { CATEGORY_META, RISK_META } from "@/lib/constants";
 import { dueLabel } from "@/lib/format";
+import { useStore } from "@/lib/store";
 import type { Task } from "@/lib/types";
 
 const DUE_TONE: Record<string, string> = {
@@ -39,6 +43,10 @@ export function TaskCard({
   onDragEnd: () => void;
   dragging?: boolean;
 }) {
+  const { deleteTask, archiveTask, unarchiveTask, filters } = useStore();
+  const [confirmDel, setConfirmDel] = useState(false);
+  const archivedView = filters.showArchived;
+
   const cat = CATEGORY_META[task.category];
   const due = dueLabel(task.due_at);
   const isReady = task.status === "ready";
@@ -67,12 +75,66 @@ export function TaskCard({
       }}
       onDragEnd={onDragEnd}
       className={cn(
-        "card-interactive group cursor-pointer rounded-xl border bg-card p-3 text-left shadow-card outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+        "card-interactive group relative cursor-pointer rounded-xl border bg-card p-3 text-left shadow-card outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
         selected ? "border-primary/60 ring-2 ring-primary/30" : "border-border",
         isReady && !selected && "border-l-[3px] border-l-amber-400",
         dragging && "opacity-40",
       )}
     >
+      {/* Hover actions: archive / restore + delete */}
+      <div
+        className="absolute right-1 top-1 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-card p-0.5 opacity-0 shadow-sm transition group-hover:opacity-100 group-focus-within:opacity-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {archivedView ? (
+          <button
+            title="Restore to board"
+            onClick={() => unarchiveTask(task.id)}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ArchiveRestore className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button
+            title="Archive (hide from board)"
+            onClick={() => archiveTask(task.id)}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Archive className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          title="Delete"
+          onClick={() => setConfirmDel(true)}
+          className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {confirmDel && (
+        <div
+          className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-xl bg-card/95 p-3 text-center backdrop-blur-[1px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-[12px] font-medium text-foreground/80">Delete this task?</p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => deleteTask(task.id)}
+              className="inline-flex items-center gap-1 rounded-md bg-destructive px-2.5 py-1 text-[12px] font-semibold text-white transition hover:opacity-90"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </button>
+            <button
+              onClick={() => setConfirmDel(false)}
+              className="rounded-md px-2.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top row */}
       <div className="mb-2 flex items-center gap-2">
         <span className={cn("inline-flex items-center gap-1 text-[11px] font-medium", cat.text)}>

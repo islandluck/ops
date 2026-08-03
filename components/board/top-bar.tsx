@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  Archive,
   ArrowUpDown,
   LayoutGrid,
   ListFilter,
@@ -252,6 +253,21 @@ export function TopBar() {
           onChange={(v) => setFilters({ view: v })}
           className="hidden sm:inline-flex"
         />
+
+        {/* Archived toggle */}
+        <button
+          onClick={() => setFilters({ showArchived: !filters.showArchived })}
+          title={filters.showArchived ? "Back to active tasks" : "Show archived tasks"}
+          className={cn(
+            "inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors",
+            filters.showArchived
+              ? "border-primary/40 bg-primary/5 text-primary"
+              : "border-input bg-background text-foreground hover:bg-accent",
+          )}
+        >
+          <Archive className="h-4 w-4" />
+          <span className="hidden sm:inline">Archived</span>
+        </button>
 
         {/* Create */}
         <Button size="sm" onClick={() => setCreateOpen(true)}>

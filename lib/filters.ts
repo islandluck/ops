@@ -9,6 +9,14 @@ export function matchesFilters(
   f: BoardFilters,
   now: number,
 ): boolean {
+  // Archived tasks are hidden from the board. The "Archived" view flips this to
+  // show only archived tasks (for review / restore).
+  if (f.showArchived) {
+    if (!task.archived) return false;
+  } else if (task.archived) {
+    return false;
+  }
+
   if (f.categories.length && !f.categories.includes(task.category)) return false;
   if (f.risks.length && !f.risks.includes(task.risk_level)) return false;
   if (f.agentId && task.agent_id !== f.agentId) return false;
@@ -108,6 +116,7 @@ export function categoryCounts(tasks: Task[]): Record<Category, CategoryCount> {
     finance: { active: 0, ready: 0, done: 0, total: 0 },
   };
   for (const t of tasks) {
+    if (t.archived) continue;
     const c = base[t.category];
     c.total += 1;
     if (t.status === "done") c.done += 1;
@@ -118,5 +127,5 @@ export function categoryCounts(tasks: Task[]): Record<Category, CategoryCount> {
 }
 
 export function countReady(tasks: Task[]): number {
-  return tasks.filter((t) => t.status === "ready").length;
+  return tasks.filter((t) => t.status === "ready" && !t.archived).length;
 }

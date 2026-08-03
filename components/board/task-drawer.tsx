@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   CalendarClock,
   Check,
   CheckCircle2,
@@ -23,6 +25,7 @@ import {
   Search,
   Sparkles,
   Table2,
+  Trash2,
   Undo2,
   Upload,
   X,
@@ -109,6 +112,9 @@ export function TaskDrawer() {
     requestChanges,
     workTask,
     reject,
+    deleteTask,
+    archiveTask,
+    unarchiveTask,
     retry,
     snooze,
     scheduleTask,
@@ -224,6 +230,44 @@ export function TaskDrawer() {
               {task.title}
             </h2>
           </div>
+          <Popover
+            align="end"
+            className="inline-flex"
+            trigger={
+              <span
+                className="cursor-pointer rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="More actions"
+              >
+                <MoreHorizontal className="h-5 w-5" />
+              </span>
+            }
+          >
+            {(closeMenu) => (
+              <div className="min-w-[190px] space-y-0.5">
+                {task.archived ? (
+                  <MenuItem
+                    icon={ArchiveRestore}
+                    onClick={() => { unarchiveTask(task.id); selectTask(null); closeMenu(); }}
+                    title="Restore to board"
+                  />
+                ) : (
+                  <MenuItem
+                    icon={Archive}
+                    onClick={() => { archiveTask(task.id); closeMenu(); }}
+                    title="Archive"
+                    subtitle="Hide from the board, keep the record"
+                  />
+                )}
+                <button
+                  onClick={() => { deleteTask(task.id); closeMenu(); }}
+                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-destructive/10"
+                >
+                  <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  <span className="text-[13px] font-medium text-destructive">Delete task</span>
+                </button>
+              </div>
+            )}
+          </Popover>
           <button
             onClick={close}
             className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

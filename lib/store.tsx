@@ -65,6 +65,8 @@ export interface BoardFilters {
   sort: SortKey;
   view: "board" | "list";
   savedView: string | null;
+  /** When true, the board shows ONLY archived tasks (the archive view). */
+  showArchived: boolean;
 }
 
 export const DEFAULT_FILTERS: BoardFilters = {
@@ -77,6 +79,7 @@ export const DEFAULT_FILTERS: BoardFilters = {
   sort: "urgency",
   view: "board",
   savedView: null,
+  showArchived: false,
 };
 
 export interface Toast {
@@ -149,6 +152,14 @@ interface StoreContext {
   draftTask: (id: string) => void;
   workTask: (id: string) => Promise<void>;
   reject: (id: string, comment?: string) => void;
+  /** Delete a task entirely (removes it + its decisions/runs). */
+  deleteTask: (id: string) => void;
+  /** Archive a task — hidden from the board, kept for history. */
+  archiveTask: (id: string) => void;
+  /** Restore an archived task to the board. */
+  unarchiveTask: (id: string) => void;
+  /** Bulk-archive every done task (clear the Done column). */
+  archiveDone: () => void;
   snooze: (id: string) => void;
   /** Approve now, but auto-execute at `whenISO`. `label` is the time shown in
    *  the user's timezone (for toasts + the activity log). */
@@ -817,6 +828,54 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
     [patchState, updateTask, logEvent, pushToast],
   );
+
+  // Remove a task entirely (and its decisions/runs). State is client-authoritative,
+  // so the debounced bundle-save persists the deletion.
+  const deleteTask = useCallback(
+    (id: string) => {
+      patchState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => t.id !== id),
+        decisions: prev.decisions.filter((d) => d.task_id !== id),
+        runs: prev.runs.filter((r) => r.task_id !== id),
+      }));
+      setSelectedTaskId((cur) => (cur === id ? null : cur));
+      pushToast({ tone: "info", title: "Task deleted" });
+    },
+    [patchState, pushToast],
+  );
+
+  // Archive hides a task from the board (kept for history) to declutter columns.
+  const archiveTask = useCallback(
+    (id: string) => {
+      patchState((prev) => ({ ...prev, tasks: updateTask(prev, id, { archived: true }) }));
+      setSelectedTaskId((cur) => (cur === id ? null : cur));
+      pushToast({ tone: "info", title: "Task archived" });
+    },
+    [patchState, updateTask, pushToast],
+  );
+
+  const unarchiveTask = useCallback(
+    (id: string) => {
+      patchState((prev) => ({ ...prev, tasks: updateTask(prev, id, { archived: false }) }));
+      pushToast({ tone: "info", title: "Task restored" });
+    },
+    [patchState, updateTask, pushToast],
+  );
+
+  // Bulk-archive every done task — the one-click "clear the Done column".
+  const archiveDone = useCallback(() => {
+    const snap = latest.current;
+    const n = snap ? snap.tasks.filter((t) => t.status === "done" && !t.archived).length : 0;
+    patchState((prev) => ({
+      ...prev,
+      tasks: prev.tasks.map((t) => (t.status === "done" && !t.archived ? { ...t, archived: true } : t)),
+    }));
+    pushToast({
+      tone: n ? "success" : "info",
+      title: n ? `Archived ${n} done task${n === 1 ? "" : "s"}` : "No done tasks to archive",
+    });
+  }, [patchState, pushToast]);
 
   const snooze = useCallback(
     (id: string) => {
@@ -1535,6 +1594,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       draftTask,
       workTask,
       reject,
+      deleteTask,
+      archiveTask,
+      unarchiveTask,
+      archiveDone,
       snooze,
       scheduleTask,
       unscheduleTask,
@@ -1562,7 +1625,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
-      applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject, snooze,
+      applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject,
+      deleteTask, archiveTask, unarchiveTask, archiveDone, snooze,
       scheduleTask, unscheduleTask, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, runNotionTriage, sendToNotion, updateBrief, login, logout, enterDemo,

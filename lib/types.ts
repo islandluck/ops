@@ -251,6 +251,8 @@ export interface Task {
   /** Count surfaced on the card ("12 proposed actions"). */
   proposed_actions: number;
   impact_score: number; // 0..100, used for sorting
+  /** Hidden from the board when true (kept for history) — archived to declutter. */
+  archived?: boolean;
   created_at: string;
   updated_at: string;
   /** Denormalised for convenience in the prototype store. */

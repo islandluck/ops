@@ -1,9 +1,11 @@
 "use client";
 
+import { Archive } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Dot } from "@/components/ui/badge";
 import { STATUS_META } from "@/lib/constants";
 import { TaskCard } from "@/components/board/task-card";
+import { useStore } from "@/lib/store";
 import type { Task, TaskStatus } from "@/lib/types";
 
 export function BoardColumn({
@@ -30,6 +32,8 @@ export function BoardColumn({
   setOver: (status: TaskStatus | null) => void;
 }) {
   const meta = STATUS_META[status];
+  const { archiveDone, filters } = useStore();
+  const showArchiveAll = status === "done" && tasks.length > 0 && !filters.showArchived;
 
   return (
     <div className="flex h-full w-[298px] shrink-0 flex-col">
@@ -40,6 +44,16 @@ export function BoardColumn({
         <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-muted px-1.5 text-[11px] font-medium text-muted-foreground">
           {tasks.length}
         </span>
+        {showArchiveAll && (
+          <button
+            onClick={archiveDone}
+            title="Archive all done tasks"
+            className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Archive className="h-3 w-3" />
+            Archive all
+          </button>
+        )}
       </div>
 
       {/* Drop area */}

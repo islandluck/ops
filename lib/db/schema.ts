@@ -176,6 +176,9 @@ export const tasks = pgTable("tasks", {
   affected_systems: text("affected_systems").array().notNull().default([]),
   proposed_actions: integer("proposed_actions").notNull().default(0),
   impact_score: integer("impact_score").notNull().default(30),
+  /** Archived tasks are hidden from the board (kept for history) — used to clear
+   *  out done/handled tasks so columns don't pile up. */
+  archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
   updated_at: updatedAt,
 });

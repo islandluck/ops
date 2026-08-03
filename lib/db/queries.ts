@@ -272,6 +272,7 @@ async function readBundle(
     affected_systems: t.affected_systems,
     proposed_actions: t.proposed_actions,
     impact_score: t.impact_score,
+    archived: t.archived,
     created_at: iso(t.created_at),
     updated_at: iso(t.updated_at),
     assets: (assetsByTask.get(t.id) ?? []).map((a) => ({
@@ -478,6 +479,7 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
           affected_systems: t.affected_systems,
           proposed_actions: t.proposed_actions,
           impact_score: t.impact_score,
+          archived: t.archived ?? false,
           created_at: d(t.created_at) ?? new Date(),
           updated_at: new Date(),
         })),
