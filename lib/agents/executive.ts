@@ -16,7 +16,7 @@ import {
   tasks,
 } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
-import { computeKpis } from "@/lib/executive/kpis";
+import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
@@ -32,6 +32,8 @@ import type {
   ExecMemory,
   ExecMessage,
   ExecutiveBundle,
+  GoalHorizon,
+  GoalMetric,
   GoalStatus,
   MemoryKind,
 } from "@/lib/types";
@@ -49,6 +51,11 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const num = (v: unknown, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const MEMORY_KINDS: MemoryKind[] = ["fact", "preference", "decision", "insight"];
 const memKind = (v: unknown): MemoryKind => (MEMORY_KINDS.includes(v as MemoryKind) ? (v as MemoryKind) : "fact");
+const HORIZONS: GoalHorizon[] = ["month", "quarter", "ongoing"];
+const horizonOf = (v: unknown): GoalHorizon => (HORIZONS.includes(v as GoalHorizon) ? (v as GoalHorizon) : "ongoing");
+const GOAL_METRICS: GoalMetric[] = ["revenue", "followers"];
+const metricOf = (v: unknown): GoalMetric | null => (GOAL_METRICS.includes(v as GoalMetric) ? (v as GoalMetric) : null);
+const numOrNull = (v: unknown): number | null => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
 
 /* ------------------------------- mappers -------------------------------- */
 
@@ -71,23 +78,50 @@ const toMem = (r: MemRow): ExecMemory => ({
   pinned: r.pinned,
   created_at: iso(r.created_at),
 });
-const toGoal = (r: GoalRow): CompanyGoal => ({
+function goalProgress(r: GoalRow, mv: Record<GoalMetric, number> | null) {
+  if (!r.metric_key || r.target_number == null || !mv) return null;
+  const current = mv[r.metric_key] ?? 0;
+  const target = r.target_number;
+  const pct = target > 0 ? Math.max(0, Math.min(100, Math.round((current / target) * 100))) : 0;
+  return { current, target, pct };
+}
+
+const toGoal = (r: GoalRow, mv: Record<GoalMetric, number> | null = null): CompanyGoal => ({
   id: r.id,
   title: r.title,
   detail: r.detail,
   metric: r.metric,
   target: r.target,
   status: r.status,
+  horizon: r.horizon,
+  metric_key: r.metric_key,
+  target_number: r.target_number,
   created_at: iso(r.created_at),
   updated_at: iso(r.updated_at),
+  progress: goalProgress(r, mv),
 });
 
 /* --------------------------- context assembler --------------------------- */
 
+/** Split active goals into the time-boxed "north star" set and everything else,
+ *  each line carrying live progress where a metric is linked. */
+function goalLines(goals: GoalRow[], mv: Record<GoalMetric, number>): { focus: string[]; ongoing: string[] } {
+  const fmt = (g: GoalRow) => {
+    const p = goalProgress(g, mv);
+    const prog = p ? ` [progress ${p.current.toLocaleString()}/${p.target.toLocaleString()} = ${p.pct}%]` : "";
+    const hz = g.horizon === "month" ? " (this month)" : g.horizon === "quarter" ? " (this quarter)" : "";
+    return `- ${g.title}${hz}${g.target ? ` → ${g.target}` : ""}${prog}${g.detail ? `: ${g.detail}` : ""}`;
+  };
+  return {
+    focus: goals.filter((g) => g.horizon === "month" || g.horizon === "quarter").map(fmt),
+    ongoing: goals.filter((g) => g.horizon === "ongoing").map(fmt),
+  };
+}
+
 async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<string> {
   const { brief } = await getPlanningContext(workspaceId);
 
-  const [goals, memory, activeProjects, taskRows] = await Promise.all([
+  const [goals, memory, activeProjects, taskRows, mv] = await Promise.all([
     db
       .select()
       .from(companyGoals)
@@ -106,7 +140,9 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
       .select({ status: tasks.status, archived: tasks.archived })
       .from(tasks)
       .where(eq(tasks.workspace_id, workspaceId)),
+    computeMetricValues(workspaceId),
   ]);
+  const gl = goalLines(goals, mv);
 
   const readyCount = taskRows.filter((t) => t.status === "ready" && !t.archived).length;
   const workingCount = taskRows.filter((t) => t.status === "agent_working" && !t.archived).length;
@@ -122,10 +158,9 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "CURRENT KPIs:",
     ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),
     "",
-    "COMPANY GOALS (active):",
-    ...(goals.length
-      ? goals.map((g) => `- ${g.title}${g.target ? ` → target ${g.target}` : ""}${g.detail ? `: ${g.detail}` : ""}`)
-      : ["- (none set yet — help the founder set clear ones)"]),
+    "THIS MONTH'S FOCUS (the north star — everything should ladder up to this):",
+    ...(gl.focus.length ? gl.focus : ["- (none set — help the founder pick a clear focus for the month/quarter)"]),
+    ...(gl.ongoing.length ? ["", "OTHER ACTIVE GOALS:", ...gl.ongoing] : []),
     "",
     "WHAT'S HAPPENING NOW:",
     ...(activeProjects.length
@@ -138,6 +173,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "",
     "HOW YOU OPERATE:",
     "- Be a sharp, high-signal strategic partner: direct, warm, concise. Give real opinions and push back when the data warrants it. No corporate filler, no flattery.",
+    "- Keep everything laddered to THIS MONTH'S FOCUS. When the founder is deciding what to do, connect it to whether it moves the month's goal; if they're drifting off-pace, name it and propose the single highest-leverage next move. Help them set a clear monthly focus if none exists.",
     "- Keep replies tight — a few short paragraphs at most. Lead with the answer.",
     "- Use your tools proactively but sensibly: when the founder sets a goal or ambition, log_company_goal. When you learn something durable about the business, their strategy, or their preferences, remember it. When they decide to kick off an initiative, create_project (or create_growth_campaign for audience growth) — these become draft plans they approve, so it's safe to start them.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
@@ -154,14 +190,17 @@ function buildTools(workspaceId: string): ExecTool[] {
       definition: {
         name: "log_company_goal",
         description:
-          "Record a company-wide goal the founder wants to pursue. Use when they state a goal, target, or ambition worth tracking.",
+          "Record a company-wide goal the founder wants to pursue. Use when they state a goal, target, or ambition worth tracking. Set horizon to 'month' or 'quarter' for a time-boxed north star (which the daily brief + weekly review will cascade from), or 'ongoing'. If it maps to revenue or followers, set metric_key + target_number so it tracks live progress.",
         input_schema: {
           type: "object",
           properties: {
             title: { type: "string", description: "Short goal statement" },
             detail: { type: "string", description: "Any specifics or context" },
-            metric: { type: "string", description: "What to measure, e.g. MRR, followers, signups" },
-            target: { type: "string", description: "The target, e.g. $10k, +100/week, 5,000" },
+            metric: { type: "string", description: "What to measure, e.g. MRR, signups (free text)" },
+            target: { type: "string", description: "The target, e.g. $10k, +100/week, 5,000 (free text)" },
+            horizon: { type: "string", enum: ["month", "quarter", "ongoing"] },
+            metric_key: { type: "string", enum: ["revenue", "followers"], description: "Link for live progress (optional)" },
+            target_number: { type: "number", description: "Numeric target for metric_key (e.g. 10000 for $10k revenue)" },
           },
           required: ["title"],
         },
@@ -176,10 +215,16 @@ function buildTools(workspaceId: string): ExecTool[] {
           metric: str(input.metric).slice(0, 100),
           target: str(input.target).slice(0, 100),
           status: "active",
+          horizon: horizonOf(input.horizon),
+          metric_key: metricOf(input.metric_key),
+          target_number: numOrNull(input.target_number),
           created_at: now,
           updated_at: now,
         });
-        return { summary: `Logged company goal: "${str(input.title).slice(0, 80)}".` };
+        const hz = horizonOf(input.horizon);
+        return {
+          summary: `Logged ${hz === "ongoing" ? "" : `${hz === "month" ? "this month's" : "this quarter's"} `}goal: "${str(input.title).slice(0, 80)}".`,
+        };
       },
     },
     {
@@ -336,7 +381,7 @@ async function gatherBriefDossier(
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-  const [goals, memory, activeProjects, taskRows, postRows, pageRows, activity] = await Promise.all([
+  const [goals, memory, activeProjects, taskRows, postRows, pageRows, activity, mv] = await Promise.all([
     db
       .select()
       .from(companyGoals)
@@ -370,7 +415,9 @@ async function gatherBriefDossier(
       .where(eq(activityEvents.workspace_id, workspaceId))
       .orderBy(desc(activityEvents.created_at))
       .limit(18),
+    computeMetricValues(workspaceId),
   ]);
+  const gl = goalLines(goals, mv);
 
   const shipped = taskRows
     .filter((t) => t.status === "done" && !t.archived && new Date(t.updated_at).getTime() >= weekAgo)
@@ -393,8 +440,9 @@ async function gatherBriefDossier(
     "KPIs:",
     ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),
     "",
-    "ACTIVE COMPANY GOALS:",
-    ...(goals.length ? goals.map((g) => `- ${g.title}${g.target ? ` → ${g.target}` : ""}`) : ["- None set."]),
+    "THIS MONTH'S FOCUS (the north star — frame this brief as progress toward it, and flag drift):",
+    ...(gl.focus.length ? gl.focus : ["- None set yet."]),
+    ...(gl.ongoing.length ? ["", "OTHER ACTIVE GOALS:", ...gl.ongoing] : []),
     "",
     "ACTIVE PROJECTS / CAMPAIGNS:",
     ...(activeProjects.length
@@ -653,7 +701,7 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -678,13 +726,14 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     computeKpis(workspaceId),
     computeNudges(workspaceId),
     listBriefs(workspaceId, 30),
+    computeMetricValues(workspaceId),
   ]);
 
   return {
     agentName: execAgent?.name ?? "Executive Agent",
     messages: messages.map(toMsg),
     memory: memory.map(toMem),
-    goals: goals.map(toGoal),
+    goals: goals.map((g) => toGoal(g, metricValues)),
     kpis,
     nudges,
     briefs,
@@ -731,7 +780,15 @@ export async function deleteMemory(workspaceId: string, id: string): Promise<{ o
 
 export async function addGoal(
   workspaceId: string,
-  input: { title: string; detail?: string; metric?: string; target?: string },
+  input: {
+    title: string;
+    detail?: string;
+    metric?: string;
+    target?: string;
+    horizon?: GoalHorizon;
+    metric_key?: GoalMetric | null;
+    target_number?: number | null;
+  },
 ): Promise<{ ok: boolean; error?: string }> {
   const title = input.title.trim();
   if (!title) return { ok: false, error: "Give the goal a title." };
@@ -744,6 +801,9 @@ export async function addGoal(
     metric: (input.metric ?? "").slice(0, 100),
     target: (input.target ?? "").slice(0, 100),
     status: "active",
+    horizon: horizonOf(input.horizon),
+    metric_key: metricOf(input.metric_key),
+    target_number: input.target_number != null ? numOrNull(input.target_number) : null,
     created_at: now,
     updated_at: now,
   });

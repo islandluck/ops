@@ -33,6 +33,8 @@ import type {
   ExecRole,
   ExecutionStatus,
   ExecutionStep,
+  GoalHorizon,
+  GoalMetric,
   GoalStatus,
   MemoryKind,
   PackagedVariant,
@@ -548,6 +550,11 @@ export const companyGoals = pgTable("company_goals", {
   metric: text("metric").notNull().default(""),
   target: text("target").notNull().default(""),
   status: text("status").$type<GoalStatus>().notNull().default("active"),
+  /** Time horizon — month/quarter goals are cascaded into the weekly + daily briefs. */
+  horizon: text("horizon").$type<GoalHorizon>().notNull().default("ongoing"),
+  /** Optional live-metric link for computed progress. */
+  metric_key: text("metric_key").$type<GoalMetric>(),
+  target_number: integer("target_number"),
   created_at: createdAt,
   updated_at: updatedAt,
 });

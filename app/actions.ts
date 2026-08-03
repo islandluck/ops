@@ -120,6 +120,8 @@ import type {
   ExecBrief,
   ExecMessage,
   ExecutiveBundle,
+  GoalHorizon,
+  GoalMetric,
   GoalStatus,
   MemoryKind,
   OnboardingInput,
@@ -690,6 +692,9 @@ export async function addGoalAction(input: {
   detail?: string;
   metric?: string;
   target?: string;
+  horizon?: GoalHorizon;
+  metric_key?: GoalMetric | null;
+  target_number?: number | null;
 }): Promise<{ ok: boolean; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };

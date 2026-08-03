@@ -141,6 +141,13 @@
       "when": 1785763185239,
       "tag": "0019_tidy_wonder_man",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785764094007,
+      "tag": "0020_wise_khan",
+      "breakpoints": true
     }
   ]
 }

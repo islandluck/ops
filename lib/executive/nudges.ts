@@ -49,7 +49,13 @@ export async function computeNudges(workspaceId: string): Promise<ExecNudge[]> {
       .from(projects)
       .where(and(eq(projects.workspace_id, workspaceId), eq(projects.status, "active"))),
     db
-      .select({ id: companyGoals.id })
+      .select({
+        id: companyGoals.id,
+        title: companyGoals.title,
+        horizon: companyGoals.horizon,
+        metric_key: companyGoals.metric_key,
+        target_number: companyGoals.target_number,
+      })
       .from(companyGoals)
       .where(and(eq(companyGoals.workspace_id, workspaceId), eq(companyGoals.status, "active"))),
   ]);
@@ -114,6 +120,27 @@ export async function computeNudges(workspaceId: string): Promise<ExecNudge[]> {
       title: "Goals set, but nothing's in motion",
       detail: `You have ${activeGoals.length} active goal${activeGoals.length === 1 ? "" : "s"} and no projects or campaigns running toward them. Ask me to spin one up.`,
     });
+  }
+
+  // Behind pace on a metric-linked monthly goal (the cascade's accountability check).
+  const revenueTotal = orderRows.filter((o) => o.status === "paid").reduce((n, o) => n + o.amount, 0) / 100;
+  const followersNow = snapRows[0]?.followers ?? 0;
+  const d = new Date(now);
+  const monthStart = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+  const elapsedPct = ((now - monthStart) / (monthEnd - monthStart)) * 100;
+  for (const g of activeGoals) {
+    if (g.horizon !== "month" || !g.metric_key || g.target_number == null || g.target_number <= 0) continue;
+    const current = g.metric_key === "revenue" ? revenueTotal : followersNow;
+    const pct = (current / g.target_number) * 100;
+    if (elapsedPct > 25 && pct < elapsedPct - 20) {
+      nudges.push({
+        id: `goal-pace-${g.id}`,
+        severity: "attention",
+        title: `Behind pace on "${g.title}"`,
+        detail: `You're ${Math.round(elapsedPct)}% through the month but only ${Math.round(pct)}% to target. Worth a focused push or a rethink.`,
+      });
+    }
   }
 
   // A shipping lull.

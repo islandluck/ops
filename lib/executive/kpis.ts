@@ -3,7 +3,7 @@ import "server-only";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { followerSnapshots, orders, pages, posts, projects, tasks } from "@/lib/db/schema";
-import type { ExecKpi } from "@/lib/types";
+import type { ExecKpi, GoalMetric } from "@/lib/types";
 
 /**
  * Live business KPIs for the Executive Office — computed from real workspace data
@@ -22,6 +22,26 @@ function money(cents: number): string {
 
 function tone(delta: number): "up" | "down" | "neutral" {
   return delta > 0 ? "up" : delta < 0 ? "down" : "neutral";
+}
+
+/** Current numeric values for goal-linkable metrics (for live goal progress). */
+export async function computeMetricValues(workspaceId: string): Promise<Record<GoalMetric, number>> {
+  const [orderRows, snapRows] = await Promise.all([
+    db
+      .select({ amount: orders.amount_cents, status: orders.status })
+      .from(orders)
+      .where(eq(orders.workspace_id, workspaceId)),
+    db
+      .select({ followers: followerSnapshots.followers })
+      .from(followerSnapshots)
+      .where(eq(followerSnapshots.workspace_id, workspaceId))
+      .orderBy(desc(followerSnapshots.created_at))
+      .limit(1),
+  ]);
+  return {
+    revenue: Math.round(orderRows.filter((o) => o.status === "paid").reduce((n, o) => n + o.amount, 0) / 100),
+    followers: snapRows[0]?.followers ?? 0,
+  };
 }
 
 export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {

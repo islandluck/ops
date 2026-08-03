@@ -637,6 +637,18 @@ export interface ExecMemory {
 }
 
 export type GoalStatus = "active" | "achieved" | "archived";
+/** Time horizon — a "month"/"quarter" goal is a north star the agent cascades
+ *  down to the weekly review + daily brief; "ongoing" is untimed. */
+export type GoalHorizon = "month" | "quarter" | "ongoing";
+/** A live metric a goal can track against (maps to a computed KPI). */
+export type GoalMetric = "revenue" | "followers";
+
+/** Live progress for a metric-linked goal, computed at load. */
+export interface GoalProgress {
+  current: number;
+  target: number;
+  pct: number;
+}
 
 /** A company-wide goal the owner sets with the Executive Agent. */
 export interface CompanyGoal {
@@ -647,8 +659,14 @@ export interface CompanyGoal {
   metric: string;
   target: string;
   status: GoalStatus;
+  horizon: GoalHorizon;
+  /** When set, the goal tracks live against this metric + numeric target. */
+  metric_key: GoalMetric | null;
+  target_number: number | null;
   created_at: string;
   updated_at: string;
+  /** Assembled at load for metric-linked goals. */
+  progress?: GoalProgress | null;
 }
 
 /** A single computed business metric for the KPI strip. */

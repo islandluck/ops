@@ -62,6 +62,8 @@ import type {
   ExecMessage,
   ExecNudge,
   ExecutiveBundle,
+  GoalHorizon,
+  GoalMetric,
 } from "@/lib/types";
 
 const STARTERS = [
@@ -990,19 +992,35 @@ function KpiStrip({ kpis }: { kpis: ExecKpi[] }) {
 
 /* -------------------------------- Goals --------------------------------- */
 
+const HORIZON_LABEL: Record<GoalHorizon, string> = { month: "This month", quarter: "This quarter", ongoing: "Ongoing" };
+
 function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () => Promise<void> }) {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [target, setTarget] = useState("");
+  const [horizon, setHorizon] = useState<GoalHorizon>("month");
+  const [metric, setMetric] = useState<GoalMetric | "">("");
   const [busy, setBusy] = useState(false);
+
   const active = goals.filter((g) => g.status === "active");
+  const focus = active.filter((g) => g.horizon === "month" || g.horizon === "quarter");
+  const ongoing = active.filter((g) => g.horizon === "ongoing");
 
   async function add() {
     if (!title.trim() || busy) return;
     setBusy(true);
-    await addGoalAction({ title: title.trim(), target: target.trim() || undefined });
+    const num = metric ? Number(target.replace(/[^0-9.]/g, "")) : null;
+    await addGoalAction({
+      title: title.trim(),
+      horizon,
+      metric_key: metric || null,
+      target_number: Number.isFinite(num) ? num : null,
+      target: target.trim() || undefined,
+    });
     setTitle("");
     setTarget("");
+    setMetric("");
+    setHorizon("month");
     setAdding(false);
     setBusy(false);
     await onChanged();
@@ -1012,7 +1030,7 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
     <div>
       <RailHeading
         icon={<Target className="h-3.5 w-3.5" />}
-        label="Company goals"
+        label="Goals"
         action={
           <button onClick={() => setAdding((v) => !v)} className="text-muted-foreground hover:text-foreground" title="Add goal">
             <Plus className="h-3.5 w-3.5" />
@@ -1020,9 +1038,39 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
         }
       />
       {adding && (
-        <div className="mt-2 space-y-1.5 rounded-xl border border-border bg-card p-2.5">
+        <div className="mt-2 space-y-2 rounded-xl border border-border bg-card p-2.5">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Goal (e.g. Reach $10k MRR)" className="h-8 text-[13px]" autoFocus />
-          <Input value={target} onChange={(e) => setTarget(e.target.value)} placeholder="Target (optional)" className="h-8 text-[13px]" />
+          <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-[11.5px] font-medium">
+            {(["month", "quarter", "ongoing"] as GoalHorizon[]).map((h) => (
+              <button
+                key={h}
+                onClick={() => setHorizon(h)}
+                className={cn(
+                  "flex-1 rounded-md py-1 transition",
+                  horizon === h ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {h === "month" ? "Month" : h === "quarter" ? "Quarter" : "Ongoing"}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1.5">
+            <select
+              value={metric}
+              onChange={(e) => setMetric(e.target.value as GoalMetric | "")}
+              className="h-8 flex-1 rounded-md border border-border bg-background px-1.5 text-[12px]"
+            >
+              <option value="">No live tracking</option>
+              <option value="revenue">Track revenue ($)</option>
+              <option value="followers">Track followers</option>
+            </select>
+            <Input
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder={metric ? (metric === "revenue" ? "e.g. 10000" : "e.g. 5000") : "Target (optional)"}
+              className="h-8 w-24 text-[13px]"
+            />
+          </div>
           <div className="flex gap-1.5">
             <Button size="sm" variant="success" className="flex-1" onClick={add} disabled={busy || !title.trim()}>
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Add
@@ -1031,30 +1079,75 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
           </div>
         </div>
       )}
-      <div className="mt-2 space-y-2">
-        {active.length === 0 && !adding && (
-          <p className="rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
-            No goals yet. Add one, or ask the Executive Agent to help you set them.
-          </p>
-        )}
-        {active.map((g) => (
-          <div key={g.id} className="group rounded-xl border border-border bg-card p-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-[13px] font-medium leading-snug">{g.title}</p>
-              <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
-                <button onClick={async () => { await setGoalStatusAction(g.id, "achieved"); await onChanged(); }} title="Mark achieved" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-emerald-600">
-                  <Check className="h-3.5 w-3.5" />
-                </button>
-                <button onClick={async () => { await deleteGoalAction(g.id); await onChanged(); }} title="Delete" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive">
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-            {g.target && <p className="mt-0.5 text-[11.5px] font-medium text-primary">Target: {g.target}</p>}
-            {g.detail && <p className="mt-1 text-[12px] text-muted-foreground">{g.detail}</p>}
+      {active.length === 0 && !adding && (
+        <p className="mt-2 rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
+          Set a focus for this month — everything the agent briefs + proposes will ladder up to it. Or ask it to help.
+        </p>
+      )}
+      {focus.length > 0 && (
+        <div className="mt-2">
+          <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-violet-600">Focus</p>
+          <div className="space-y-2">
+            {focus.map((g) => (
+              <GoalItem key={g.id} goal={g} onChanged={onChanged} />
+            ))}
           </div>
-        ))}
+        </div>
+      )}
+      {ongoing.length > 0 && (
+        <div className="mt-3">
+          {focus.length > 0 && <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">Ongoing</p>}
+          <div className="space-y-2">
+            {ongoing.map((g) => (
+              <GoalItem key={g.id} goal={g} onChanged={onChanged} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GoalItem({ goal: g, onChanged }: { goal: CompanyGoal; onChanged: () => Promise<void> }) {
+  const p = g.progress;
+  return (
+    <div className="group rounded-xl border border-border bg-card p-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          {g.horizon !== "ongoing" && (
+            <span className="mb-1 inline-block rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">
+              {HORIZON_LABEL[g.horizon]}
+            </span>
+          )}
+          <p className="text-[13px] font-medium leading-snug">{g.title}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+          <button onClick={async () => { await setGoalStatusAction(g.id, "achieved"); await onChanged(); }} title="Mark achieved" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-emerald-600">
+            <Check className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={async () => { await deleteGoalAction(g.id); await onChanged(); }} title="Delete" className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
+      {p ? (
+        <div className="mt-1.5">
+          <div className="flex items-center justify-between text-[11px] font-medium">
+            <span className="text-muted-foreground">
+              {g.metric_key === "revenue" ? "$" : ""}
+              {p.current.toLocaleString()} / {g.metric_key === "revenue" ? "$" : ""}
+              {p.target.toLocaleString()}
+            </span>
+            <span className={cn(p.pct >= 100 ? "text-emerald-600" : "text-primary")}>{p.pct}%</span>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+            <div className={cn("h-full rounded-full transition-all", p.pct >= 100 ? "bg-emerald-500" : "bg-primary")} style={{ width: `${p.pct}%` }} />
+          </div>
+        </div>
+      ) : (
+        g.target && <p className="mt-0.5 text-[11.5px] font-medium text-primary">Target: {g.target}</p>
+      )}
+      {g.detail && <p className="mt-1 text-[12px] text-muted-foreground">{g.detail}</p>}
     </div>
   );
 }
