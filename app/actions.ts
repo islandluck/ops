@@ -76,6 +76,7 @@ import {
   addMemory,
   deleteGoal,
   deleteMemory,
+  generateDailyBrief,
   getExecutiveBundle,
   sendExecutiveMessage,
   setGoalStatus,
@@ -111,6 +112,7 @@ import type {
   CampaignData,
   ChannelKind,
   DraftRequest,
+  ExecBrief,
   ExecMessage,
   ExecutiveBundle,
   GoalStatus,
@@ -612,6 +614,15 @@ export async function getExecutiveBundleAction(): Promise<ExecutiveBundle | null
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   return getExecutiveBundle(ws);
+}
+
+/** Generate a fresh daily executive brief. */
+export async function generateBriefAction(): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return generateDailyBrief(ws);
 }
 
 /** Talk to the Executive Agent — a tool-using reply grounded in live business data. */

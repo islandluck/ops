@@ -3,15 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowRight,
   ArrowUpRight,
   Brain,
   Check,
+  CheckCircle2,
   Compass,
   FileText,
+  Lightbulb,
   Loader2,
   Paperclip,
   Pin,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
   Target,
@@ -19,6 +23,7 @@ import {
   TrendingDown,
   TrendingUp,
   X,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,12 +34,21 @@ import {
   addMemoryAction,
   deleteGoalAction,
   deleteMemoryAction,
+  generateBriefAction,
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
   setGoalStatusAction,
   togglePinMemoryAction,
 } from "@/app/actions";
-import type { CompanyGoal, ExecKpi, ExecMemory, ExecMessage, ExecutiveBundle } from "@/lib/types";
+import type {
+  CompanyGoal,
+  ExecBrief,
+  ExecBriefContent,
+  ExecKpi,
+  ExecMemory,
+  ExecMessage,
+  ExecutiveBundle,
+} from "@/lib/types";
 
 const STARTERS = [
   "How are we doing this week?",
@@ -65,6 +79,9 @@ export default function ExecutivePage() {
   const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<"chat" | "brief">("chat");
+  const [brief, setBrief] = useState<ExecBrief | null>(null);
+  const [generating, setGenerating] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachment, setAttachment] = useState<{ name: string; text: string } | null>(null);
@@ -98,8 +115,19 @@ export default function ExecutivePage() {
     if (b) {
       setBundle(b);
       setMessages(b.messages);
+      setBrief(b.latestBrief);
     }
     setLoading(false);
+  }, []);
+
+  const generateBrief = useCallback(async () => {
+    setGenerating(true);
+    const res = await generateBriefAction();
+    setGenerating(false);
+    if (res.ok && res.brief) {
+      setBrief(res.brief);
+      setView("brief");
+    }
   }, []);
   useEffect(() => {
     void loadBundle();
@@ -147,16 +175,40 @@ export default function ExecutivePage() {
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       {/* Conversation */}
       <div className="flex min-h-0 flex-1 flex-col border-b border-border lg:border-b-0 lg:border-r">
-        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-6 py-3.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3 sm:px-6">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm">
             <Compass className="h-5 w-5" />
           </span>
-          <div>
-            <h1 className="text-[15px] font-semibold leading-tight">{agentName}</h1>
-            <p className="text-[12px] text-muted-foreground">Your Chief of Staff — grounded in your live business data</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-[15px] font-semibold leading-tight">{agentName}</h1>
+            <p className="hidden truncate text-[12px] text-muted-foreground sm:block">
+              Your Chief of Staff — grounded in your live business data
+            </p>
+          </div>
+          <div className="ml-auto flex shrink-0 rounded-lg border border-border bg-muted/50 p-0.5 text-[12.5px] font-medium">
+            <button
+              onClick={() => setView("chat")}
+              className={cn(
+                "rounded-md px-3 py-1 transition",
+                view === "chat" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Conversation
+            </button>
+            <button
+              onClick={() => setView("brief")}
+              className={cn(
+                "rounded-md px-3 py-1 transition",
+                view === "brief" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Daily brief
+            </button>
           </div>
         </div>
 
+        {view === "chat" ? (
+        <>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
           {loading ? (
             <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -256,6 +308,10 @@ export default function ExecutivePage() {
             </div>
           </div>
         </div>
+        </>
+        ) : (
+          <BriefView brief={brief} generating={generating} onGenerate={generateBrief} agentName={agentName} />
+        )}
       </div>
 
       {/* Context rail */}
@@ -363,6 +419,148 @@ function UserContent({ content }: { content: string }) {
             {file.text}
           </pre>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------------- daily brief ------------------------------ */
+
+function fmtBriefDate(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(new Date(iso));
+  } catch {
+    return new Date(iso).toLocaleString();
+  }
+}
+
+function BriefView({
+  brief,
+  generating,
+  onGenerate,
+  agentName,
+}: {
+  brief: ExecBrief | null;
+  generating: boolean;
+  onGenerate: () => void;
+  agentName: string;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
+      <div className="mx-auto max-w-2xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-[18px] font-semibold">Daily Brief</h2>
+            <p className="text-[12px] text-muted-foreground">
+              {brief ? `Prepared ${fmtBriefDate(brief.created_at)}` : "Not generated yet"}
+            </p>
+          </div>
+          <Button size="sm" variant={brief ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {generating ? "Preparing…" : brief ? "Regenerate" : "Generate brief"}
+          </Button>
+        </div>
+
+        {generating && !brief ? (
+          <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <p className="text-[13px]">{agentName} is reviewing the business…</p>
+          </div>
+        ) : brief ? (
+          <BriefBody content={brief.content} />
+        ) : (
+          <div className="mt-8 flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border p-10 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white">
+              <Sparkles className="h-6 w-6" />
+            </span>
+            <div>
+              <h3 className="text-[15px] font-semibold">No brief yet</h3>
+              <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
+                Have {agentName} synthesize a briefing from across your agents, metrics, and goals — what shipped, what's
+                underway, what's next, and where the opportunities are.
+              </p>
+            </div>
+            <Button size="sm" onClick={onGenerate} disabled={generating}>
+              <Sparkles className="h-4 w-4" /> Generate today's brief
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BriefBody({ content }: { content: ExecBriefContent }) {
+  return (
+    <div className="mt-5 space-y-6">
+      {content.headline && (
+        <p className="text-balance text-[20px] font-semibold leading-snug">{content.headline}</p>
+      )}
+      {content.kpi_review && (
+        <div className="rounded-2xl border border-indigo-200/70 bg-gradient-to-b from-indigo-50/60 to-transparent p-4">
+          <p className="mb-1 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-indigo-600">
+            <TrendingUp className="h-3.5 w-3.5" /> KPI review
+          </p>
+          <p className="text-[13.5px] leading-relaxed text-foreground/90">{content.kpi_review}</p>
+        </div>
+      )}
+      <BriefList title="Shipped" icon={<CheckCircle2 className="h-3.5 w-3.5" />} items={content.shipped} accent="text-emerald-600" empty="Nothing completed recently." />
+      <BriefList title="In motion" icon={<Zap className="h-3.5 w-3.5" />} items={content.in_motion} accent="text-sky-600" empty="Nothing underway right now." />
+      <BriefList title="Next" icon={<ArrowRight className="h-3.5 w-3.5" />} items={content.next} accent="text-amber-600" empty="Nothing queued." />
+      {content.insights.length > 0 && (
+        <div>
+          <p className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-600">
+            <Lightbulb className="h-3.5 w-3.5" /> Insights &amp; ideas
+          </p>
+          <div className="space-y-2">
+            {content.insights.map((ins, i) => (
+              <div key={i} className="rounded-xl border border-border bg-card p-3">
+                <p className="text-[13.5px] font-semibold">{ins.title}</p>
+                {ins.detail && <p className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">{ins.detail}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BriefList({
+  title,
+  icon,
+  items,
+  accent,
+  empty,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: string[];
+  accent: string;
+  empty: string;
+}) {
+  return (
+    <div>
+      <p className={cn("mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider", accent)}>
+        {icon} {title}
+      </p>
+      {items.length ? (
+        <ul className="space-y-1.5">
+          {items.map((it, i) => (
+            <li key={i} className="flex items-start gap-2 text-[13.5px] leading-relaxed">
+              <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+              <span>{it}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[12.5px] text-muted-foreground">{empty}</p>
       )}
     </div>
   );

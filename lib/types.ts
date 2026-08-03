@@ -662,6 +662,34 @@ export interface ExecKpi {
   hint?: string;
 }
 
+/** A forward-looking idea/observation in the daily brief. */
+export interface ExecBriefInsight {
+  title: string;
+  detail: string;
+}
+
+/** The structured content of a daily executive brief. */
+export interface ExecBriefContent {
+  /** One-line read on where the business stands today. */
+  headline: string;
+  /** Prose commentary on the KPIs. */
+  kpi_review: string;
+  /** What got done recently. */
+  shipped: string[];
+  /** The current plan / what's underway. */
+  in_motion: string[];
+  /** What's next / needs the founder. */
+  next: string[];
+  /** Patterns + new ideas for the future. */
+  insights: ExecBriefInsight[];
+}
+
+export interface ExecBrief {
+  id: string;
+  content: ExecBriefContent;
+  created_at: string;
+}
+
 /** Everything the Executive Office page loads. */
 export interface ExecutiveBundle {
   agentName: string;
@@ -669,4 +697,6 @@ export interface ExecutiveBundle {
   memory: ExecMemory[];
   goals: CompanyGoal[];
   kpis: ExecKpi[];
+  /** The most recent daily brief, if one has been generated. */
+  latestBrief: ExecBrief | null;
 }

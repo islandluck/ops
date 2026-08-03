@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import type { ExecBriefContent } from "@/lib/types";
 
 /**
  * The Executive Agent's conversational brain — a tool-using chat loop. The engine
@@ -85,4 +86,73 @@ export async function executiveReply(opts: {
 
   if (!finalText) finalText = actions.length ? "Done." : "I didn't catch that — could you rephrase?";
   return { text: finalText, actions };
+}
+
+/* ------------------------------ daily brief ----------------------------- */
+
+function stripFences(s: string): string {
+  return s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+const strArray = (v: unknown, cap = 8): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean).slice(0, cap) : [];
+
+/**
+ * Synthesize the founder's daily executive brief from a data dossier the engine
+ * assembles. Grounded and honest — it must not invent numbers, tasks, or outcomes.
+ */
+export async function generateBrief(dossier: string, companyName: string): Promise<ExecBriefContent> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = new Anthropic({ apiKey, maxRetries: 2 });
+
+  const system = [
+    `You are the Executive Agent — Chief of Staff for ${companyName || "the company"}. Write the founder's daily brief: a sharp, honest, high-signal snapshot of the business.`,
+    "Ground EVERYTHING in the DATA dossier provided — never invent numbers, tasks, content, or outcomes. If a section is empty (e.g. no revenue yet, nothing shipped), say so plainly and constructively rather than padding.",
+    "Write for a busy founder: concise, direct, every line earns its place. No corporate filler, no flattery.",
+    "",
+    "Sections to produce:",
+    "- headline: one punchy line on where things stand today.",
+    "- kpi_review: 2–4 sentences reading the numbers — what's moving, what isn't, and what it means.",
+    "- shipped: what actually got done recently (concrete items). Empty if nothing.",
+    "- in_motion: what's currently underway (active projects/campaigns, work in progress).",
+    "- next: what's next or needs the founder's attention (approvals, decisions, upcoming).",
+    "- insights: 2–4 forward-looking ideas or observations — patterns you notice plus concrete, specific, original suggestions for the future. This is where you add the most value; be genuinely useful, not generic.",
+    "",
+    'Respond with ONLY this JSON (no markdown, no code fences): {"headline": string, "kpi_review": string, "shipped": string[], "in_motion": string[], "next": string[], "insights": [{"title": string, "detail": string}]}',
+  ].join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2500,
+    system,
+    messages: [{ role: "user", content: `Today's data dossier:\n\n${dossier}\n\nWrite the brief now.` }],
+  });
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(stripFences(text)) as Record<string, unknown>;
+  } catch {
+    throw new Error("The brief came back unreadable. Please try again.");
+  }
+
+  const insights = Array.isArray(raw.insights)
+    ? (raw.insights as Record<string, unknown>[])
+        .map((i) => ({
+          title: typeof i.title === "string" ? i.title.trim().slice(0, 120) : "",
+          detail: typeof i.detail === "string" ? i.detail.trim().slice(0, 500) : "",
+        }))
+        .filter((i) => i.title || i.detail)
+        .slice(0, 5)
+    : [];
+
+  return {
+    headline: typeof raw.headline === "string" ? raw.headline.trim().slice(0, 240) : "Here's where things stand.",
+    kpi_review: typeof raw.kpi_review === "string" ? raw.kpi_review.trim().slice(0, 900) : "",
+    shipped: strArray(raw.shipped),
+    in_motion: strArray(raw.in_motion),
+    next: strArray(raw.next),
+    insights,
+  };
 }

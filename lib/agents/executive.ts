@@ -3,14 +3,26 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { agents, companyGoals, executiveMemory, executiveMessages, projects, tasks } from "@/lib/db/schema";
+import {
+  activityEvents,
+  agents,
+  companyGoals,
+  executiveBriefs,
+  executiveMemory,
+  executiveMessages,
+  pages,
+  posts,
+  projects,
+  tasks,
+} from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { computeKpis } from "@/lib/executive/kpis";
-import { executiveReply, type ExecTool } from "@/lib/ai/executive";
+import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
   CompanyGoal,
+  ExecBrief,
   ExecKpi,
   ExecMemory,
   ExecMessage,
@@ -298,10 +310,175 @@ export async function sendExecutiveMessage(
   };
 }
 
+/* ---------------------------- daily brief ------------------------------- */
+
+/** Assemble the full data dossier the daily brief is synthesized from. */
+async function gatherBriefDossier(
+  workspaceId: string,
+  kpis: ExecKpi[],
+): Promise<{ dossier: string; companyName: string }> {
+  const { brief } = await getPlanningContext(workspaceId);
+  const now = Date.now();
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+  const [goals, memory, activeProjects, taskRows, postRows, pageRows, activity] = await Promise.all([
+    db
+      .select()
+      .from(companyGoals)
+      .where(and(eq(companyGoals.workspace_id, workspaceId), eq(companyGoals.status, "active"))),
+    db
+      .select()
+      .from(executiveMemory)
+      .where(eq(executiveMemory.workspace_id, workspaceId))
+      .orderBy(desc(executiveMemory.pinned), desc(executiveMemory.created_at))
+      .limit(30),
+    db
+      .select({ title: projects.title, kind: projects.kind, current_phase: projects.current_phase, plan: projects.plan })
+      .from(projects)
+      .where(and(eq(projects.workspace_id, workspaceId), eq(projects.status, "active"))),
+    db
+      .select({
+        title: tasks.title,
+        status: tasks.status,
+        archived: tasks.archived,
+        updated_at: tasks.updated_at,
+        scheduled_at: tasks.scheduled_at,
+        execution_status: tasks.execution_status,
+      })
+      .from(tasks)
+      .where(eq(tasks.workspace_id, workspaceId)),
+    db.select({ title: posts.title, status: posts.status }).from(posts).where(eq(posts.workspace_id, workspaceId)),
+    db.select({ title: pages.title, status: pages.status }).from(pages).where(eq(pages.workspace_id, workspaceId)),
+    db
+      .select({ summary: activityEvents.summary })
+      .from(activityEvents)
+      .where(eq(activityEvents.workspace_id, workspaceId))
+      .orderBy(desc(activityEvents.created_at))
+      .limit(18),
+  ]);
+
+  const shipped = taskRows
+    .filter((t) => t.status === "done" && !t.archived && new Date(t.updated_at).getTime() >= weekAgo)
+    .map((t) => t.title)
+    .slice(0, 15);
+  const pending = taskRows.filter((t) => t.status === "ready" && !t.archived).map((t) => t.title).slice(0, 15);
+  const upcoming = taskRows
+    .filter((t) => t.execution_status === "queued" && t.scheduled_at && new Date(t.scheduled_at).getTime() > now)
+    .sort((a, b) => new Date(a.scheduled_at!).getTime() - new Date(b.scheduled_at!).getTime())
+    .slice(0, 10);
+  const contentLive = [
+    ...postRows.filter((p) => p.status === "distributed").map((p) => p.title),
+    ...pageRows.filter((p) => p.status === "published").map((p) => p.title),
+  ].slice(0, 15);
+
+  const lines = [
+    `COMPANY: ${brief.company_name || "the company"}. ${[brief.business_description, brief.core_offer].filter(Boolean).join(" ")}`.trim(),
+    brief.ideal_customer_profile ? `Audience: ${brief.ideal_customer_profile}` : "",
+    "",
+    "KPIs:",
+    ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),
+    "",
+    "ACTIVE COMPANY GOALS:",
+    ...(goals.length ? goals.map((g) => `- ${g.title}${g.target ? ` → ${g.target}` : ""}`) : ["- None set."]),
+    "",
+    "ACTIVE PROJECTS / CAMPAIGNS:",
+    ...(activeProjects.length
+      ? activeProjects.map(
+          (p) =>
+            `- ${p.kind === "growth" ? "Growth campaign" : "Project"} "${p.title}" — ${
+              p.kind === "growth" ? "week" : "phase"
+            } ${p.current_phase + 1} of ${p.plan.phases.length}`,
+        )
+      : ["- None active."]),
+    "",
+    "SHIPPED (completed, last 7 days):",
+    ...(shipped.length ? shipped.map((t) => `- ${t}`) : ["- Nothing completed in the last 7 days."]),
+    "",
+    "CONTENT LIVE:",
+    ...(contentLive.length ? contentLive.map((t) => `- ${t}`) : ["- None published yet."]),
+    "",
+    "AWAITING THE FOUNDER'S APPROVAL:",
+    ...(pending.length ? pending.map((t) => `- ${t}`) : ["- Nothing pending."]),
+    "",
+    "UPCOMING (scheduled to auto-run):",
+    ...(upcoming.length
+      ? upcoming.map((t) => `- ${t.title}${t.scheduled_at ? ` (${new Date(t.scheduled_at).toISOString()})` : ""}`)
+      : ["- Nothing scheduled."]),
+    "",
+    "RECENT ACTIVITY:",
+    ...(activity.length ? activity.map((a) => `- ${a.summary}`) : ["- Quiet lately."]),
+    "",
+    "WHAT THE EXECUTIVE REMEMBERS:",
+    ...(memory.length ? memory.map((m) => `- [${m.kind}] ${m.content}`) : ["- Nothing yet."]),
+  ];
+
+  return { dossier: lines.filter((l) => l !== undefined).join("\n"), companyName: brief.company_name };
+}
+
+/** Generate + store a fresh daily brief. */
+export async function generateDailyBrief(
+  workspaceId: string,
+): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
+  const kpis = await computeKpis(workspaceId);
+  const { dossier, companyName } = await gatherBriefDossier(workspaceId, kpis);
+
+  let content;
+  try {
+    content = await generateBrief(dossier, companyName);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't generate the brief." };
+  }
+
+  const id = uid();
+  const now = new Date();
+  await db.insert(executiveBriefs).values({ id, workspace_id: workspaceId, content, created_at: now });
+  return { ok: true, brief: { id, content, created_at: iso(now) } };
+}
+
+export async function getLatestBrief(workspaceId: string): Promise<ExecBrief | null> {
+  const [row] = await db
+    .select()
+    .from(executiveBriefs)
+    .where(eq(executiveBriefs.workspace_id, workspaceId))
+    .orderBy(desc(executiveBriefs.created_at))
+    .limit(1);
+  return row ? { id: row.id, content: row.content, created_at: iso(row.created_at) } : null;
+}
+
+/** Cron heartbeat: generate a fresh daily brief for each workspace whose latest
+ *  is stale (>20h). Bounded per run; one failure never blocks the rest. */
+export async function generateDueBriefs(limit = 8): Promise<{ generated: number }> {
+  const STALE_MS = 20 * 60 * 60 * 1000;
+  // tenant-scope-exempt: cron scans workspaces that have an Executive agent; each
+  // brief is then generated via generateDailyBrief(workspace_id), which is scoped.
+  const execAgents = await db
+    .select({ workspace_id: agents.workspace_id })
+    .from(agents)
+    .where(and(eq(agents.tier, "executive"), eq(agents.archived, false)))
+    .limit(200);
+
+  const seen = new Set<string>();
+  let generated = 0;
+  for (const a of execAgents) {
+    if (generated >= limit) break;
+    if (seen.has(a.workspace_id)) continue;
+    seen.add(a.workspace_id);
+    try {
+      const latest = await getLatestBrief(a.workspace_id);
+      if (latest && Date.now() - new Date(latest.created_at).getTime() < STALE_MS) continue;
+      const r = await generateDailyBrief(a.workspace_id);
+      if (r.ok) generated += 1;
+    } catch {
+      /* one workspace never blocks the rest */
+    }
+  }
+  return { generated };
+}
+
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
-  const [[execAgent], messages, memory, goals, kpis] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, latestBrief] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -324,6 +501,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
       .where(eq(companyGoals.workspace_id, workspaceId))
       .orderBy(desc(companyGoals.created_at)),
     computeKpis(workspaceId),
+    getLatestBrief(workspaceId),
   ]);
 
   return {
@@ -332,6 +510,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     memory: memory.map(toMem),
     goals: goals.map(toGoal),
     kpis,
+    latestBrief,
   };
 }
 

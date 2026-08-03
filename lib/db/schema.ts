@@ -28,6 +28,7 @@ import type {
   DecisionType,
   EventType,
   ExecAction,
+  ExecBriefContent,
   ExecRole,
   ExecutionStatus,
   ExecutionStep,
@@ -517,6 +518,19 @@ export const executiveMemory = pgTable("executive_memory", {
   pinned: boolean("pinned").notNull().default(false),
   created_at: createdAt,
   updated_at: updatedAt,
+});
+
+/** A generated daily executive brief (synthesized snapshot of the business). */
+export const executiveBriefs = pgTable("executive_briefs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  content: jsonb("content")
+    .$type<ExecBriefContent>()
+    .notNull()
+    .default({ headline: "", kpi_review: "", shipped: [], in_motion: [], next: [], insights: [] }),
+  created_at: createdAt,
 });
 
 /** Company-wide goals the owner sets with the Executive Agent. */

@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { runBackgroundAgents } from "@/lib/agents/run";
 import { advanceActiveProjects } from "@/lib/agents/project";
 import { refreshAllReplyRadars } from "@/lib/agents/reply-radar";
+import { generateDueBriefs } from "@/lib/agents/executive";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -28,11 +29,14 @@ async function handle(request: NextRequest) {
     const projects = await advanceActiveProjects();
     // Refresh the reply radar for workspaces watching accounts (best-effort).
     const radar = await refreshAllReplyRadars();
+    // Refresh each workspace's daily executive brief when it's gone stale.
+    const briefs = await generateDueBriefs();
     return NextResponse.json({
       ok: true,
       ...result,
       projectsAdvanced: projects.advanced,
       radar,
+      briefsGenerated: briefs.generated,
     });
   } catch (e) {
     return NextResponse.json(
