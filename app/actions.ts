@@ -81,6 +81,7 @@ import {
   publishPageChannel,
   scheduleThreadChannel,
   updatePost,
+  updateThreadTweets,
 } from "@/lib/agents/content";
 import type { BoostedLongform } from "@/lib/ai/content";
 import {
@@ -532,6 +533,18 @@ export async function publishPageChannelAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return publishPageChannel(ws, postId);
+}
+
+/** Persist edited X-thread tweets before scheduling. */
+export async function updateThreadTweetsAction(
+  postId: string,
+  tweets: string[],
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return updateThreadTweets(ws, postId, tweets);
 }
 
 export async function scheduleThreadChannelAction(

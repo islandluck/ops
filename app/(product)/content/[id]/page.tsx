@@ -15,9 +15,11 @@ import {
   Loader2,
   MessageCircle,
   Pencil,
+  Plus,
   Search,
   Send,
   Sparkles,
+  Trash2,
   TrendingUp,
   X,
 } from "lucide-react";
@@ -33,6 +35,7 @@ import {
   scheduleThreadChannelAction,
   searchStockAction,
   updatePostAction,
+  updateThreadTweetsAction,
   uploadPostImageAction,
 } from "@/app/actions";
 import { markdownToHtml } from "@/lib/content/format";
@@ -317,6 +320,7 @@ export default function ContentEditor() {
                 <ThreadChannelCard
                   channel={channelOf("x_thread")}
                   busy={busyKey === "x_thread"}
+                  onPersist={(tweets) => updateThreadTweetsAction(id, tweets)}
                   onSchedule={(whenISO) => runChannel("x_thread", () => scheduleThreadChannelAction(id, whenISO))}
                 />
                 <SubstackChannelCard
@@ -498,16 +502,66 @@ function PageChannelCard({
 function ThreadChannelCard({
   channel,
   busy,
+  onPersist,
   onSchedule,
 }: {
   channel: PostChannel | null;
   busy: boolean;
+  onPersist: (tweets: string[]) => Promise<{ ok: boolean; error?: string }>;
   onSchedule: (whenISO?: string) => void;
 }) {
   const [when, setWhen] = useState("");
-  const [showTweets, setShowTweets] = useState(false);
-  const tweets = channel?.variant.tweets ?? [];
+  const [open, setOpen] = useState(false);
+  const [tweets, setTweets] = useState<string[]>(channel?.variant.tweets ?? []);
+  const [dirty, setDirty] = useState(false);
+  const [savingEdits, setSavingEdits] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
   const scheduled = channel?.status === "scheduled";
+
+  // Re-sync from the server whenever the packaged thread changes (e.g. re-package).
+  const serverTweets = (channel?.variant.tweets ?? []).join("");
+  useEffect(() => {
+    setTweets(channel?.variant.tweets ?? []);
+    setDirty(false);
+  }, [serverTweets]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const edit = (i: number, v: string) => {
+    setTweets((arr) => arr.map((t, j) => (j === i ? v : t)));
+    setDirty(true);
+    setSavedTick(false);
+  };
+  const remove = (i: number) => {
+    setTweets((arr) => arr.filter((_, j) => j !== i));
+    setDirty(true);
+    setSavedTick(false);
+  };
+  const add = () => {
+    setTweets((arr) => [...arr, ""]);
+    setDirty(true);
+    setSavedTick(false);
+  };
+
+  async function persist(): Promise<boolean> {
+    const clean = tweets.map((t) => t.trim()).filter(Boolean);
+    setSavingEdits(true);
+    const res = await onPersist(clean);
+    setSavingEdits(false);
+    if (res.ok) {
+      setTweets(clean);
+      setDirty(false);
+      setSavedTick(true);
+      setTimeout(() => setSavedTick(false), 1500);
+    }
+    return res.ok;
+  }
+
+  async function schedule() {
+    if (dirty) {
+      const ok = await persist();
+      if (!ok) return;
+    }
+    onSchedule(when ? new Date(when).toISOString() : undefined);
+  }
 
   return (
     <CardShell
@@ -532,22 +586,66 @@ function ThreadChannelCard({
         </p>
       ) : (
         <>
-          <button
-            onClick={() => setShowTweets((v) => !v)}
-            className="text-[12px] font-medium text-primary hover:underline"
-          >
-            {showTweets ? "Hide" : "Preview"} the {tweets.length}-tweet thread
-          </button>
-          {showTweets && (
-            <div className="mt-2 space-y-1.5">
-              {tweets.map((t, i) => (
-                <p key={i} className="rounded-lg border border-border bg-muted/40 p-2 text-[12px] leading-relaxed">
-                  <span className="mr-1 font-medium text-muted-foreground">{i + 1}/</span>
-                  {t}
-                </p>
-              ))}
+          <div className="flex items-center justify-between">
+            <button onClick={() => setOpen((v) => !v)} className="text-[12px] font-medium text-primary hover:underline">
+              {open ? "Hide" : "Edit"} the {tweets.length}-tweet thread
+            </button>
+            {open && dirty && (
+              <button
+                onClick={persist}
+                disabled={savingEdits}
+                className="inline-flex items-center gap-1 text-[11.5px] font-medium text-emerald-600 hover:text-emerald-700"
+              >
+                {savingEdits ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Save edits
+              </button>
+            )}
+            {open && !dirty && savedTick && (
+              <span className="inline-flex items-center gap-1 text-[11.5px] font-medium text-emerald-600">
+                <Check className="h-3 w-3" /> Saved
+              </span>
+            )}
+          </div>
+
+          {open && (
+            <div className="mt-2 space-y-2">
+              {tweets.map((t, i) => {
+                const over = t.length > 280;
+                return (
+                  <div key={i} className="rounded-lg border border-border bg-muted/30 p-1.5">
+                    <div className="flex items-start gap-1.5">
+                      <span className="mt-1.5 shrink-0 text-[11px] font-medium text-muted-foreground">{i + 1}/</span>
+                      <textarea
+                        value={t}
+                        onChange={(e) => edit(i, e.target.value)}
+                        rows={3}
+                        className="min-h-0 flex-1 resize-y rounded-md border border-transparent bg-transparent p-1 text-[12.5px] leading-relaxed outline-none focus:border-border focus:bg-background"
+                      />
+                      <button
+                        onClick={() => remove(i)}
+                        className="mt-1 shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-accent hover:text-destructive"
+                        aria-label={`Remove tweet ${i + 1}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="pl-5 text-right">
+                      <span className={cn("text-[10.5px] tabular-nums", over ? "font-semibold text-destructive" : "text-muted-foreground/70")}>
+                        {t.length}/280
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              <button
+                onClick={add}
+                className="inline-flex items-center gap-1 text-[11.5px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add tweet
+              </button>
             </div>
           )}
+
           <div className="mt-2.5 flex items-center gap-2">
             <input
               type="datetime-local"
@@ -555,17 +653,14 @@ function ThreadChannelCard({
               onChange={(e) => setWhen(e.target.value)}
               className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[12px]"
             />
-            <Button
-              size="sm"
-              variant="success"
-              onClick={() => onSchedule(when ? new Date(when).toISOString() : undefined)}
-              disabled={busy}
-            >
+            <Button size="sm" variant="success" onClick={schedule} disabled={busy || savingEdits}>
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
               Schedule
             </Button>
           </div>
-          <p className="mt-1.5 text-[11px] text-muted-foreground">Leave the time blank to auto-pick the next good slot.</p>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Edits save automatically when you schedule. Leave the time blank to auto-pick the next good slot.
+          </p>
         </>
       )}
     </CardShell>

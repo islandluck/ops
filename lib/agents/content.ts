@@ -438,6 +438,24 @@ export async function scheduleThreadChannel(
   return { ok: true, scheduledAt: iso(when) };
 }
 
+/** Persist edited X-thread tweets back to the channel (before scheduling). */
+export async function updateThreadTweets(
+  workspaceId: string,
+  postId: string,
+  tweets: string[],
+): Promise<{ ok: boolean; error?: string }> {
+  const clean = tweets.map((t) => t.trim()).filter(Boolean).slice(0, 25);
+  if (!clean.length) return { ok: false, error: "A thread needs at least one tweet." };
+  const row = await loadChannelRow(workspaceId, postId, "x_thread");
+  if (!row) return { ok: false, error: "Package the thread first." };
+  if (row.status === "scheduled") return { ok: false, error: "Unschedule the thread before editing it." };
+  await db
+    .update(postChannels)
+    .set({ variant: { ...row.variant, tweets: clean }, updated_at: new Date() })
+    .where(eq(postChannels.id, row.id));
+  return { ok: true };
+}
+
 /** Substack (or any handoff) — mark the channel done once the owner has posted it. */
 export async function markChannelPublished(
   workspaceId: string,
