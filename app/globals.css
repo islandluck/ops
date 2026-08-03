@@ -132,3 +132,73 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Article typography for content-engine blog posts (rendered from Markdown).
+   Scoped + self-contained (no typography plugin); tuned for a light article page. */
+.prose-article {
+  font-size: 1.075rem;
+  line-height: 1.75;
+  color: #334155; /* slate-700 */
+}
+.prose-article > * + * {
+  margin-top: 1.15em;
+}
+.prose-article h2 {
+  margin-top: 2em;
+  margin-bottom: 0.6em;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #0f172a; /* slate-900 */
+}
+.prose-article h3 {
+  margin-top: 1.6em;
+  margin-bottom: 0.5em;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+.prose-article p {
+  margin-top: 1.15em;
+}
+.prose-article ul,
+.prose-article ol {
+  margin-top: 1.1em;
+  padding-left: 1.5em;
+}
+.prose-article ul {
+  list-style: disc;
+}
+.prose-article ol {
+  list-style: decimal;
+}
+.prose-article li {
+  margin-top: 0.4em;
+}
+.prose-article a {
+  color: #2563eb; /* blue-600 */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-article strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+.prose-article blockquote {
+  margin-top: 1.3em;
+  border-left: 3px solid #cbd5e1;
+  padding-left: 1.1em;
+  color: #475569;
+  font-style: italic;
+}
+.prose-article code {
+  background: #f1f5f9;
+  border-radius: 0.3em;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+.prose-article hr {
+  margin: 2em 0;
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+}

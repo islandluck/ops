@@ -22,15 +22,19 @@ import type {
   ApprovalStatus,
   AssetType,
   Category,
+  ChannelKind,
+  ChannelStatus,
   CreatedByType,
   DecisionType,
   EventType,
   ExecutionStatus,
   ExecutionStep,
+  PackagedVariant,
   PageContent,
   PageStatus,
   PageType,
   PermissionMode,
+  PostStatus,
   Priority,
   ProjectPlan,
   ProjectStatus,
@@ -373,6 +377,46 @@ export const pages = pgTable(
   },
   (t) => [uniqueIndex("pages_slug_uniq").on(t.slug)],
 );
+
+/** The content engine's longform master — one canonical markdown draft that gets
+ *  boosted, packaged, and distributed to many channels (see post_channels). */
+export const posts = pgTable("posts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  project_id: uuid("project_id"),
+  title: text("title").notNull().default(""),
+  dek: text("dek").notNull().default(""),
+  body_md: text("body_md").notNull().default(""),
+  hero_image_url: text("hero_image_url"),
+  status: text("status").$type<PostStatus>().notNull().default("draft"),
+  boosted: boolean("boosted").notNull().default(false),
+  created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
+  agent_id: uuid("agent_id"),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
+
+/** A packaged variant of a post for one destination + its distribution status. */
+export const postChannels = pgTable("post_channels", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  post_id: uuid("post_id")
+    .notNull()
+    .references(() => posts.id, { onDelete: "cascade" }),
+  channel: text("channel").$type<ChannelKind>().notNull(),
+  status: text("status").$type<ChannelStatus>().notNull().default("packaged"),
+  variant: jsonb("variant").$type<PackagedVariant>().notNull().default({}),
+  /** The page_id or task_id this channel created downstream, if any. */
+  ref_id: uuid("ref_id"),
+  url: text("url"),
+  scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
 
 /** Accounts the owner watches for reply opportunities — the "reply radar" watchlist. */
 export const xTargets = pgTable(

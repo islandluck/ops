@@ -71,6 +71,19 @@ import {
 } from "@/lib/agents/project";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
+  boostPost,
+  createPost,
+  deletePost as deletePostEngine,
+  getPost,
+  listPosts,
+  markChannelPublished,
+  packagePost,
+  publishPageChannel,
+  scheduleThreadChannel,
+  updatePost,
+} from "@/lib/agents/content";
+import type { BoostedLongform } from "@/lib/ai/content";
+import {
   createProduct,
   deletePage,
   generateAndSavePage,
@@ -84,6 +97,7 @@ import {
 import type {
   AppState,
   CampaignData,
+  ChannelKind,
   DraftRequest,
   OnboardingInput,
   Order,
@@ -92,6 +106,7 @@ import type {
   PageType,
   PermissionMode,
   PlannedTask,
+  Post,
   PostImage,
   Product,
   Project,
@@ -435,6 +450,119 @@ export async function approveAllCampaignPostsAction(
   if (!ws) return { ok: false, error: "No workspace." };
   const r = await approveAllCampaignPosts(ws, projectId, { name: displayName(user) });
   return { ok: true, approved: r.approved };
+}
+
+/* ---------------------------- content engine ----------------------------- */
+
+/** Create a longform master — generate from a topic, or seed from a title/paste. */
+export async function createPostAction(input: {
+  topic?: string;
+  angle?: string;
+  title?: string;
+  dek?: string;
+  body_md?: string;
+  generate?: boolean;
+}): Promise<{ ok: boolean; postId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return createPost(ws, input);
+}
+
+export async function getPostsAction(): Promise<Post[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listPosts(ws);
+}
+
+export async function getPostAction(postId: string): Promise<Post | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getPost(ws, postId);
+}
+
+export async function updatePostAction(
+  postId: string,
+  patch: { title?: string; dek?: string; body_md?: string; hero_image_url?: string | null; boosted?: boolean },
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return updatePost(ws, postId, patch);
+}
+
+/** Growth-marketer viral rewrite of the master (advisory — returned, not saved). */
+export async function boostPostAction(
+  postId: string,
+): Promise<{ ok: boolean; boosted?: BoostedLongform; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const boosted = await boostPost(ws, postId);
+    return { ok: true, boosted };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't boost the post." };
+  }
+}
+
+export async function packagePostAction(
+  postId: string,
+  channels: ChannelKind[],
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return packagePost(ws, postId, channels);
+}
+
+export async function publishPageChannelAction(
+  postId: string,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return publishPageChannel(ws, postId);
+}
+
+export async function scheduleThreadChannelAction(
+  postId: string,
+  whenISO?: string,
+): Promise<{ ok: boolean; scheduledAt?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return scheduleThreadChannel(ws, postId, { whenISO });
+}
+
+export async function markChannelPublishedAction(
+  postId: string,
+  channel: ChannelKind,
+  url?: string,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return markChannelPublished(ws, postId, channel, url);
+}
+
+export async function deletePostAction(postId: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deletePostEngine(ws, postId);
 }
 
 /* --------------------------- pages & commerce ---------------------------- */

@@ -380,6 +380,9 @@ export interface PageContent {
   hero_image_url?: string;
   /** Accent hex used for the CTA + highlights (e.g. "#2a44c0"). */
   accent?: string;
+  /** When present, the page renders as an ARTICLE (blog post from the content
+   *  engine) — headline + dek + hero + this HTML body, no buy-button CTA. */
+  body_html?: string;
 }
 
 export interface Page {
@@ -415,6 +418,64 @@ export interface Order {
   currency: string;
   customer_email: string | null;
   created_at: string;
+}
+
+/* --------------------------- content engine ------------------------------ */
+
+export type PostStatus = "draft" | "distributed";
+
+/** The longform master — one canonical draft, repurposed + distributed to many
+ *  channels (its channels are assembled at load). Markdown is the master format. */
+export interface Post {
+  id: string;
+  workspace_id: string;
+  project_id: string | null;
+  title: string;
+  /** Subtitle / standfirst. */
+  dek: string;
+  /** The canonical markdown body everything downstream derives from. */
+  body_md: string;
+  hero_image_url: string | null;
+  status: PostStatus;
+  /** Whether the growth-marketer rewrite has been applied to the master. */
+  boosted: boolean;
+  created_by_type: CreatedByType;
+  agent_id: string | null;
+  created_at: string;
+  updated_at: string;
+  channels?: PostChannel[];
+}
+
+/** Destinations a post can be packaged + distributed to (Slice 1). */
+export type ChannelKind = "page" | "x_thread" | "substack";
+/** packaged = ready · scheduled = queued to publish · published = live · handoff = export-ready (manual). */
+export type ChannelStatus = "packaged" | "scheduled" | "published" | "handoff";
+
+/** Channel-specific packaged content derived from the master. */
+export interface PackagedVariant {
+  /** X thread — ordered tweets (each ≤ 280). */
+  tweets?: string[];
+  /** Full post rendered for paste/import (Substack handoff). */
+  html?: string;
+  markdown?: string;
+  /** Short teaser/summary (thread intro, social blurb). */
+  teaser?: string;
+}
+
+/** A packaged variant of a Post for one destination + its distribution status. */
+export interface PostChannel {
+  id: string;
+  post_id: string;
+  channel: ChannelKind;
+  status: ChannelStatus;
+  variant: PackagedVariant;
+  /** The page_id or task_id this channel created downstream, if any. */
+  ref_id: string | null;
+  /** Published / permalink URL, once live. */
+  url: string | null;
+  scheduled_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /* ------------------------------ reply radar ------------------------------ */

@@ -135,6 +135,40 @@ export async function postTweet(
 }
 
 /**
+ * Publish an ordered list of tweets as a connected THREAD — each tweet after the
+ * first replies to the previous one. Optional media attaches to the first tweet.
+ * Returns every posted id + the first tweet's permalink. If a tweet fails partway,
+ * it throws with how many landed (a thread can't be un-posted).
+ */
+export async function postThread(
+  accessToken: string,
+  tweets: string[],
+  firstMediaIds?: string[],
+): Promise<{ ids: string[]; url: string; count: number }> {
+  const clean = tweets.map((t) => t.trim()).filter(Boolean);
+  if (!clean.length) throw new Error("The thread is empty.");
+  const ids: string[] = [];
+  let replyTo: string | undefined;
+  for (let i = 0; i < clean.length; i++) {
+    try {
+      const r = await postTweet(accessToken, clean[i], i === 0 ? firstMediaIds : undefined, replyTo);
+      if (!r.id) throw new Error("X returned no tweet id.");
+      ids.push(r.id);
+      replyTo = r.id;
+    } catch (e) {
+      const posted = ids.length;
+      const detail = e instanceof Error ? e.message : "unknown error";
+      throw new Error(
+        posted === 0
+          ? `Thread failed on the first tweet: ${detail}`
+          : `Thread posted ${posted}/${clean.length} tweets, then failed: ${detail}`,
+      );
+    }
+  }
+  return { ids, url: `https://x.com/i/web/status/${ids[0]}`, count: ids.length };
+}
+
+/**
  * Fetch one tweet's text + author handle by id. Best-effort — returns null on
  * any error or limited read access, so the reply assistant falls back to a
  * pasted tweet. (Reading arbitrary tweets at scale needs the X API Basic tier.)

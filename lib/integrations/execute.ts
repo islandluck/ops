@@ -18,7 +18,7 @@ import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice, isStripeTestKey } from "./stripe";
-import { postTweet, uploadMediaToX } from "./x";
+import { postThread, postTweet, uploadMediaToX } from "./x";
 import { executionKilled, guardUnattendedExecution } from "./guardrails";
 import { listMediaRowsForTask } from "@/lib/db/queries";
 import { getImageBytes } from "@/lib/media/storage";
@@ -269,10 +269,7 @@ export async function runTaskExecution(
         // Publish the composed X post specifically — the `social_post` asset the
         // agent wrote and clamped for X — never some other draft asset (e.g. a
         // longer "Drafted by …" document) that may also be attached to the task.
-        const xText =
-          assets.find((a) => a.asset_type === "social_post")?.content?.trim() ||
-          draft ||
-          task.description;
+        const socialAsset = assets.find((a) => a.asset_type === "social_post");
 
         // Attach up to 4 images (X's per-post limit). A media failure never
         // sinks the post — publish text-only and note what was skipped.
@@ -291,14 +288,37 @@ export async function runTaskExecution(
           }
         }
 
-        const r = await postTweet(token, xText, mediaIds);
-        const withImgs = mediaIds.length
-          ? ` with ${mediaIds.length} image${mediaIds.length === 1 ? "" : "s"}`
-          : mediaNote;
-        steps.push({
-          label: `Published to X — ${r.url}${r.truncated ? " (trimmed to fit 280)" : ""}${withImgs}`,
-          status: "done",
-        });
+        // A content-engine thread stores its ordered tweets as JSON on the asset's
+        // metadata (`thread_json`); publish it as a connected thread. Otherwise it's
+        // a single post.
+        const threadJson = socialAsset?.metadata?.thread_json;
+        let threadTweets: string[] = [];
+        if (typeof threadJson === "string") {
+          try {
+            const parsed = JSON.parse(threadJson);
+            if (Array.isArray(parsed)) threadTweets = parsed.filter((t): t is string => typeof t === "string");
+          } catch {
+            threadTweets = [];
+          }
+        }
+
+        if (threadTweets.length > 1) {
+          const r = await postThread(token, threadTweets, mediaIds);
+          steps.push({
+            label: `Published a ${r.count}-tweet thread to X — ${r.url}${mediaNote}`,
+            status: "done",
+          });
+        } else {
+          const xText = socialAsset?.content?.trim() || draft || task.description;
+          const r = await postTweet(token, xText, mediaIds);
+          const withImgs = mediaIds.length
+            ? ` with ${mediaIds.length} image${mediaIds.length === 1 ? "" : "s"}`
+            : mediaNote;
+          steps.push({
+            label: `Published to X — ${r.url}${r.truncated ? " (trimmed to fit 280)" : ""}${withImgs}`,
+            status: "done",
+          });
+        }
         touched.push("X (Twitter)");
       } else if (name === "Stripe") {
         const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;

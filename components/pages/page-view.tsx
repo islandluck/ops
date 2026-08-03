@@ -23,6 +23,36 @@ export function PageView({
   const cta = content.cta_label || "Get started";
   const ctaProps = { accent, label: cta, priceLabel, interactive, hasProduct: !!product, slug };
 
+  // Content-engine blog post — render as a clean article (no buy-button CTA).
+  if (content.body_html) {
+    return (
+      <div className="bg-white text-slate-900">
+        <article className="mx-auto max-w-2xl px-6 pb-20 pt-16">
+          <h1 className="text-balance text-4xl font-bold tracking-tight sm:text-[2.75rem]">
+            {content.headline || "Untitled"}
+          </h1>
+          {content.subheadline && (
+            <p className="mt-4 text-balance text-xl leading-relaxed text-slate-500">{content.subheadline}</p>
+          )}
+          {content.hero_image_url && (
+            <div className="mt-8 overflow-hidden rounded-2xl border border-slate-200">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={content.hero_image_url} alt="" className="w-full object-cover" />
+            </div>
+          )}
+          <div
+            className="prose-article mt-8"
+            // Sanitized at build time: markdownToHtml escapes all input first.
+            dangerouslySetInnerHTML={{ __html: content.body_html }}
+          />
+          {content.footer_note && (
+            <p className="mt-12 border-t border-slate-100 pt-6 text-sm text-slate-500">{content.footer_note}</p>
+          )}
+        </article>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white text-slate-900">
       {content.logo_url && (

@@ -149,6 +149,49 @@ export async function generateAndSavePage(
   return { ok: true, page: toPage(row) };
 }
 
+/** Create a hosted ARTICLE page (content-engine blog post) — rendered by PageView's
+ *  article branch (no buy button). Returns the page + its public URL. */
+export async function createHostedPost(
+  workspaceId: string,
+  input: {
+    title: string;
+    dek: string;
+    bodyHtml: string;
+    heroImageUrl?: string | null;
+    projectId?: string | null;
+    publish?: boolean;
+  },
+): Promise<Page> {
+  const id = uid();
+  const now = new Date();
+  const slug = await uniqueSlug(input.title || "post");
+  const content: PageContent = {
+    headline: input.title,
+    subheadline: input.dek,
+    cta_label: "",
+    sections: [],
+    body_html: input.bodyHtml,
+    hero_image_url: input.heroImageUrl || undefined,
+  };
+  await db.insert(pages).values({
+    id,
+    workspace_id: workspaceId,
+    project_id: input.projectId ?? null,
+    product_id: null,
+    slug,
+    title: (input.title || "Post").slice(0, 200),
+    status: input.publish ? "published" : "draft",
+    page_type: "blog",
+    content,
+    created_by_type: "agent",
+    agent_id: null,
+    created_at: now,
+    updated_at: now,
+  });
+  const [row] = await db.select().from(pages).where(eq(pages.id, id)).limit(1);
+  return toPage(row);
+}
+
 export async function listPages(workspaceId: string): Promise<Page[]> {
   const rows = await db
     .select()
