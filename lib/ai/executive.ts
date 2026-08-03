@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
-import type { BriefSuggestion, BriefSuggestionKind, Category, ExecBriefContent } from "@/lib/types";
+import type { BriefKind, BriefSuggestion, BriefSuggestionKind, Category, ExecBriefContent } from "@/lib/types";
 
 const CATEGORIES: Category[] = ["growth", "admin", "content", "research", "finance"];
 const SUGGESTION_KINDS: BriefSuggestionKind[] = ["project", "campaign", "task"];
@@ -105,22 +105,32 @@ const strArray = (v: unknown, cap = 8): string[] =>
  * Synthesize the founder's daily executive brief from a data dossier the engine
  * assembles. Grounded and honest — it must not invent numbers, tasks, or outcomes.
  */
-export async function generateBrief(dossier: string, companyName: string): Promise<ExecBriefContent> {
+export async function generateBrief(
+  dossier: string,
+  companyName: string,
+  kind: BriefKind = "daily",
+): Promise<ExecBriefContent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const isWeekly = kind === "weekly";
 
   const system = [
-    `You are the Executive Agent — Chief of Staff for ${companyName || "the company"}. Write the founder's daily brief: a sharp, honest, high-signal snapshot of the business.`,
+    `You are the Executive Agent — Chief of Staff for ${companyName || "the company"}. Write the founder's ${isWeekly ? "WEEKLY STRATEGIC REVIEW: a retrospective on the week plus a look ahead" : "daily brief: a sharp, honest, high-signal snapshot of the business"}.`,
     "Ground EVERYTHING in the DATA dossier provided — never invent numbers, tasks, content, or outcomes. If a section is empty (e.g. no revenue yet, nothing shipped), say so plainly and constructively rather than padding.",
     "Write for a busy founder: concise, direct, every line earns its place. No corporate filler, no flattery.",
+    isWeekly
+      ? "This is a WEEKLY review — take a higher altitude than a daily update. Focus on what genuinely MOVED this week, progress (or drift) against goals, and momentum patterns. End the insights with ONE sharp strategic recommendation for the coming week. Think like a board-ready operator, not a status bot."
+      : "",
     "",
     "Sections to produce:",
-    "- headline: one punchy line on where things stand today.",
+    isWeekly
+      ? "- headline: one punchy line capturing the week's story."
+      : "- headline: one punchy line on where things stand today.",
     "- kpi_review: 2–4 sentences reading the numbers — what's moving, what isn't, and what it means.",
-    "- shipped: what actually got done recently (concrete items). Empty if nothing.",
+    isWeekly ? "- shipped: what actually got done this week (concrete items). Empty if nothing." : "- shipped: what actually got done recently (concrete items). Empty if nothing.",
     "- in_motion: what's currently underway (active projects/campaigns, work in progress).",
-    "- next: what's next or needs the founder's attention (approvals, decisions, upcoming).",
+    isWeekly ? "- next: the focus for next week — priorities, decisions, what needs the founder." : "- next: what's next or needs the founder's attention (approvals, decisions, upcoming).",
     "- insights: 2–4 forward-looking ideas or observations — patterns you notice plus concrete, specific, original suggestions for the future. This is where you add the most value; be genuinely useful, not generic.",
     "- suggestions: 2–4 concrete NEXT ACTIONS the founder could greenlight, each tied to what's outstanding or to one of your insights. Each has a kind: \"project\" (a multi-step initiative — e.g. building a fundraising narrative, a launch), \"campaign\" (a follower-growth push), or \"task\" (a single discrete to-do). Give each a clear title, a one-line rationale (why now), and a 'goal': for project/campaign the outcome to accomplish (specific enough to plan against), for a task the concrete thing to do. For task suggestions also give a category (one of: growth, admin, content, research, finance). Propose real, high-leverage moves — not busywork. If nothing is worth proposing, return an empty array.",
     "",

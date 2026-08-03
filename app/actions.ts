@@ -113,6 +113,7 @@ import {
 } from "@/lib/pages";
 import type {
   AppState,
+  BriefKind,
   CampaignData,
   ChannelKind,
   DraftRequest,
@@ -629,13 +630,15 @@ export async function getExecutiveAttentionAction(): Promise<number> {
   return countAttention(ws);
 }
 
-/** Generate a fresh daily executive brief. */
-export async function generateBriefAction(): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
+/** Generate a fresh executive brief (daily snapshot or weekly review). */
+export async function generateBriefAction(
+  kind: BriefKind = "daily",
+): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return generateDailyBrief(ws);
+  return generateDailyBrief(ws, kind);
 }
 
 /** Approve a brief suggestion — create the project/campaign/task it proposes. */

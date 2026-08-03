@@ -53,6 +53,7 @@ import {
   togglePinMemoryAction,
 } from "@/app/actions";
 import type {
+  BriefKind,
   BriefSuggestion,
   CompanyGoal,
   ExecBrief,
@@ -95,6 +96,7 @@ export default function ExecutivePage() {
   const [view, setView] = useState<"chat" | "brief">("chat");
   const [briefs, setBriefs] = useState<ExecBrief[]>([]);
   const [selectedBriefId, setSelectedBriefId] = useState<string | null>(null);
+  const [cadence, setCadence] = useState<BriefKind>("daily");
   const [generating, setGenerating] = useState(false);
   const [busySug, setBusySug] = useState<string | null>(null);
   const { reloadWorkspace } = useStore();
@@ -138,14 +140,14 @@ export default function ExecutivePage() {
 
   const generateBrief = useCallback(async () => {
     setGenerating(true);
-    const res = await generateBriefAction();
+    const res = await generateBriefAction(cadence);
     setGenerating(false);
     if (res.ok && res.brief) {
       await loadBundle();
       setSelectedBriefId(res.brief.id);
       setView("brief");
     }
-  }, [loadBundle]);
+  }, [loadBundle, cadence]);
 
   const approveSug = useCallback(
     async (briefId: string, sug: BriefSuggestion) => {
@@ -216,7 +218,8 @@ export default function ExecutivePage() {
   }, [input, attachment, sending, send]);
 
   const agentName = bundle?.agentName ?? "Executive Agent";
-  const shownBrief = briefs.find((b) => b.id === selectedBriefId) ?? briefs[0] ?? null;
+  const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
+  const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -371,9 +374,14 @@ export default function ExecutivePage() {
         ) : (
           <BriefView
             brief={shownBrief}
-            briefs={briefs}
+            briefs={cadenceBriefs}
             selectedId={shownBrief?.id ?? null}
             onSelect={setSelectedBriefId}
+            cadence={cadence}
+            onCadence={(c) => {
+              setCadence(c);
+              setSelectedBriefId(null);
+            }}
             generating={generating}
             onGenerate={generateBrief}
             agentName={agentName}
@@ -597,6 +605,8 @@ function BriefView({
   briefs,
   selectedId,
   onSelect,
+  cadence,
+  onCadence,
   generating,
   onGenerate,
   agentName,
@@ -608,6 +618,8 @@ function BriefView({
   briefs: ExecBrief[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  cadence: BriefKind;
+  onCadence: (c: BriefKind) => void;
   generating: boolean;
   onGenerate: () => void;
   agentName: string;
@@ -615,17 +627,39 @@ function BriefView({
   onDismiss: (sugId: string) => void;
   busySug: string | null;
 }) {
+  const isWeekly = cadence === "weekly";
+  const noun = isWeekly ? "weekly review" : "daily brief";
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
       <div className="mx-auto max-w-2xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-[18px] font-semibold">Daily Brief</h2>
+            <h2 className="text-[18px] font-semibold">{isWeekly ? "Weekly Review" : "Daily Brief"}</h2>
             <p className="text-[12px] text-muted-foreground">
               {brief ? `Prepared ${fmtBriefDate(brief.created_at)}` : "Not generated yet"}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-lg border border-border bg-muted/50 p-0.5 text-[12px] font-medium">
+              <button
+                onClick={() => onCadence("daily")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 transition",
+                  !isWeekly ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Daily
+              </button>
+              <button
+                onClick={() => onCadence("weekly")}
+                className={cn(
+                  "rounded-md px-2.5 py-1 transition",
+                  isWeekly ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Weekly
+              </button>
+            </div>
             {briefs.length > 1 && (
               <select
                 value={selectedId ?? briefs[0]?.id}
@@ -680,7 +714,7 @@ function BriefView({
             )}
             <Button size="sm" variant={brief ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
               {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {generating ? "Preparing…" : brief ? "Regenerate" : "Generate brief"}
+              {generating ? "Preparing…" : brief ? "Regenerate" : isWeekly ? "Generate review" : "Generate brief"}
             </Button>
           </div>
         </div>
@@ -698,14 +732,15 @@ function BriefView({
               <Sparkles className="h-6 w-6" />
             </span>
             <div>
-              <h3 className="text-[15px] font-semibold">No brief yet</h3>
+              <h3 className="text-[15px] font-semibold">No {noun} yet</h3>
               <p className="mx-auto mt-1 max-w-sm text-[13px] leading-relaxed text-muted-foreground">
-                Have {agentName} synthesize a briefing from across your agents, metrics, and goals — what shipped, what's
-                underway, what's next, and where the opportunities are.
+                {isWeekly
+                  ? `Have ${agentName} step back and review the week — what moved, progress on your goals, and one sharp recommendation for what's next.`
+                  : `Have ${agentName} synthesize a briefing from across your agents, metrics, and goals — what shipped, what's underway, what's next, and where the opportunities are.`}
               </p>
             </div>
             <Button size="sm" onClick={onGenerate} disabled={generating}>
-              <Sparkles className="h-4 w-4" /> Generate today's brief
+              <Sparkles className="h-4 w-4" /> {isWeekly ? "Generate this week's review" : "Generate today's brief"}
             </Button>
           </div>
         )}

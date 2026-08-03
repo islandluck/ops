@@ -22,6 +22,7 @@ import type {
   ApprovalStatus,
   AssetType,
   Category,
+  BriefKind,
   ChannelKind,
   ChannelStatus,
   CreatedByType,
@@ -528,6 +529,7 @@ export const executiveBriefs = pgTable("executive_briefs", {
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  kind: text("kind").$type<BriefKind>().notNull().default("daily"),
   content: jsonb("content")
     .$type<ExecBriefContent>()
     .notNull()

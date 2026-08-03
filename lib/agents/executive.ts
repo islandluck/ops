@@ -22,6 +22,7 @@ import { executiveReply, generateBrief, type ExecTool } from "@/lib/ai/executive
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
+  BriefKind,
   BriefSuggestion,
   Category,
   CompanyGoal,
@@ -432,21 +433,22 @@ async function gatherBriefDossier(
 /** Generate + store a fresh daily brief. */
 export async function generateDailyBrief(
   workspaceId: string,
+  kind: BriefKind = "daily",
 ): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
   const kpis = await computeKpis(workspaceId);
   const { dossier, companyName } = await gatherBriefDossier(workspaceId, kpis);
 
   let content;
   try {
-    content = await generateBrief(dossier, companyName);
+    content = await generateBrief(dossier, companyName, kind);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't generate the brief." };
   }
 
   const id = uid();
   const now = new Date();
-  await db.insert(executiveBriefs).values({ id, workspace_id: workspaceId, content, created_at: now });
-  return { ok: true, brief: { id, content, created_at: iso(now) } };
+  await db.insert(executiveBriefs).values({ id, workspace_id: workspaceId, kind, content, created_at: now });
+  return { ok: true, brief: { id, kind, content, created_at: iso(now) } };
 }
 
 type BriefRow = typeof executiveBriefs.$inferSelect;
@@ -456,6 +458,7 @@ function toBrief(row: BriefRow): ExecBrief {
   const c = (row.content ?? {}) as Partial<ExecBriefContent>;
   return {
     id: row.id,
+    kind: row.kind,
     created_at: iso(row.created_at),
     content: {
       headline: c.headline ?? "",
@@ -469,11 +472,15 @@ function toBrief(row: BriefRow): ExecBrief {
   };
 }
 
-export async function getLatestBrief(workspaceId: string): Promise<ExecBrief | null> {
+export async function getLatestBrief(workspaceId: string, kind?: BriefKind): Promise<ExecBrief | null> {
   const [row] = await db
     .select()
     .from(executiveBriefs)
-    .where(eq(executiveBriefs.workspace_id, workspaceId))
+    .where(
+      kind
+        ? and(eq(executiveBriefs.workspace_id, workspaceId), eq(executiveBriefs.kind, kind))
+        : eq(executiveBriefs.workspace_id, workspaceId),
+    )
     .orderBy(desc(executiveBriefs.created_at))
     .limit(1);
   return row ? toBrief(row) : null;
@@ -617,6 +624,7 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
     .where(and(eq(agents.tier, "executive"), eq(agents.archived, false)))
     .limit(200);
 
+  const WEEKLY_MS = 6.5 * 24 * 60 * 60 * 1000;
   const seen = new Set<string>();
   let generated = 0;
   for (const a of execAgents) {
@@ -624,10 +632,17 @@ export async function generateDueBriefs(limit = 8): Promise<{ generated: number 
     if (seen.has(a.workspace_id)) continue;
     seen.add(a.workspace_id);
     try {
-      const latest = await getLatestBrief(a.workspace_id);
-      if (latest && Date.now() - new Date(latest.created_at).getTime() < STALE_MS) continue;
-      const r = await generateDailyBrief(a.workspace_id);
-      if (r.ok) generated += 1;
+      const daily = await getLatestBrief(a.workspace_id, "daily");
+      if (!daily || Date.now() - new Date(daily.created_at).getTime() >= STALE_MS) {
+        const r = await generateDailyBrief(a.workspace_id, "daily");
+        if (r.ok) generated += 1;
+      }
+      if (generated >= limit) break;
+      const weekly = await getLatestBrief(a.workspace_id, "weekly");
+      if (!weekly || Date.now() - new Date(weekly.created_at).getTime() >= WEEKLY_MS) {
+        const r = await generateDailyBrief(a.workspace_id, "weekly");
+        if (r.ok) generated += 1;
+      }
     } catch {
       /* one workspace never blocks the rest */
     }

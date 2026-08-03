@@ -706,8 +706,12 @@ export interface ExecBriefContent {
   suggestions: BriefSuggestion[];
 }
 
+/** daily = the morning brief · weekly = the strategic retrospective. */
+export type BriefKind = "daily" | "weekly";
+
 export interface ExecBrief {
   id: string;
+  kind: BriefKind;
   content: ExecBriefContent;
   created_at: string;
 }

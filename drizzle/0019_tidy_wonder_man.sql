@@ -1,0 +1,1 @@
+ALTER TABLE "executive_briefs" ADD COLUMN "kind" text DEFAULT 'daily' NOT NULL;
