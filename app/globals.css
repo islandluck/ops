@@ -202,3 +202,64 @@
   border: 0;
   border-top: 1px solid #e2e8f0;
 }
+
+/* Compact, theme-agnostic markdown for chat bubbles (inherits the bubble's
+   text color so it works on any background, light or dark). */
+.prose-chat {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.prose-chat > :first-child {
+  margin-top: 0;
+}
+.prose-chat > * + * {
+  margin-top: 0.7em;
+}
+.prose-chat strong {
+  font-weight: 700;
+}
+.prose-chat ul,
+.prose-chat ol {
+  padding-left: 1.3em;
+}
+.prose-chat ul {
+  list-style: disc;
+}
+.prose-chat ol {
+  list-style: decimal;
+}
+.prose-chat li {
+  margin-top: 0.2em;
+}
+.prose-chat li > ul,
+.prose-chat li > ol {
+  margin-top: 0.2em;
+}
+.prose-chat h2,
+.prose-chat h3,
+.prose-chat h4 {
+  font-weight: 700;
+  font-size: 1em;
+  margin-top: 1em;
+}
+.prose-chat a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-chat code {
+  background: rgba(127, 127, 127, 0.16);
+  border-radius: 4px;
+  padding: 0.05em 0.32em;
+  font-size: 0.9em;
+}
+.prose-chat blockquote {
+  border-left: 2px solid currentColor;
+  padding-left: 0.8em;
+  opacity: 0.8;
+}
+.prose-chat hr {
+  margin: 0.9em 0;
+  border: 0;
+  border-top: 1px solid currentColor;
+  opacity: 0.15;
+}

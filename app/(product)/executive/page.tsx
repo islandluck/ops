@@ -7,8 +7,9 @@ import {
   Brain,
   Check,
   Compass,
-  ExternalLink,
+  FileText,
   Loader2,
+  Paperclip,
   Pin,
   Plus,
   Send,
@@ -22,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
+import { markdownToHtml } from "@/lib/content/format";
 import {
   addGoalAction,
   addMemoryAction,
@@ -41,13 +43,55 @@ const STARTERS = [
   "Where are we leaving money on the table?",
 ];
 
+/** Attachments are read as text and appended to the message so the agent sees them. */
+const MAX_ATTACH_CHARS = 30_000;
+const TEXT_EXT =
+  /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|html?|css|js|jsx|ts|tsx|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql|env|toml|ini)$/i;
+function isTextFile(f: File): boolean {
+  return f.type.startsWith("text/") || /json|xml|csv|yaml|javascript|typescript/.test(f.type) || TEXT_EXT.test(f.name);
+}
+function composeMessage(typed: string, att: { name: string; text: string } | null): string {
+  if (!att) return typed;
+  return `${typed}\n\n[Attached file: ${att.name}]\n\n${att.text}`;
+}
+/** Split a stored user message back into the typed part + any attached file. */
+function splitAttachment(content: string): { typed: string; file?: { name: string; text: string } } {
+  const m = content.match(/\n\n\[Attached file: ([^\]]+)\]\n\n([\s\S]*)$/);
+  if (!m || m.index === undefined) return { typed: content };
+  return { typed: content.slice(0, m.index), file: { name: m[1], text: m[2] } };
+}
+
 export default function ExecutivePage() {
   const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [attachment, setAttachment] = useState<{ name: string; text: string } | null>(null);
+  const [attachErr, setAttachErr] = useState("");
+  const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const attachFile = useCallback(async (file: File | undefined | null) => {
+    setAttachErr("");
+    if (!file) return;
+    if (!isTextFile(file)) {
+      setAttachErr("Only text files for now — .md, .txt, .csv, .json, code, etc.");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setAttachErr("That file is too large (max 2 MB).");
+      return;
+    }
+    try {
+      const raw = await file.text();
+      const text = raw.length > MAX_ATTACH_CHARS ? raw.slice(0, MAX_ATTACH_CHARS) + "\n…[truncated]" : raw;
+      setAttachment({ name: file.name, text });
+    } catch {
+      setAttachErr("Couldn't read that file.");
+    }
+  }, []);
 
   const loadBundle = useCallback(async () => {
     const b = await getExecutiveBundleAction();
@@ -89,6 +133,14 @@ export default function ExecutivePage() {
     [sending, loadBundle],
   );
 
+  const submit = useCallback(() => {
+    const composed = composeMessage(input.trim(), attachment);
+    if (!composed.trim() || sending) return;
+    setAttachment(null);
+    setAttachErr("");
+    void send(composed);
+  }, [input, attachment, sending, send]);
+
   const agentName = bundle?.agentName ?? "Executive Agent";
 
   return (
@@ -127,29 +179,81 @@ export default function ExecutivePage() {
           )}
         </div>
 
-        <div className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6">
-          <div className="mx-auto flex max-w-2xl items-end gap-2">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(input);
-                }
-              }}
-              rows={1}
-              placeholder={`Message ${agentName}…`}
-              className="max-h-40 min-h-[44px] flex-1 resize-none rounded-xl border border-input bg-background px-3.5 py-3 text-[14px] outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/20"
-            />
-            <Button
-              size="lg"
-              className="h-11 shrink-0"
-              disabled={sending || !input.trim()}
-              onClick={() => void send(input)}
+        <div
+          className="shrink-0 border-t border-border bg-card px-4 py-3 sm:px-6"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            void attachFile(e.dataTransfer.files?.[0]);
+          }}
+        >
+          <div className="mx-auto max-w-2xl">
+            {attachErr && <p className="mb-1.5 text-[12px] text-destructive">{attachErr}</p>}
+            {attachment && (
+              <div className="mb-2 inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/60 py-1 pl-2 pr-1 text-[12px]">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate font-medium">{attachment.name}</span>
+                <span className="shrink-0 text-muted-foreground">{Math.max(1, Math.round(attachment.text.length / 1000))}k chars</span>
+                <button
+                  onClick={() => setAttachment(null)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Remove attachment"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            <div
+              className={cn(
+                "flex items-end gap-2 rounded-xl border bg-background px-2 py-1.5 transition-colors",
+                dragOver ? "border-primary/60 ring-2 ring-primary/20" : "border-input focus-within:border-primary/50",
+              )}
             >
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                hidden
+                onChange={(e) => {
+                  void attachFile(e.target.files?.[0]);
+                  if (fileRef.current) fileRef.current.value = "";
+                }}
+              />
+              <button
+                onClick={() => fileRef.current?.click()}
+                title="Attach a text file"
+                className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Paperclip className="h-4.5 w-4.5" />
+              </button>
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                rows={1}
+                placeholder={dragOver ? "Drop the file here…" : `Message ${agentName}…`}
+                className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none"
+              />
+              <Button
+                size="sm"
+                className="mb-0.5 h-9 shrink-0"
+                disabled={sending || (!input.trim() && !attachment)}
+                onClick={submit}
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -205,14 +309,15 @@ function MessageBubble({ message, agentName }: { message: ExecMessage; agentName
             <Compass className="h-3 w-3" /> {agentName}
           </p>
         )}
-        <div
-          className={cn(
-            "whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed",
-            isUser ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground",
-          )}
-        >
-          {message.content}
-        </div>
+        {isUser ? (
+          <UserContent content={message.content} />
+        ) : (
+          <div
+            className="prose-chat rounded-2xl border border-border bg-card px-3.5 py-2.5 text-foreground"
+            // Safe: markdownToHtml HTML-escapes all input before formatting.
+            dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }}
+          />
+        )}
         {message.actions?.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {message.actions.map((a, i) =>
@@ -236,6 +341,29 @@ function MessageBubble({ message, agentName }: { message: ExecMessage; agentName
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function UserContent({ content }: { content: string }) {
+  const { typed, file } = splitAttachment(content);
+  return (
+    <div className="space-y-1.5">
+      {typed.trim() && (
+        <div className="whitespace-pre-wrap rounded-2xl bg-primary px-3.5 py-2.5 text-[13.5px] leading-relaxed text-primary-foreground">
+          {typed.trim()}
+        </div>
+      )}
+      {file && (
+        <div className="overflow-hidden rounded-xl border border-border bg-muted/50 text-left">
+          <div className="flex items-center gap-1.5 border-b border-border px-2.5 py-1.5 text-[11.5px] font-medium text-muted-foreground">
+            <FileText className="h-3.5 w-3.5 shrink-0" /> {file.name}
+          </div>
+          <pre className="max-h-44 overflow-auto whitespace-pre-wrap px-2.5 py-2 font-mono text-[11px] leading-snug text-foreground/75">
+            {file.text}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
