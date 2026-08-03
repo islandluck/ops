@@ -445,7 +445,7 @@ function NewCampaignDrawer({
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
             className="min-h-[80px]"
-            placeholder="e.g. Grow among early-stage founders and indie hackers. Lean into build-in-public and hard-won lessons."
+            placeholder="e.g. Grow among [your ideal audience]; lean into the topics they care about most."
           />
           <p className="text-[11.5px] text-muted-foreground">
             The agent already knows your business and voice — add anything specific about who you want to reach.
