@@ -7,6 +7,7 @@ import {
   agents,
   approvalDecisions,
   businessBriefs,
+  companyContext,
   documents,
   executionRuns,
   integrations,
@@ -646,6 +647,8 @@ export async function getPlanningContext(wsId: string): Promise<{
     voice_rules: string[];
     restricted_phrases: string[];
     timezone: string;
+    /** Synthesized Deep Dive understanding of the company; "" until a Deep Dive completes. */
+    company_context: string;
   };
   integrations: { name: string; connected: boolean }[];
 }> {
@@ -658,6 +661,12 @@ export async function getPlanningContext(wsId: string): Promise<{
     .select({ name: integrations.name, connected: integrations.connected })
     .from(integrations)
     .where(eq(integrations.workspace_id, wsId));
+  const [context] = await db
+    .select({ summary: companyContext.summary })
+    .from(companyContext)
+    .where(and(eq(companyContext.workspace_id, wsId), eq(companyContext.is_current, true)))
+    .orderBy(desc(companyContext.version))
+    .limit(1);
   return {
     brief: {
       company_name: briefRow?.company_name ?? "",
@@ -667,6 +676,7 @@ export async function getPlanningContext(wsId: string): Promise<{
       voice_rules: briefRow?.voice_rules ?? [],
       restricted_phrases: briefRow?.restricted_phrases ?? [],
       timezone: briefRow?.timezone ?? "",
+      company_context: context?.summary ?? "",
     },
     integrations: integ,
   };

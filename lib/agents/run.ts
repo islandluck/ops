@@ -16,6 +16,7 @@ import { generateAgentTask } from "@/lib/ai/agent";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { saveDocument } from "@/lib/db/queries";
+import { getCurrentContext } from "./deepdive";
 import { runEmailTriage } from "./triage";
 import { runNotionTriage } from "./notion-triage";
 import { runSocialMediaAgent } from "./social";
@@ -231,6 +232,8 @@ export async function runTaskWithAgent(
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 4000);
+  // Deep Dive understanding (if any) enriches every agent's sense of the company.
+  const deepContext = await getCurrentContext(workspaceId);
 
   const req: DraftRequest = {
     category: task.category,
@@ -238,7 +241,9 @@ export async function runTaskWithAgent(
     description: [task.description, context].filter(Boolean).join("\n\n"),
     rationale: task.rationale,
     companyName: briefRow?.company_name ?? "",
-    companyContext: `${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(),
+    companyContext: [`${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(), deepContext?.summary ?? ""]
+      .filter(Boolean)
+      .join("\n\n"),
     idealCustomer: briefRow?.ideal_customer_profile ?? "",
     voiceRules: briefRow?.voice_rules ?? [],
     restrictedPhrases: briefRow?.restricted_phrases ?? [],

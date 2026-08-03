@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { companyContext, deepDives, deepDiveSources } from "@/lib/db/schema";
+import { businessBriefs, companyContext, deepDives, deepDiveSources, executiveMemory } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { distillSource, synthesizeContextPack, type AiUsage } from "@/lib/ai/deepdive";
 import type {
@@ -364,6 +364,22 @@ async function synthesizeStep(workspaceId: string, diveId: string): Promise<void
     created_at: new Date(),
   });
 
+  // Fold findings into the brief (only where the founder left a field blank) and
+  // seed the Executive's durable memory with what we learned.
+  await enrichBrief(workspaceId, result.brief);
+  if (result.memories.length) {
+    await db.insert(executiveMemory).values(
+      result.memories.map((m) => ({
+        id: uid(),
+        workspace_id: workspaceId,
+        content: m.content,
+        kind: m.kind,
+        source: "agent" as const,
+        pinned: false,
+      })),
+    );
+  }
+
   // Privacy: keep only the distillation — drop the raw source text.
   await db
     .update(deepDiveSources)
@@ -406,4 +422,35 @@ async function bumpUsage(diveId: string, u: AiUsage): Promise<void> {
       },
     })
     .where(eq(deepDives.id, diveId));
+}
+
+/** Fill core_offer / description / ICP from synthesis — but only where the founder left it blank. */
+async function enrichBrief(
+  workspaceId: string,
+  brief: { core_offer: string; business_description: string; ideal_customer_profile: string },
+): Promise<void> {
+  const [row] = await db
+    .select({
+      core_offer: businessBriefs.core_offer,
+      business_description: businessBriefs.business_description,
+      ideal_customer_profile: businessBriefs.ideal_customer_profile,
+    })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  if (!row) return;
+  const patch: Partial<{ core_offer: string; business_description: string; ideal_customer_profile: string }> = {};
+  if (brief.core_offer && row.core_offer.trim().length < 5) patch.core_offer = brief.core_offer;
+  if (brief.business_description && row.business_description.trim().length < 20) {
+    patch.business_description = brief.business_description;
+  }
+  if (brief.ideal_customer_profile && row.ideal_customer_profile.trim().length < 10) {
+    patch.ideal_customer_profile = brief.ideal_customer_profile;
+  }
+  if (Object.keys(patch).length) {
+    await db
+      .update(businessBriefs)
+      .set({ ...patch, updated_at: new Date() })
+      .where(eq(businessBriefs.workspace_id, workspaceId));
+  }
 }
