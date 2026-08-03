@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityEvents, agents, projects, taskAssets, tasks } from "@/lib/db/schema";
+import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { planProjectWithClaude } from "@/lib/ai/project";
 import { generateAndSavePage } from "@/lib/pages";
@@ -457,6 +457,41 @@ export async function cancelProject(
     .set({ status: "cancelled", updated_at: new Date() })
     .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)));
   await logProject(workspaceId, "status_changed", "human", actor.name, `${actor.name} cancelled “${row.title}”.`);
+  return { ok: true };
+}
+
+/**
+ * Delete a project entirely and discard its work. All of its tasks are removed
+ * (their assets/decisions/runs cascade, and any queued scheduled post is thereby
+ * canceled so nothing publishes later); follower snapshots cascade with the
+ * project; unpublished project pages are removed. Already-published pages stay
+ * live (remove those from Pages).
+ */
+export async function deleteProject(
+  workspaceId: string,
+  projectId: string,
+  actor: { name: string },
+): Promise<{ ok: boolean; error?: string }> {
+  const [row] = await db
+    .select({ title: projects.title })
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Project not found." };
+
+  await db.delete(tasks).where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.project_id, projectId)));
+  await db
+    .delete(pages)
+    .where(and(eq(pages.workspace_id, workspaceId), eq(pages.project_id, projectId), eq(pages.status, "draft")));
+  await db.delete(projects).where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)));
+
+  await logProject(
+    workspaceId,
+    "status_changed",
+    "human",
+    actor.name,
+    `${actor.name} deleted “${row.title}” and discarded its tasks.`,
+  );
   return { ok: true };
 }
 

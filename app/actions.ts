@@ -66,6 +66,7 @@ import {
   approveProjectPlan,
   cancelProject,
   createProject,
+  deleteProject,
   getProject,
   listProjects,
 } from "@/lib/agents/project";
@@ -388,6 +389,17 @@ export async function cancelProjectAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return cancelProject(ws, projectId, { name: displayName(user) });
+}
+
+/** Delete a project and discard its work (tasks, queued posts, draft pages). */
+export async function deleteProjectAction(
+  projectId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return deleteProject(ws, projectId, { name: displayName(user) });
 }
 
 export async function getProjectsAction(): Promise<Project[]> {

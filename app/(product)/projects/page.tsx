@@ -15,6 +15,7 @@ import {
   Plus,
   Repeat2,
   Sparkles,
+  Trash2,
   TrendingUp,
   User,
   Users,
@@ -36,6 +37,7 @@ import {
   cancelProjectAction,
   createGrowthCampaignAction,
   createProjectAction,
+  deleteProjectAction,
   getCampaignDataAction,
   getProjectsAction,
 } from "@/app/actions";
@@ -119,7 +121,15 @@ export default function ProjectsPage() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((p) => (
-              <ProjectCard key={p.id} project={p} onOpen={() => setSelectedId(p.id)} />
+              <ProjectCard
+                key={p.id}
+                project={p}
+                onOpen={() => setSelectedId(p.id)}
+                onDeleted={async () => {
+                  await reload();
+                  reloadWorkspace();
+                }}
+              />
             ))}
           </div>
         )}
@@ -153,6 +163,11 @@ export default function ProjectsPage() {
             await reload();
             reloadWorkspace(); // refresh the board with newly materialized tasks
           }}
+          onDeleted={async () => {
+            setSelectedId(null);
+            await reload();
+            reloadWorkspace();
+          }}
         />
       )}
     </>
@@ -173,15 +188,63 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
   );
 }
 
-function ProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+function ProjectCard({
+  project,
+  onOpen,
+  onDeleted,
+}: {
+  project: Project;
+  onOpen: () => void;
+  onDeleted: () => void;
+}) {
   const st = STATUS_META[project.status];
   const isGrowth = project.kind === "growth";
   const phases = project.plan.phases.length;
   const unit = isGrowth ? "Week" : "Phase";
   const progress = project.progress ?? { total: 0, done: 0 };
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function del(e: React.MouseEvent) {
+    e.stopPropagation();
+    setDeleting(true);
+    await deleteProjectAction(project.id);
+    onDeleted();
+  }
+
   return (
-    <Card className="card-interactive flex cursor-pointer flex-col p-4" onClick={onOpen}>
-      <div className="flex items-start justify-between gap-2">
+    <Card className="card-interactive group relative flex cursor-pointer flex-col p-4" onClick={onOpen}>
+      {confirming ? (
+        <div
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[inherit] bg-card/95 p-5 text-center backdrop-blur-[1px]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-[12.5px] text-foreground/80">
+            Delete this {isGrowth ? "campaign" : "project"}? Its tasks and any scheduled posts are discarded.
+          </p>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="destructive" onClick={del} disabled={deleting}>
+              {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Delete
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={deleting}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setConfirming(true);
+          }}
+          className="absolute right-2 top-2 z-10 rounded-lg p-1.5 text-muted-foreground/50 opacity-0 transition hover:bg-accent hover:text-destructive group-hover:opacity-100"
+          aria-label="Delete project"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <div className="flex items-start justify-between gap-2 pr-6">
         <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium", st.cls)}>
           <span className={cn("h-1.5 w-1.5 rounded-full", st.dot)} />
           {st.label}
@@ -404,16 +467,32 @@ function ProjectDrawer({
   project,
   onClose,
   onChanged,
+  onDeleted,
 }: {
   project: Project;
   onClose: () => void;
   onChanged: () => Promise<void>;
+  onDeleted: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const st = STATUS_META[project.status];
   const progress = project.progress ?? { total: 0, done: 0 };
   const isGrowth = project.kind === "growth";
+
+  async function discard() {
+    setDeleting(true);
+    setError("");
+    const res = await deleteProjectAction(project.id);
+    if (res.ok) {
+      await onDeleted();
+    } else {
+      setDeleting(false);
+      setError(res.error ?? "Couldn't delete the project.");
+    }
+  }
 
   async function act(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setBusy(true);
@@ -529,6 +608,34 @@ function ProjectDrawer({
             approve each deliverable there. When the phase is done, the next one is released automatically.
           </p>
         )}
+
+        {/* Discard */}
+        <div className="border-t border-border pt-4">
+          {confirmDelete ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-3">
+              <p className="text-[12px] leading-relaxed text-foreground/80">
+                Delete this {isGrowth ? "campaign" : "project"} permanently? Its tasks and any scheduled posts are
+                discarded. Published pages stay live — remove those from Pages.
+              </p>
+              <div className="mt-2.5 flex items-center gap-2">
+                <Button size="sm" variant="destructive" onClick={discard} disabled={deleting}>
+                  {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  Delete permanently
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground transition hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete this {isGrowth ? "campaign" : "project"}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="shrink-0 border-t border-border px-5 py-3.5">
