@@ -31,7 +31,9 @@ const iso = (d: Date | string) => new Date(d).toISOString();
 // A scan is time-bounded to ~5 min; a lock older than this means the worker
 // died mid-scan, so it's safe to reclaim / self-heal.
 const LOCK_STALE_MS = 8 * 60 * 1000;
-const PER_SCAN_LIMIT = 12;
+// Upper bound on grants returned per scan; the fit threshold (see scanGrants) is
+// what actually decides what surfaces, so keep this generous.
+const PER_SCAN_LIMIT = 20;
 // scan_draft mode auto-prepares a plan for the single strongest new grant per
 // run (never more), and only when the fit is clearly worth the human's time.
 const AUTO_DRAFT_MIN_FIT = 65;

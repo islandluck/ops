@@ -18,6 +18,9 @@ import { tavilyConfigured, tavilySearch, type TavilyResult } from "@/lib/integra
 const RANK_MODEL = process.env.OPPORTUNITY_SCAN_MODEL || "claude-sonnet-5";
 const RANK_TIMEOUT_MS = 60_000;
 
+// Only surface grants that rank ABOVE this fit score — weaker matches are noise.
+const MIN_FIT_SCORE = 37;
+
 // Approximate $/Mtok for internal metering (Sonnet-class) + a nominal per-search
 // cost for Tavily (advanced ≈ 2 credits).
 const RATE = { in: 3, out: 15 };
@@ -226,8 +229,9 @@ export async function scanGrants(input: GrantScanInput): Promise<ScanResult> {
         requirements: str(r.requirements, 600),
       };
     })
-    // Only keep grants whose URL we actually found — no invented links.
-    .filter((o) => o.title && allowedUrls.has(o.url))
+    // Keep only grants that (a) have a URL we actually found — no invented links —
+    // and (b) rank above the fit threshold.
+    .filter((o) => o.title && allowedUrls.has(o.url) && o.fit_score > MIN_FIT_SCORE)
     .sort((a, b) => b.fit_score - a.fit_score)
     .slice(0, limit);
 
