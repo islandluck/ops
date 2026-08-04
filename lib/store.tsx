@@ -224,8 +224,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Load the workspace bundle in server mode, retrying transient failures
   // (e.g. a cold connection-pool start) before surfacing an error state.
   const loadServer = useCallback(async () => {
+    // Only the FIRST load blanks the app behind the full-screen loader. Every
+    // later reload (after task actions, polls, phase transitions) refreshes IN
+    // PLACE — the user keeps seeing and using the current state while fresh
+    // data swaps in. No more whole-screen spiral mid-work.
+    const firstLoad = !latest.current;
     setLoadError(false);
-    setHydrated(false);
+    if (firstLoad) setHydrated(false);
     // NOTE: no project-advance call here. Server actions from one tab run
     // SEQUENTIALLY, so any slow action fired from the client (even "fire and
     // forget") queues every later action behind it and freezes the app. Wedged
@@ -234,16 +239,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const loaded = await loadWorkspace();
-        skipFirstSave.current = true;
-        setState(loaded ?? null);
-        setLoadError(!loaded);
+        if (loaded) {
+          skipFirstSave.current = true;
+          setState(loaded);
+          setLoadError(false);
+        } else if (firstLoad) {
+          setLoadError(true);
+        }
+        // Background reload returning nothing: keep showing the state we have.
         setHydrated(true);
         return;
       } catch {
         if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
     }
-    setLoadError(true);
+    if (firstLoad) setLoadError(true);
     setHydrated(true);
   }, []);
 
