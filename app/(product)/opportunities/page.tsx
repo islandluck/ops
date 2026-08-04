@@ -55,8 +55,8 @@ const TYPES: {
   ready: boolean;
 }[] = [
   { type: "grant", label: "Grants", icon: Landmark, blurb: "Federal, state & foundation grants your company can win.", ready: true },
-  { type: "conference", label: "Conferences", icon: Presentation, blurb: "Industry conferences for exposure and connections.", ready: false },
-  { type: "event", label: "Events", icon: CalendarDays, blurb: "Local events that put your business in front of the right people.", ready: false },
+  { type: "conference", label: "Conferences", icon: Presentation, blurb: "Industry conferences & expos for exposure and connections.", ready: true },
+  { type: "event", label: "Events", icon: CalendarDays, blurb: "Local events that put your business in front of the right people.", ready: true },
   { type: "competition", label: "Awards", icon: Trophy, blurb: "Pitch & essay competitions worth entering.", ready: false },
 ];
 
@@ -229,6 +229,9 @@ function ScannerConfig({
   const scope = scanner?.scope ?? "state";
   const status = scanner?.status ?? "idle";
   const busy = scanning || status === "scanning";
+  const meta = TYPES.find((t) => t.type === type) ?? TYPES[0];
+  // Auto-draft (scan+draft) only applies to grants; other types get scan / manual.
+  const modeOpts = type === "grant" ? MODE_OPTS : MODE_OPTS.filter((o) => o.value !== "scan_draft");
 
   const patch = useCallback(
     async (p: Parameters<typeof saveOpportunityScannerAction>[1]) => {
@@ -257,10 +260,10 @@ function ScannerConfig({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex items-center gap-2">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
-            <Target className="h-4 w-4" />
+            <meta.icon className="h-4 w-4" />
           </span>
           <div>
-            <h2 className="text-[15px] font-semibold">Grants scanner</h2>
+            <h2 className="text-[15px] font-semibold">{meta.label} scanner</h2>
             <p className="text-[12px] text-muted-foreground">Set how it runs, then let it work — or scan on demand.</p>
           </div>
         </div>
@@ -276,7 +279,7 @@ function ScannerConfig({
       {/* Autonomy */}
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
         <Field label="Autonomy">
-          <Segmented options={MODE_OPTS} value={mode} onChange={(m) => patch({ mode: m })} size="sm" />
+          <Segmented options={modeOpts} value={mode} onChange={(m) => patch({ mode: m })} size="sm" />
           <p className="mt-1.5 text-[11.5px] leading-snug text-muted-foreground">{MODE_HELP[mode]}</p>
         </Field>
 
@@ -313,8 +316,8 @@ function ScannerConfig({
       <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200/70 bg-emerald-50/60 px-3 py-2">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
         <p className="text-[12px] leading-snug text-emerald-900/80">
-          The platform only ever <span className="font-semibold">prepares</span> applications for your review. It never
-          submits a grant, enters a competition, or registers for anything on its own — the final send is always yours.
+          The platform only ever <span className="font-semibold">surfaces</span> opportunities and prepares drafts for your
+          review. It never submits an application, registers, or pays for anything on its own — the final step is always yours.
         </p>
       </div>
 
@@ -565,18 +568,21 @@ function OpportunityCard({ opp, onChanged }: { opp: Opportunity; onChanged: () =
 
           {/* Actions */}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            {opp.project_id ? (
-              <Link href="/projects" className="inline-flex">
-                <Button size="sm" variant="secondary">
-                  <FileText className="h-3.5 w-3.5" /> View plan
+            {/* Grants can be turned into a draft application project; conferences
+                and events are surfaced to shortlist and open (register yourself). */}
+            {opp.type === "grant" &&
+              (opp.project_id ? (
+                <Link href="/projects" className="inline-flex">
+                  <Button size="sm" variant="secondary">
+                    <FileText className="h-3.5 w-3.5" /> View plan
+                  </Button>
+                </Link>
+              ) : (
+                <Button size="sm" variant="primary" onClick={draft} disabled={drafting}>
+                  {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
+                  {drafting ? "Drafting…" : "Draft application plan"}
                 </Button>
-              </Link>
-            ) : (
-              <Button size="sm" variant="primary" onClick={draft} disabled={drafting}>
-                {drafting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
-                {drafting ? "Drafting…" : "Draft application plan"}
-              </Button>
-            )}
+              ))}
 
             {opp.status !== "shortlisted" && opp.status !== "drafted" && (
               <Button size="sm" variant="outline" onClick={() => setStatus("shortlisted")} disabled={busy}>

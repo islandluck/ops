@@ -5,7 +5,7 @@ import { and, asc, desc, eq, isNull, lt, lte, ne, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { opportunities, opportunityScanners } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
-import { scanGrants, type ScanResult } from "@/lib/ai/opportunities";
+import { scanConferences, scanEvents, scanGrants, type GrantScanInput, type ScanResult } from "@/lib/ai/opportunities";
 import { createProject } from "@/lib/agents/project";
 import { guardUnattendedExecution } from "@/lib/integrations/guardrails";
 import type {
@@ -276,24 +276,25 @@ async function runScanner(workspaceId: string, scannerId: string): Promise<{ ok:
 
   try {
     const { brief } = await getPlanningContext(workspaceId);
+    const scanInput: GrantScanInput = {
+      company: {
+        name: brief.company_name,
+        description: brief.business_description,
+        coreOffer: brief.core_offer,
+        idealCustomer: brief.ideal_customer_profile,
+        goals: [],
+        context: brief.company_context,
+      },
+      location: { city: brief.city, state: brief.state, country: brief.country },
+      scope: row.scope,
+      sources: row.sources ?? [],
+      limit: PER_SCAN_LIMIT,
+    };
     let result: ScanResult = { opportunities: [], usage: { ...EMPTY_USAGE, runs: 1 } };
-    if (row.type === "grant") {
-      result = await scanGrants({
-        company: {
-          name: brief.company_name,
-          description: brief.business_description,
-          coreOffer: brief.core_offer,
-          idealCustomer: brief.ideal_customer_profile,
-          goals: [],
-          context: brief.company_context,
-        },
-        location: { city: brief.city, state: brief.state, country: brief.country },
-        scope: row.scope,
-        sources: row.sources ?? [],
-        limit: PER_SCAN_LIMIT,
-      });
-    }
-    // else: conference/event/competition scanners land in a later phase.
+    if (row.type === "grant") result = await scanGrants(scanInput);
+    else if (row.type === "conference") result = await scanConferences(scanInput);
+    else if (row.type === "event") result = await scanEvents(scanInput);
+    // else (competition): lands in a later phase.
 
     let found = 0;
     const fresh: Array<{ id: string; fit: number }> = [];
