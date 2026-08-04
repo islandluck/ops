@@ -691,6 +691,34 @@ export async function getPlanningContext(wsId: string): Promise<{
   };
 }
 
+/** The company location the Opportunities scanners search around. */
+export async function getBriefLocation(
+  wsId: string,
+): Promise<{ city: string; state: string; country: string }> {
+  const [row] = await db
+    .select({ city: businessBriefs.city, state: businessBriefs.state, country: businessBriefs.country })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, wsId))
+    .limit(1);
+  return { city: row?.city ?? "", state: row?.state ?? "", country: row?.country ?? "" };
+}
+
+/** Persist the company location used to geo-target opportunity scans. */
+export async function saveBriefLocation(
+  wsId: string,
+  loc: { city: string; state: string; country: string },
+): Promise<void> {
+  await db
+    .update(businessBriefs)
+    .set({
+      city: loc.city.trim().slice(0, 120),
+      state: loc.state.trim().slice(0, 120),
+      country: loc.country.trim().slice(0, 120),
+      updated_at: new Date(),
+    })
+    .where(eq(businessBriefs.workspace_id, wsId));
+}
+
 /* -------------------------------- media --------------------------------- */
 
 function toPostImage(m: typeof media.$inferSelect): PostImage {

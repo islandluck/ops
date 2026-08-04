@@ -13,10 +13,12 @@ import {
   deleteMediaRow,
   dismissOpportunity,
   ensureProvisioned,
+  getBriefLocation,
   getDocumentById,
   getMediaRow,
   getOpportunity,
   getPlanningContext,
+  saveBriefLocation,
   getXStyleProfile,
   insertMedia,
   listMediaForTask,
@@ -97,6 +99,14 @@ import {
   startDeepDive,
   type NewDeepDiveSource,
 } from "@/lib/agents/deepdive";
+import {
+  draftGrantPlan,
+  getOpportunitiesBundle,
+  saveScanner,
+  scanNow,
+  setOpportunityStatus,
+  type ScannerPatch,
+} from "@/lib/agents/opportunities";
 import { extractDocText, isSupportedDoc, MAX_DOC_BYTES, SUPPORTED_DOC_LABEL } from "@/lib/deepdive/extract";
 import { countAttention } from "@/lib/executive/nudges";
 import {
@@ -144,6 +154,10 @@ import type {
   MemoryKind,
   UpdateAudience,
   OnboardingInput,
+  Opportunity,
+  OpportunityScanner,
+  OpportunityStatus,
+  OpportunityType,
   Order,
   Page,
   PageContent,
@@ -1639,4 +1653,92 @@ export async function signOutAction(): Promise<void> {
   const supabase = await createSupabaseServerClient();
   await supabase.auth.signOut();
   // Navigation is handled by the caller so it works uniformly in both modes.
+}
+
+/* ---------------------------- Opportunities ----------------------------- */
+
+export interface OpportunitiesView {
+  scanners: OpportunityScanner[];
+  opportunities: Opportunity[];
+  location: { city: string; state: string; country: string };
+}
+
+/** Everything the Opportunities page renders: scanners, findings, location. */
+export async function getOpportunitiesAction(): Promise<OpportunitiesView> {
+  const empty: OpportunitiesView = { scanners: [], opportunities: [], location: { city: "", state: "", country: "" } };
+  const user = await getCurrentUser();
+  if (!user) return empty;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return empty;
+  const [bundle, location] = await Promise.all([getOpportunitiesBundle(ws), getBriefLocation(ws)]);
+  return { ...bundle, location };
+}
+
+/** Save a scanner's configuration (enable, cadence, autonomy mode, scope, sources). */
+export async function saveOpportunityScannerAction(
+  type: OpportunityType,
+  patch: ScannerPatch,
+): Promise<{ ok: boolean; scanner?: OpportunityScanner; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const scanner = await saveScanner(ws, type, patch);
+    return { ok: true, scanner };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't save the scanner." };
+  }
+}
+
+/** Run a scan right now (user-triggered) and return how many new items it found. */
+export async function scanOpportunitiesNowAction(
+  type: OpportunityType,
+): Promise<{ ok: boolean; found: number; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, found: 0, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, found: 0, error: "No workspace." };
+  return scanNow(ws, type);
+}
+
+/** Shortlist / dismiss / reset a found opportunity. */
+export async function setOpportunityStatusAction(
+  id: string,
+  status: OpportunityStatus,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return setOpportunityStatus(ws, id, status);
+}
+
+/** Draft a grant application plan (a "planning" project) from a found grant. */
+export async function draftGrantPlanAction(
+  opportunityId: string,
+): Promise<{ ok: boolean; projectId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return draftGrantPlan(ws, opportunityId);
+}
+
+/** Save the company location the scanners search around. */
+export async function saveOpportunityLocationAction(loc: {
+  city: string;
+  state: string;
+  country: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    await saveBriefLocation(ws, loc);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't save location." };
+  }
 }

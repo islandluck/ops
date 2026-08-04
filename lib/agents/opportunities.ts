@@ -386,6 +386,8 @@ export async function advanceDueScanners(limit = 3): Promise<{ ran: number; foun
     .where(
       and(
         eq(opportunityScanners.enabled, true),
+        // "approve" is manual-only — the user runs each scan themselves.
+        ne(opportunityScanners.mode, "approve"),
         lte(opportunityScanners.next_run_at, now),
         or(isNull(opportunityScanners.worker_locked_at), lt(opportunityScanners.worker_locked_at, stale)),
       ),

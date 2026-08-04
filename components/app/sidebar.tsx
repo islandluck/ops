@@ -22,6 +22,7 @@ import {
   Settings,
   ShieldAlert,
   SquareKanban,
+  Target,
   Telescope,
   Users,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/agents", label: "Agents", icon: Users },
   { href: "/projects", label: "Projects", icon: FolderKanban },
+  { href: "/opportunities", label: "Opportunities", icon: Target },
   { href: "/pages", label: "Pages", icon: Globe },
   { href: "/social", label: "Social", icon: Megaphone },
   { href: "/content", label: "Content", icon: Newspaper },
