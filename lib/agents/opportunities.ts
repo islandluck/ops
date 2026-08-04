@@ -6,6 +6,8 @@ import { db } from "@/lib/db";
 import { opportunities, opportunityScanners } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { scanGrants, type ScanResult } from "@/lib/ai/opportunities";
+import { createProject } from "@/lib/agents/project";
+import { guardUnattendedExecution } from "@/lib/integrations/guardrails";
 import type {
   Opportunity,
   OpportunityScanner,
@@ -28,6 +30,9 @@ const iso = (d: Date | string) => new Date(d).toISOString();
 
 const LOCK_STALE_MS = 15 * 60 * 1000;
 const PER_SCAN_LIMIT = 12;
+// scan_draft mode auto-prepares a plan for the single strongest new grant per
+// run (never more), and only when the fit is clearly worth the human's time.
+const AUTO_DRAFT_MIN_FIT = 65;
 
 const CADENCE_MS: Record<ScannerCadence, number> = {
   weekly: 7 * 24 * 60 * 60 * 1000,
@@ -166,6 +171,73 @@ export async function setOpportunityStatus(
   return { ok: true };
 }
 
+/* --------------------------- draft → project ---------------------------- */
+
+/** Compose the project goal for a grant application from the stored listing. */
+function grantGoal(o: OppRow): string {
+  return [
+    `Prepare a grant application for “${o.title}”${o.org ? ` (${o.org})` : ""}.`,
+    o.amount ? `Award: ${o.amount}.` : "",
+    o.deadline ? `Deadline: ${o.deadline}.` : "",
+    o.summary ? `About the grant: ${o.summary}` : "",
+    o.requirements ? `Stated requirements: ${o.requirements}` : "",
+    o.url ? `Source listing: ${o.url}` : "",
+    "Plan the work to assemble a competitive application: confirm eligibility, gather the required materials, draft the narrative and budget, get internal sign-off, and be ready to submit before the deadline.",
+    "IMPORTANT: never submit the application automatically — the final submission is always a human action after review.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/**
+ * Turn a found grant into a draft application project (status "planning", no
+ * tasks until a human approves). Links the project back to the opportunity and
+ * marks it "drafted". Idempotent: returns the existing project if already drafted.
+ */
+export async function draftGrantPlan(
+  workspaceId: string,
+  opportunityId: string,
+): Promise<{ ok: boolean; projectId?: string; error?: string }> {
+  const [opp] = await db
+    .select()
+    .from(opportunities)
+    .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspace_id, workspaceId)))
+    .limit(1);
+  if (!opp) return { ok: false, error: "Opportunity not found." };
+  if (opp.project_id) return { ok: true, projectId: opp.project_id };
+  if (opp.type !== "grant") return { ok: false, error: "Drafting is only available for grants right now." };
+
+  const res = await createProject(workspaceId, grantGoal(opp), "manager");
+  if (!res.ok || !res.projectId) return { ok: false, error: res.error ?? "Couldn't draft a plan." };
+
+  await db
+    .update(opportunities)
+    .set({ project_id: res.projectId, status: "drafted" })
+    .where(and(eq(opportunities.id, opportunityId), eq(opportunities.workspace_id, workspaceId)));
+  return { ok: true, projectId: res.projectId };
+}
+
+/** scan_draft autonomy: best-effort draft of the top new grant, if allowed. */
+async function maybeAutoDraft(
+  workspaceId: string,
+  type: OpportunityType,
+  mode: ScannerMode,
+  fresh: Array<{ id: string; fit: number }>,
+): Promise<void> {
+  if (mode !== "scan_draft" || type !== "grant" || !fresh.length) return;
+  // Unattended path: honor the kill switch + daily automation cap (no owning
+  // agent, so the auto-mode check is skipped — drafting ships nothing itself).
+  const guard = await guardUnattendedExecution(workspaceId, null);
+  if (!guard.allowed) return;
+  const best = fresh.filter((f) => f.fit >= AUTO_DRAFT_MIN_FIT).sort((a, b) => b.fit - a.fit)[0];
+  if (!best) return;
+  try {
+    await draftGrantPlan(workspaceId, best.id);
+  } catch {
+    /* drafting is best-effort — a failure here never fails the scan */
+  }
+}
+
 /* ------------------------------- scanning ------------------------------- */
 
 /** Run one scanner: find → rank → dedup-store → meter → reschedule. */
@@ -204,6 +276,7 @@ async function runScanner(workspaceId: string, scannerId: string): Promise<{ ok:
     // else: conference/event/competition scanners land in a later phase.
 
     let found = 0;
+    const fresh: Array<{ id: string; fit: number }> = [];
     for (const o of result.opportunities) {
       const inserted = await db
         .insert(opportunities)
@@ -227,7 +300,10 @@ async function runScanner(workspaceId: string, scannerId: string): Promise<{ ok:
         })
         .onConflictDoNothing({ target: [opportunities.workspace_id, opportunities.url] })
         .returning({ id: opportunities.id });
-      if (inserted.length) found++;
+      if (inserted.length) {
+        found++;
+        fresh.push({ id: inserted[0].id, fit: o.fit_score });
+      }
     }
 
     const now = new Date();
@@ -240,6 +316,10 @@ async function runScanner(workspaceId: string, scannerId: string): Promise<{ ok:
         next_run_at: new Date(now.getTime() + CADENCE_MS[row.cadence]),
       })
       .where(eq(opportunityScanners.id, scannerId));
+
+    // In scan_draft mode, prepare a plan for the best new grant. This only ever
+    // drafts a "planning" project for review — it never submits an application.
+    await maybeAutoDraft(workspaceId, row.type, row.mode, fresh);
 
     return { ok: true, found };
   } catch (e) {
