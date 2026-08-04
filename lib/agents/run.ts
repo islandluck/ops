@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   activityEvents,
@@ -232,13 +232,46 @@ export async function runTaskWithAgent(
     .filter(Boolean)
     .join("\n\n")
     .slice(0, 4000);
+
+  // For a project deliverable, feed in the EARLIER approved deliverables so this
+  // one builds on them — and picks up any human edits the owner made to them.
+  let priorWork = "";
+  if (task.project_id && task.project_phase != null) {
+    const priors = await db
+      .select({ title: tasks.title, atitle: taskAssets.title, content: taskAssets.content })
+      .from(tasks)
+      .innerJoin(taskAssets, eq(taskAssets.task_id, tasks.id))
+      .where(
+        and(
+          eq(tasks.workspace_id, workspaceId),
+          eq(tasks.project_id, task.project_id),
+          lt(tasks.project_phase, task.project_phase),
+          eq(tasks.status, "done"),
+        ),
+      )
+      .orderBy(asc(tasks.project_phase));
+    priorWork = priors
+      .filter((p) => p.content?.trim() && !/^context\b/i.test(p.atitle ?? ""))
+      .map((p) => `### ${p.title}\n${p.content.slice(0, 1500)}`)
+      .join("\n\n")
+      .slice(0, 6000);
+  }
+
   // Deep Dive understanding (if any) enriches every agent's sense of the company.
   const deepContext = await getCurrentContext(workspaceId);
 
   const req: DraftRequest = {
     category: task.category,
     title: task.title,
-    description: [task.description, context].filter(Boolean).join("\n\n"),
+    description: [
+      task.description,
+      context,
+      priorWork
+        ? `EARLIER APPROVED DELIVERABLES in this project — build on these and honor any edits the owner made (e.g. partners, names, titles):\n\n${priorWork}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     rationale: task.rationale,
     companyName: briefRow?.company_name ?? "",
     companyContext: [`${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(), deepContext?.summary ?? ""]

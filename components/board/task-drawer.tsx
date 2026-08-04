@@ -21,6 +21,7 @@ import {
   Megaphone,
   MessageSquarePlus,
   MoreHorizontal,
+  Pencil,
   RotateCcw,
   Search,
   Sparkles,
@@ -49,6 +50,7 @@ import {
   getPostImagesAction,
   removePostImageAction,
   searchStockAction,
+  updateTaskAssetAction,
   uploadPostImageAction,
 } from "@/app/actions";
 import type { AssetType, PostImage, Task, TaskAsset } from "@/lib/types";
@@ -921,28 +923,58 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 
 function AssetBlock({ asset }: { asset: TaskAsset }) {
   const [open, setOpen] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(asset.content);
+  const [saving, setSaving] = useState(false);
+  const { reloadWorkspace } = useStore();
   const Icon = ASSET_ICON[asset.asset_type];
+
+  // A page asset opens in the page editor, not here; everything else is text
+  // you can edit in place (grant narratives, budgets, briefs, emails…).
+  const editable = !asset.metadata?.page_id;
+
+  useEffect(() => {
+    if (!editing) setText(asset.content);
+  }, [asset.content, editing]);
+
+  async function save() {
+    setSaving(true);
+    const res = await updateTaskAssetAction(asset.id, text);
+    setSaving(false);
+    if (res.ok) {
+      setEditing(false);
+      reloadWorkspace(); // persist so the agent reads the edit downstream
+    }
+  }
+
   return (
     <div className="overflow-hidden rounded-xl border border-border">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2.5 bg-muted/40 px-3 py-2.5 text-left transition-colors hover:bg-muted/70"
-      >
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-background text-muted-foreground">
-          <Icon className="h-4 w-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold">{asset.title}</span>
-          <span className="block text-[11px] text-muted-foreground">{ASSET_LABEL[asset.asset_type]}</span>
-        </span>
-        {asset.metadata &&
-          Object.entries(asset.metadata).slice(0, 1).map(([k, v]) => (
-            <span key={k} className="hidden rounded-md bg-background px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground sm:inline">
-              {formatMetaValue(k, v)}
-            </span>
-          ))}
-        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
-      </button>
+      <div className="flex w-full items-center gap-2.5 bg-muted/40 px-3 py-2.5">
+        <button onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
+            <Icon className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-semibold">{asset.title}</span>
+            <span className="block text-[11px] text-muted-foreground">{ASSET_LABEL[asset.asset_type]}</span>
+          </span>
+        </button>
+        {editable && !editing && (
+          <button
+            onClick={() => {
+              setOpen(true);
+              setEditing(true);
+            }}
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11.5px] font-medium text-muted-foreground transition hover:bg-background hover:text-foreground"
+            title="Edit this document"
+          >
+            <Pencil className="h-3.5 w-3.5" /> Edit
+          </button>
+        )}
+        <button onClick={() => setOpen((o) => !o)} aria-label="Toggle">
+          <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+        </button>
+      </div>
       {asset.metadata?.to && (
         <div className="flex items-center gap-1.5 border-t border-border bg-amber-50 px-3.5 py-2 text-[12px] text-amber-900">
           <Mail className="h-3.5 w-3.5 shrink-0" />
@@ -950,11 +982,38 @@ function AssetBlock({ asset }: { asset: TaskAsset }) {
           <span className="truncate font-mono">{String(asset.metadata.to)}</span>
         </div>
       )}
-      {open && (
-        <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-border bg-card px-3.5 py-3 font-mono text-[12px] leading-relaxed text-foreground/90">
-          {asset.content}
-        </pre>
-      )}
+      {open &&
+        (editing ? (
+          <div className="border-t border-border bg-card p-2.5">
+            <Textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              className="min-h-[240px] w-full font-mono text-[12px] leading-relaxed"
+              autoFocus
+            />
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setText(asset.content);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" disabled={saving || text === asset.content} onClick={save}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                Save edits
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap border-t border-border bg-card px-3.5 py-3 font-mono text-[12px] leading-relaxed text-foreground/90">
+            {asset.content}
+          </pre>
+        ))}
     </div>
   );
 }

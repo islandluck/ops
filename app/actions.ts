@@ -32,6 +32,7 @@ import {
   setDocumentNotionUrl,
   setOpportunityReplies,
   setXStyleProfile,
+  updateTaskAssetContent,
   workspaceIdForUser,
 } from "@/lib/db/queries";
 import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } from "@/lib/media/storage";
@@ -260,6 +261,19 @@ export async function connectStripeAction(): Promise<{ ok: boolean; account?: st
 }
 
 /** Approve + execute a task for real (server-side provider calls). */
+/** Save a user's edits to a task's deliverable document (grant narrative, etc.). */
+export async function updateTaskAssetAction(
+  assetId: string,
+  content: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const r = await updateTaskAssetContent(ws, assetId, content);
+  return r.ok ? { ok: true } : { ok: false, error: "Couldn't save the edit." };
+}
+
 export async function runTaskExecutionAction(
   taskId: string,
 ): Promise<{ ok: boolean; summary?: string; error?: string }> {

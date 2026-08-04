@@ -719,6 +719,27 @@ export async function saveBriefLocation(
     .where(eq(businessBriefs.workspace_id, wsId));
 }
 
+/** Edit a task's deliverable content (the drafted document). Workspace-scoped
+ *  via the owning task, so a user can only edit their own deliverables. */
+export async function updateTaskAssetContent(
+  wsId: string,
+  assetId: string,
+  content: string,
+): Promise<{ ok: boolean }> {
+  const [row] = await db
+    .select({ taskWs: tasks.workspace_id })
+    .from(taskAssets)
+    .innerJoin(tasks, eq(tasks.id, taskAssets.task_id))
+    .where(eq(taskAssets.id, assetId))
+    .limit(1);
+  if (!row || row.taskWs !== wsId) return { ok: false };
+  await db
+    .update(taskAssets)
+    .set({ content: content.slice(0, 100_000) })
+    .where(eq(taskAssets.id, assetId));
+  return { ok: true };
+}
+
 /* -------------------------------- media --------------------------------- */
 
 function toPostImage(m: typeof media.$inferSelect): PostImage {
