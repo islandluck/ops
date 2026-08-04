@@ -234,10 +234,28 @@ async function scanFederal(
 
 /* --------------------------- state / local web -------------------------- */
 
+const US_STATES: Record<string, string> = {
+  al: "Alabama", ak: "Alaska", az: "Arizona", ar: "Arkansas", ca: "California", co: "Colorado",
+  ct: "Connecticut", de: "Delaware", fl: "Florida", ga: "Georgia", hi: "Hawaii", id: "Idaho",
+  il: "Illinois", in: "Indiana", ia: "Iowa", ks: "Kansas", ky: "Kentucky", la: "Louisiana",
+  me: "Maine", md: "Maryland", ma: "Massachusetts", mi: "Michigan", mn: "Minnesota", ms: "Mississippi",
+  mo: "Missouri", mt: "Montana", ne: "Nebraska", nv: "Nevada", nh: "New Hampshire", nj: "New Jersey",
+  nm: "New Mexico", ny: "New York", nc: "North Carolina", nd: "North Dakota", oh: "Ohio", ok: "Oklahoma",
+  or: "Oregon", pa: "Pennsylvania", ri: "Rhode Island", sc: "South Carolina", sd: "South Dakota",
+  tn: "Tennessee", tx: "Texas", ut: "Utah", vt: "Vermont", va: "Virginia", wa: "Washington",
+  wv: "West Virginia", wi: "Wisconsin", wy: "Wyoming", dc: "District of Columbia",
+};
+
+/** Expand a 2-letter US state code to its full name (better for grant search). */
+function stateName(st: string): string {
+  const t = st.trim();
+  return t.length === 2 ? US_STATES[t.toLowerCase()] ?? t : t;
+}
+
 /** Build web queries for state/local/foundation grants near the company. */
 function localQueries(input: GrantScanInput): string[] {
   const sector = keywordsFor(input.company).split(" ").slice(0, 4).join(" ") || "small business";
-  const st = input.location.state;
+  const st = stateName(input.location.state);
   const city = input.location.city;
   const qs: string[] = [];
   if (st) qs.push(`${st} state grants for small business ${sector} 2026 apply`);
@@ -276,7 +294,7 @@ async function scanLocalWeb(
   if (!results.length) return { opportunities: [], usage };
   const allowed = new Set(results.map((r) => r.url));
 
-  const geo = [location.city, location.state].filter(Boolean).join(", ") || "the company's area";
+  const geo = [location.city, stateName(location.state)].filter(Boolean).join(", ") || "the company's area";
   const jsonShape =
     '{"opportunities": [{"title": string, "org": string, "url": string, "summary": string, "deadline": string, "amount": string, "location": string, "fit_score": number, "fit_rationale": string, "requirements": string}]}';
   const system = [
