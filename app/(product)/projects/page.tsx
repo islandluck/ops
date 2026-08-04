@@ -31,7 +31,6 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
   approveAllCampaignPostsAction,
-  approveProjectPlanAction,
   approveScheduledPostAction,
   cancelProjectAction,
   createGrowthCampaignAction,
@@ -64,30 +63,32 @@ export default function ProjectsPage() {
   // materialized tasks show up without a hard reload.
   const { state, reloadWorkspace } = useStore();
 
-  // A project is "building the next phase" when it's active and its current
-  // phase has no open tasks — either everything is resolved (advance imminent)
-  // or the new phase's tasks haven't materialized yet. Growth campaigns run on
-  // their own weekly engine, so they're excluded.
-  const phaseTransitioning = useCallback(
-    (p: Project): boolean => {
-      if (p.status !== "active" || p.kind === "growth") return false;
+  // Phase build state, derived from the board's tasks. "building" = the next
+  // phase's task rows don't exist yet (or the finished phase is about to
+  // advance); "drafting" = the rows exist as Agent Working cards and the agents
+  // are writing their deliverables. Growth campaigns run on their own weekly
+  // engine, so they're excluded.
+  const phaseBuildState = useCallback(
+    (p: Project): "building" | "drafting" | null => {
+      if (p.status !== "active" || p.kind === "growth") return null;
       const cur = (state?.tasks ?? []).filter(
         (t) => t.project_id === p.id && t.project_phase === p.current_phase,
       );
-      if (cur.length === 0) return true;
-      return cur.every((t) => t.status === "done" || t.approval_status === "rejected");
+      if (cur.length === 0) return "building";
+      if (cur.some((t) => t.status === "agent_working")) return "drafting";
+      return cur.every((t) => t.status === "done" || t.approval_status === "rejected") ? "building" : null;
     },
     [state],
   );
-  const anyTransitioning = projects.some(phaseTransitioning);
+  const anyBuilding = projects.some((p) => phaseBuildState(p) !== null);
 
-  // While a phase is building (AI-drafting its tasks in the background), poll
-  // lightly so the new tasks appear on their own. One request per tick, and a
-  // tick is SKIPPED if the previous one is still in flight — polls must never
-  // stack up behind a slow call (that pile-up is what made the app feel stuck).
-  // The board itself refreshes once, when the transition finishes.
+  // While a phase is building/drafting, poll lightly so its Agent Working cards
+  // appear within seconds and flip to Ready as each draft completes. One tick at
+  // a time (skipped if the previous is still in flight — stacked polls behind a
+  // slow call are what made the app feel stuck), refreshing BOTH the project
+  // list and the board (loads are fast + in-place now).
   useEffect(() => {
-    if (!anyTransitioning) return;
+    if (!anyBuilding) return;
     let inFlight = false;
     const t = setInterval(() => {
       if (inFlight) return;
@@ -96,17 +97,18 @@ export default function ProjectsPage() {
         .then(setProjects)
         .catch(() => {})
         .finally(() => {
+          reloadWorkspace();
           inFlight = false;
         });
-    }, 6000);
+    }, 5000);
     return () => {
       clearInterval(t);
-      // Transition ended (or page left): one board refresh to pull in the
-      // newly materialized tasks.
+      // Build finished (or page left): one last refresh so the board shows the
+      // final state of the new phase.
       reloadWorkspace();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anyTransitioning]);
+  }, [anyBuilding]);
 
   async function reload() {
     try {
@@ -181,7 +183,7 @@ export default function ProjectsPage() {
               <ProjectCard
                 key={p.id}
                 project={p}
-                transitioning={phaseTransitioning(p)}
+                building={phaseBuildState(p)}
                 onOpen={() => setSelectedId(p.id)}
                 onDeleted={async () => {
                   await reload();
@@ -216,7 +218,7 @@ export default function ProjectsPage() {
       {selected && (
         <ProjectDrawer
           project={selected}
-          transitioning={phaseTransitioning(selected)}
+          building={phaseBuildState(selected)}
           onClose={() => setSelectedId(null)}
           onChanged={async () => {
             await reload();
@@ -249,12 +251,12 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
 
 function ProjectCard({
   project,
-  transitioning,
+  building,
   onOpen,
   onDeleted,
 }: {
   project: Project;
-  transitioning: boolean;
+  building: "building" | "drafting" | null;
   onOpen: () => void;
   onDeleted: () => void;
 }) {
@@ -335,10 +337,10 @@ function ProjectCard({
         ) : (
           <>
             <ProgressBar done={progress.done} total={progress.total} />
-            {transitioning ? (
+            {building ? (
               <p className="inline-flex items-center gap-1.5 text-[11px] font-medium text-sky-700">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Building next phase…
+                {building === "drafting" ? "Agents drafting deliverables…" : "Building next phase…"}
               </p>
             ) : (
               <p className="text-[11px] text-muted-foreground">
@@ -533,13 +535,13 @@ function NewCampaignDrawer({
 
 function ProjectDrawer({
   project,
-  transitioning,
+  building,
   onClose,
   onChanged,
   onDeleted,
 }: {
   project: Project;
-  transitioning: boolean;
+  building: "building" | "drafting" | null;
   onClose: () => void;
   onChanged: () => Promise<void>;
   onDeleted: () => Promise<void>;
@@ -710,10 +712,12 @@ function ProjectDrawer({
 
       <div className="shrink-0 border-t border-border px-5 py-3.5">
         {error && <p className="mb-2 text-[12.5px] text-destructive">{error}</p>}
-        {transitioning && project.status === "active" && (
+        {building && project.status === "active" && (
           <p className="mb-2 inline-flex items-center gap-1.5 text-[12px] font-medium text-sky-700">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Building the next phase — the agents are drafting its tasks. They'll appear on the board shortly.
+            {building === "drafting"
+              ? "The next phase's tasks are on the board — agents are writing their deliverables now."
+              : "Building the next phase — its tasks will appear on the board in a few seconds."}
           </p>
         )}
         <div className="flex items-center gap-2">
@@ -723,7 +727,30 @@ function ProjectDrawer({
               variant="success"
               className="flex-1"
               disabled={busy}
-              onClick={() => act(() => approveProjectPlanAction(project.id))}
+              onClick={() => {
+                setBusy(true);
+                setError("");
+                // Via the ROUTE so the minutes of phase-drafting never block
+                // the tab. The project flips to active within ~2s; its tasks
+                // land on the board as Agent Working cards and fill in as each
+                // draft completes (the build poll keeps everything fresh).
+                void fetch("/api/projects/approve", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ projectId: project.id }),
+                })
+                  .then(async (r) => {
+                    const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+                    if (!r.ok || j?.ok === false) setError(j?.error ?? "Couldn't approve the plan.");
+                    await onChanged();
+                  })
+                  .catch(() => setError("Couldn't approve the plan."));
+                // Don't hold the button hostage for the whole build — show the
+                // now-active project as soon as it flips.
+                setTimeout(() => {
+                  void onChanged().finally(() => setBusy(false));
+                }, 1500);
+              }}
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               {isGrowth ? "Approve & launch campaign" : "Approve plan & start"}

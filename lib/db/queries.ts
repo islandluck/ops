@@ -176,6 +176,20 @@ async function readBundle(
           eq(tasks.status, "done"),
         ),
       ),
+    // Drafting heal: a project task stuck "agent_working" long past any real
+    // draft (the process died mid-write) becomes Ready — the owner can review
+    // whatever landed or have the agent redraft it from the drawer.
+    db
+      .update(tasks)
+      .set({ status: "ready", updated_at: new Date() })
+      .where(
+        and(
+          eq(tasks.workspace_id, wsId),
+          isNotNull(tasks.project_id),
+          eq(tasks.status, "agent_working"),
+          lt(tasks.updated_at, staleExec),
+        ),
+      ),
   ]);
   const [wsRow] = wsRows;
   const [briefRow] = briefRows;
