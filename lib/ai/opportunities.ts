@@ -201,11 +201,18 @@ async function webScan(
   const usage = emptyUsage();
   if (!tavilyConfigured() || !opts.queries.length) return { opportunities: [], usage };
 
-  const batches = await Promise.all(
-    opts.queries.map((q) => tavilySearch(q, { maxResults: 6, searchDepth: "advanced", includeDomains: opts.domains })),
-  );
-  usage.searches += opts.queries.length;
-  usage.est_cost_cents += opts.queries.length * PER_TAVILY_CENTS;
+  // General web search, plus — when the user pinned their own sites — extra
+  // searches scoped to those domains. This AUGMENTS coverage (their sources on
+  // top of the open web), rather than restricting the whole scan to them.
+  const tasks = opts.queries.map((q) => tavilySearch(q, { maxResults: 6, searchDepth: "advanced" }));
+  if (opts.domains?.length) {
+    for (const q of opts.queries.slice(0, 2)) {
+      tasks.push(tavilySearch(q, { maxResults: 6, searchDepth: "advanced", includeDomains: opts.domains }));
+    }
+  }
+  const batches = await Promise.all(tasks);
+  usage.searches += tasks.length;
+  usage.est_cost_cents += tasks.length * PER_TAVILY_CENTS;
 
   const byUrl = new Map<string, TavilyResult>();
   for (const r of batches.flat()) {
@@ -481,11 +488,14 @@ export async function scanGrants(input: GrantScanInput): Promise<ScanResult> {
   const usage: ScanUsage = { ...emptyUsage(), runs: 1 };
   const client = makeClient();
 
+  // Run the web layer for non-national scope, OR whenever the user pinned their
+  // own sources (so those are honored even on a national grants scan).
+  const runWeb = input.scope !== "national" || input.sources.length > 0;
   const [federal, local] = await Promise.all([
     scanFederal(input, client),
-    input.scope === "national"
-      ? Promise.resolve({ opportunities: [] as ScannedOpportunity[], usage: emptyUsage() })
-      : scanLocalWeb(input, client),
+    runWeb
+      ? scanLocalWeb(input, client)
+      : Promise.resolve({ opportunities: [] as ScannedOpportunity[], usage: emptyUsage() }),
   ]);
   addUsage(usage, federal.usage);
   addUsage(usage, local.usage);

@@ -10,6 +10,7 @@ import {
   DollarSign,
   ExternalLink,
   FileText,
+  Globe,
   Landmark,
   Loader2,
   MapPin,
@@ -100,6 +101,25 @@ function fmtDay(iso: string | null): string {
   } catch {
     return iso;
   }
+}
+
+/** Parse a comma-separated list of sites into clean, deduped bare domains. */
+function parseDomains(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of text.split(",")) {
+    const d = raw
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/.*$/, "")
+      .replace(/\s+/g, "")
+      .toLowerCase();
+    if (d && d.includes(".") && !seen.has(d)) {
+      seen.add(d);
+      out.push(d);
+    }
+  }
+  return out.slice(0, 20);
 }
 
 /* -------------------------------- page ---------------------------------- */
@@ -312,6 +332,10 @@ function ScannerConfig({
         <LocationEditor location={location} onSaved={onChanged} />
       </div>
 
+      <div className="mt-5">
+        <SourcesEditor sources={scanner?.sources ?? []} onSave={(list) => patch({ sources: list })} />
+      </div>
+
       {/* Safety note — the invariant the whole feature is built on. */}
       <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-200/70 bg-emerald-50/60 px-3 py-2">
         <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
@@ -417,6 +441,71 @@ function LocationEditor({
         </Button>
       </div>
       <p className="mt-1.5 text-[11.5px] leading-snug text-muted-foreground">Helps find programs you're geographically eligible for.</p>
+    </Field>
+  );
+}
+
+function SourcesEditor({
+  sources,
+  onSave,
+}: {
+  sources: string[];
+  onSave: (list: string[]) => Promise<void>;
+}) {
+  const [text, setText] = useState(sources.join(", "));
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Re-sync when the scanner reloads or the tab changes.
+  useEffect(() => {
+    setText(sources.join(", "));
+    setSaved(false);
+  }, [sources]);
+
+  const parsed = parseDomains(text);
+  const dirty = parsed.join(",") !== [...sources].join(",");
+
+  async function save() {
+    setSaving(true);
+    setSaved(false);
+    await onSave(parsed);
+    setSaving(false);
+    setSaved(true);
+  }
+
+  return (
+    <Field label="Sites to also scan (optional)">
+      <div className="flex items-center gap-1.5">
+        <div className="relative flex-1">
+          <Globe className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setSaved(false);
+            }}
+            placeholder="grantwatch.com, 10times.com, myindustryassociation.org"
+            className="h-8 w-full pl-7 text-[13px]"
+          />
+        </div>
+        <Button size="sm" variant="outline" onClick={save} disabled={!dirty || saving}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved && !dirty ? <Check className="h-3.5 w-3.5" /> : null}
+          {saved && !dirty ? "Saved" : "Save"}
+        </Button>
+      </div>
+      <p className="mt-1.5 text-[11.5px] leading-snug text-muted-foreground">
+        Comma-separated sites the scanner should also search directly — e.g. an industry association, a niche grant portal,
+        or a conference directory. It still searches the whole web too; leave blank for web-only.
+      </p>
+      {parsed.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {parsed.map((d) => (
+            <span key={d} className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
     </Field>
   );
 }
