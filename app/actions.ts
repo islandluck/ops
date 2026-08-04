@@ -70,7 +70,9 @@ import {
   advanceWorkspaceProjects,
   approveProjectPlan,
   cancelProject,
+  getProjectPacket,
   healStuckProjectTasks,
+  type ProjectPacket,
   createProject,
   deleteProject,
   getProject,
@@ -460,6 +462,20 @@ export async function advanceProjectAction(
   if (!ws) return { ok: false, error: "No workspace." };
   const r = await advanceProject(ws, projectId);
   return { ok: true, advanced: r.advanced, status: r.status };
+}
+
+/** Assemble a project's deliverables into an export packet (grant application
+ *  bundle, etc.) — the user downloads and submits it themselves. */
+export async function getProjectPacketAction(projectId: string): Promise<ProjectPacket | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getProjectPacket(ws, projectId);
+  } catch {
+    return null;
+  }
 }
 
 /** Auto-advance every active project whose current phase is fully done. Called

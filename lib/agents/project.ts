@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNotNull, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
@@ -444,6 +444,80 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
     `“${row.title}” advanced to phase ${nextIdx + 1}: ${project.plan.phases[nextIdx].title}.`,
   );
   return { advanced: true, status: "active" };
+}
+
+export interface ProjectPacketItem {
+  task: string;
+  content: string;
+}
+export interface ProjectPacketPhase {
+  title: string;
+  items: ProjectPacketItem[];
+}
+export interface ProjectPacket {
+  title: string;
+  goal: string;
+  summary: string;
+  status: string;
+  phases: ProjectPacketPhase[];
+}
+
+/** Assemble a project's deliverable documents, in phase order, into one packet
+ *  (e.g. a grant application ready to review and submit — by the human). */
+export async function getProjectPacket(
+  workspaceId: string,
+  projectId: string,
+): Promise<ProjectPacket | null> {
+  const [row] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
+    .limit(1);
+  if (!row) return null;
+  const project = toProject(row);
+
+  const taskRows = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.project_id, projectId)))
+    .orderBy(asc(tasks.project_phase), asc(tasks.created_at));
+  const ids = taskRows.map((t) => t.id);
+  const assetRows = ids.length
+    ? await db.select().from(taskAssets).where(inArray(taskAssets.task_id, ids))
+    : [];
+  const byTask = new Map<string, typeof assetRows>();
+  for (const a of assetRows) {
+    const arr = byTask.get(a.task_id) ?? [];
+    arr.push(a);
+    byTask.set(a.task_id, arr);
+  }
+
+  // Real documents only: skip checklists ("Your step"), context notes, raw
+  // step briefs, and page-backed assets (those live as actual pages).
+  const isDocument = (a: (typeof assetRows)[number]): boolean =>
+    a.content.trim().length > 0 &&
+    a.asset_type !== "checklist" &&
+    !(a.metadata as { page_id?: string } | null)?.page_id &&
+    !/^(context\b|your step\b|brief —)/i.test(a.title);
+
+  const phases: ProjectPacketPhase[] = project.plan.phases.map((ph, idx) => ({
+    title: ph.title,
+    items: taskRows
+      .filter((t) => t.project_phase === idx)
+      .flatMap((t) =>
+        (byTask.get(t.id) ?? [])
+          .filter(isDocument)
+          .map((a) => ({ task: t.title, content: a.content })),
+      ),
+  }));
+
+  return {
+    title: project.title,
+    goal: project.goal,
+    summary: project.summary,
+    status: project.status,
+    phases,
+  };
 }
 
 /** Cron heartbeat: advance every active project whose current phase is done. */

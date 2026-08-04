@@ -8,6 +8,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  FileDown,
   FileText,
   Globe,
   Loader2,
@@ -37,8 +38,11 @@ import {
   createProjectAction,
   deleteProjectAction,
   getCampaignDataAction,
+  getProjectPacketAction,
   getProjectsAction,
 } from "@/app/actions";
+import { escapeHtml, markdownToHtml } from "@/lib/content/format";
+import type { ProjectPacket } from "@/lib/agents/project";
 import type { CampaignData, CampaignPost, Category, Project, ProjectStatus } from "@/lib/types";
 
 const STATUS_META: Record<ProjectStatus, { label: string; cls: string; dot: string }> = {
@@ -550,6 +554,35 @@ function ProjectDrawer({
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  // Assemble every drafted deliverable (with the owner's edits) into one Word
+  // document — e.g. the grant application packet. Download only; submitting is
+  // always the human's step.
+  async function exportPacket() {
+    if (exporting) return;
+    setExporting(true);
+    setError("");
+    try {
+      const packet = await getProjectPacketAction(project.id);
+      const count = packet?.phases.reduce((n, ph) => n + ph.items.length, 0) ?? 0;
+      if (!packet || count === 0) {
+        setError("No drafted documents to export yet — approve some deliverables first.");
+        return;
+      }
+      const md = packetToMarkdown(packet);
+      const base = `${slugify(project.title)}-packet-${new Date().toISOString().slice(0, 10)}`;
+      downloadBlob(
+        `${base}.doc`,
+        `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(packet.title)}</title></head><body>${markdownToHtml(md)}</body></html>`,
+        "application/msword",
+      );
+    } catch {
+      setError("Couldn't assemble the packet.");
+    } finally {
+      setExporting(false);
+    }
+  }
   const st = STATUS_META[project.status];
   const progress = project.progress ?? { total: 0, done: 0 };
   const isGrowth = project.kind === "growth";
@@ -719,6 +752,14 @@ function ProjectDrawer({
               ? "The next phase's tasks are on the board — agents are writing their deliverables now."
               : "Building the next phase — its tasks will appear on the board in a few seconds."}
           </p>
+        )}
+        {!isGrowth && (project.status === "active" || project.status === "done") && (
+          <div className="mb-2">
+            <Button size="sm" variant="outline" disabled={exporting} onClick={exportPacket}>
+              {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileDown className="h-3.5 w-3.5" />}
+              Export packet (.doc)
+            </Button>
+          </div>
         )}
         <div className="flex items-center gap-2">
         {project.status === "planning" ? (
@@ -1023,4 +1064,46 @@ function PostRow({
       <p className="mt-1.5 whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">{post.text}</p>
     </div>
   );
+}
+
+/* --------------------------- packet export ------------------------------ */
+
+function slugify(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "project"
+  );
+}
+
+function downloadBlob(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Assemble the packet as Markdown: cover, then each phase's documents in order. */
+function packetToMarkdown(p: ProjectPacket): string {
+  const out: string[] = [];
+  out.push(`# ${p.title}`);
+  if (p.goal) out.push(`**Goal:** ${p.goal}`);
+  if (p.summary) out.push(p.summary);
+  out.push(
+    `_Assembled ${new Date().toLocaleDateString()}. Review everything before submitting — submission is always your step, never the platform's._`,
+  );
+  p.phases.forEach((ph, i) => {
+    if (!ph.items.length) return;
+    out.push(`## ${i + 1}. ${ph.title}`);
+    ph.items.forEach((it) => {
+      out.push(`### ${it.task}`);
+      out.push(it.content.trim());
+    });
+  });
+  return out.join("\n\n").trim() + "\n";
 }
