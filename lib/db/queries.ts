@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "./index";
 import {
   activityEvents,
@@ -147,6 +147,37 @@ async function readBundle(
     .limit(1);
   const agentRows = await db.select().from(agents).where(eq(agents.workspace_id, wsId));
   const integrationRows = await db.select().from(integrations).where(eq(integrations.workspace_id, wsId));
+
+  // Self-heal wedged project tasks BEFORE reading them, so the bundle the client
+  // receives is always actionable (and the client's own save can't fight a
+  // separate server-side reset). An execution runs synchronously in seconds, so a
+  // project task still "executing" after 60s is a dead run (a crash/restart killed
+  // it). Reset it to Ready — but NEVER touch a task already marked done.
+  const staleExec = new Date(Date.now() - 60 * 1000);
+  await db
+    .update(tasks)
+    .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
+    .where(
+      and(
+        eq(tasks.workspace_id, wsId),
+        isNotNull(tasks.project_id),
+        eq(tasks.execution_status, "executing"),
+        ne(tasks.status, "done"),
+        lt(tasks.updated_at, staleExec),
+      ),
+    );
+  await db
+    .update(tasks)
+    .set({ execution_status: "completed" })
+    .where(
+      and(
+        eq(tasks.workspace_id, wsId),
+        isNotNull(tasks.project_id),
+        eq(tasks.execution_status, "executing"),
+        eq(tasks.status, "done"),
+      ),
+    );
+
   const taskRows = await db.select().from(tasks).where(eq(tasks.workspace_id, wsId));
   const taskIds = taskRows.map((t) => t.id);
   const taskIdSet = new Set(taskIds);
