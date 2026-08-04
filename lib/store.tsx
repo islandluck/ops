@@ -227,14 +227,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadServer = useCallback(async () => {
     setLoadError(false);
     setHydrated(false);
-    // Before loading, revive any execution wedged by a crash/restart and advance
-    // (or close) projects whose current phase just finished — so completing a
-    // task anywhere progresses its project, not only on the Projects page.
-    try {
-      await advanceMyProjectsAction();
-    } catch {
-      /* best-effort — never block the load */
-    }
+    // Nudge project phases forward in the BACKGROUND (heal wedged executions +
+    // advance/close finished phases). Never awaited here — materializing a phase
+    // can be slow, and it must never block or hang the workspace load.
+    void advanceMyProjectsAction().catch(() => {});
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const loaded = await loadWorkspace();

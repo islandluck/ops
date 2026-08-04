@@ -68,15 +68,22 @@ export default function ProjectsPage() {
 
   async function reload() {
     try {
-      // Auto-advance any project whose current phase is fully done (so phases
-      // progress on visit, without waiting on the cron). Refresh the board when
-      // something advanced, so newly materialized tasks appear.
-      const adv = await advanceMyProjectsAction().catch(() => ({ ok: false, advanced: 0, healed: 0 }));
+      // Show the current state immediately — NEVER block the page on advancing
+      // (materializing a phase can be slow).
       setProjects(await getProjectsAction());
-      if (adv.advanced > 0 || (adv.healed ?? 0) > 0) reloadWorkspace();
     } finally {
       setLoading(false);
     }
+    // Then heal wedged executions + advance/close finished phases in the
+    // background, and refresh once it lands.
+    advanceMyProjectsAction()
+      .then((adv) => {
+        if (adv.advanced > 0 || (adv.healed ?? 0) > 0) {
+          void getProjectsAction().then(setProjects);
+          reloadWorkspace();
+        }
+      })
+      .catch(() => {});
   }
   useEffect(() => {
     void reload();

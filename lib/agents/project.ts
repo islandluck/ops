@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNotNull, lt } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
@@ -446,6 +446,9 @@ export async function advanceActiveProjects(limit = 20): Promise<{ advanced: num
  *  synchronously in seconds, so anything still "executing" after 5 min is dead. */
 export async function healStuckProjectTasks(workspaceId: string): Promise<{ healed: number }> {
   const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+  // Only revive genuinely-wedged tasks. NEVER touch a task the user already
+  // marked done (its execution_status flag may be stale, but done is done) —
+  // otherwise a refresh would reopen tasks the owner just closed.
   const res = await db
     .update(tasks)
     .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
@@ -454,10 +457,23 @@ export async function healStuckProjectTasks(workspaceId: string): Promise<{ heal
         eq(tasks.workspace_id, workspaceId),
         isNotNull(tasks.project_id),
         eq(tasks.execution_status, "executing"),
+        ne(tasks.status, "done"),
         lt(tasks.updated_at, staleBefore),
       ),
     )
     .returning({ id: tasks.id });
+  // Clean up the stale flag on any done-but-"executing" task so it stays done.
+  await db
+    .update(tasks)
+    .set({ execution_status: "completed" })
+    .where(
+      and(
+        eq(tasks.workspace_id, workspaceId),
+        isNotNull(tasks.project_id),
+        eq(tasks.execution_status, "executing"),
+        eq(tasks.status, "done"),
+      ),
+    );
   return { healed: res.length };
 }
 
