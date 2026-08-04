@@ -28,7 +28,9 @@ import type {
 const uid = () => randomUUID();
 const iso = (d: Date | string) => new Date(d).toISOString();
 
-const LOCK_STALE_MS = 15 * 60 * 1000;
+// A scan is time-bounded to ~5 min; a lock older than this means the worker
+// died mid-scan, so it's safe to reclaim / self-heal.
+const LOCK_STALE_MS = 8 * 60 * 1000;
 const PER_SCAN_LIMIT = 12;
 // scan_draft mode auto-prepares a plan for the single strongest new grant per
 // run (never more), and only when the fit is clearly worth the human's time.
@@ -116,6 +118,22 @@ export async function getOpportunitiesBundle(
       .orderBy(desc(opportunities.fit_score), desc(opportunities.created_at))
       .limit(120),
   ]);
+
+  // Self-heal: a scan whose process died (server restart, crash, or a hang that
+  // got killed) leaves status "scanning" with a stale/absent lock. Reset those
+  // so the UI never spins forever — the user can just scan again.
+  const staleBefore = new Date(Date.now() - LOCK_STALE_MS);
+  for (const r of scannerRows) {
+    if (r.status === "scanning" && (!r.worker_locked_at || r.worker_locked_at < staleBefore)) {
+      r.status = "idle";
+      r.worker_locked_at = null;
+      await db
+        .update(opportunityScanners)
+        .set({ status: "idle", worker_locked_at: null })
+        .where(and(eq(opportunityScanners.id, r.id), eq(opportunityScanners.workspace_id, workspaceId)));
+    }
+  }
+
   return { scanners: scannerRows.map(toScanner), opportunities: oppRows.map(toOpportunity) };
 }
 
