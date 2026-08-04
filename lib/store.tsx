@@ -17,7 +17,6 @@ import { hasSupabaseClientEnv } from "./config";
 import {
   connectStripeAction,
   createTaskAction,
-  advanceMyProjectsAction,
   disconnectIntegrationAction,
   generateDraft,
   loadWorkspace,
@@ -227,10 +226,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadServer = useCallback(async () => {
     setLoadError(false);
     setHydrated(false);
-    // Nudge project phases forward in the BACKGROUND (heal wedged executions +
-    // advance/close finished phases). Never awaited here — materializing a phase
-    // can be slow, and it must never block or hang the workspace load.
-    void advanceMyProjectsAction().catch(() => {});
+    // NOTE: no project-advance call here. Server actions from one tab run
+    // SEQUENTIALLY, so any slow action fired from the client (even "fire and
+    // forget") queues every later action behind it and freezes the app. Wedged
+    // tasks are healed server-side inside loadWorkspace itself; phase advance
+    // runs in the background of saveWorkspace and via /api/projects/advance.
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const loaded = await loadWorkspace();

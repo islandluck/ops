@@ -425,13 +425,27 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
     // actions, and must never be clobbered by a client-driven bundle save.
     await tx.delete(activityEvents).where(eq(activityEvents.workspace_id, wsId));
     await tx.delete(agents).where(eq(agents.workspace_id, wsId));
-    const wsTasks = await tx.select({ id: tasks.id }).from(tasks).where(eq(tasks.workspace_id, wsId));
-    for (const { id } of wsTasks) {
+
+    // The bundle save deletes-by-omission (a task missing from the client state
+    // is a deletion). BUT server-side phase materialization inserts new project
+    // tasks the client bundle can't know about yet — a stale save must never
+    // wipe a freshly created phase. Preserve project tasks that are missing
+    // from the bundle AND were created in the last 10 minutes.
+    const bundleTaskIds = new Set(state.tasks.map((t) => t.id));
+    const recentCutoff = new Date(Date.now() - 10 * 60 * 1000);
+    const wsTasks = await tx
+      .select({ id: tasks.id, project_id: tasks.project_id, created_at: tasks.created_at })
+      .from(tasks)
+      .where(eq(tasks.workspace_id, wsId));
+    const deletableIds = wsTasks
+      .filter((t) => bundleTaskIds.has(t.id) || !t.project_id || t.created_at <= recentCutoff)
+      .map((t) => t.id);
+    for (const id of deletableIds) {
       await tx.delete(executionRuns).where(eq(executionRuns.task_id, id));
       await tx.delete(approvalDecisions).where(eq(approvalDecisions.task_id, id));
       await tx.delete(taskAssets).where(eq(taskAssets.task_id, id));
     }
-    await tx.delete(tasks).where(eq(tasks.workspace_id, wsId));
+    if (deletableIds.length) await tx.delete(tasks).where(inArray(tasks.id, deletableIds));
 
     // Brief (upsert by workspace).
     await tx

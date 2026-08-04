@@ -30,8 +30,6 @@ import { CATEGORY_META } from "@/lib/constants";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
-  advanceMyProjectsAction,
-  advanceProjectAction,
   approveAllCampaignPostsAction,
   approveProjectPlanAction,
   approveScheduledPostAction,
@@ -75,10 +73,12 @@ export default function ProjectsPage() {
       setLoading(false);
     }
     // Then heal wedged executions + advance/close finished phases in the
-    // background, and refresh once it lands.
-    advanceMyProjectsAction()
+    // background via the ROUTE (a fetch runs in parallel with server actions,
+    // so a slow materialization can't freeze the app), refreshing once it lands.
+    void fetch("/api/projects/advance", { method: "POST" })
+      .then((r) => (r.ok ? (r.json() as Promise<{ advanced?: number; healed?: number }>) : null))
       .then((adv) => {
-        if (adv.advanced > 0 || (adv.healed ?? 0) > 0) {
+        if (adv && ((adv.advanced ?? 0) > 0 || (adv.healed ?? 0) > 0)) {
           void getProjectsAction().then(setProjects);
           reloadWorkspace();
         }
@@ -676,7 +676,20 @@ function ProjectDrawer({
               variant="outline"
               className="flex-1"
               disabled={busy}
-              onClick={() => act(() => advanceProjectAction(project.id))}
+              onClick={() =>
+                act(async () => {
+                  // Via the ROUTE, not a server action: materializing the next
+                  // phase can take a while, and a slow action would freeze
+                  // every other action in the tab. fetch runs in parallel.
+                  const r = await fetch("/api/projects/advance", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ projectId: project.id }),
+                  });
+                  const j = (await r.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+                  return { ok: Boolean(r.ok && j?.ok !== false), error: j?.error };
+                })
+              }
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
               {isGrowth ? "Refresh progress" : "Check for progress"}

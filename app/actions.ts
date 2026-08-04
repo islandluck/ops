@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { after } from "next/server";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient, getCurrentUser } from "@/lib/supabase/server";
 import { APP_URL, hasAnthropicKey, isBackendConfigured } from "@/lib/config";
@@ -206,11 +207,14 @@ export async function saveWorkspace(state: AppState): Promise<{ ok: boolean; err
   if (!user) return { ok: false, error: "Not authenticated" };
   try {
     await saveBundleForUser(user.id, state);
-    // Completing the last task of a phase must progress/close its project. Do it
-    // right where task changes persist — awaited so the close is durable before
-    // we return (the client fire-and-forgets this save, so it isn't blocked).
+    // Completing the last task of a phase must progress/close its project.
+    // CRITICAL: server actions from one tab run sequentially, so this MUST NOT
+    // block the response — materializing a phase can take a minute of AI
+    // drafting, and awaiting it here froze the whole app. after() runs it once
+    // the response is sent; the atomic claim in advanceProject makes concurrent
+    // triggers (save, projects page, cron) safe.
     const ws = await workspaceIdForUser(user.id);
-    if (ws) await advanceWorkspaceProjects(ws).catch(() => ({ advanced: 0 }));
+    if (ws) after(() => advanceWorkspaceProjects(ws).catch(() => ({ advanced: 0 })));
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Save failed" };

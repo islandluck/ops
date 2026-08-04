@@ -358,7 +358,13 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
     const now = new Date();
     const nextIdx = phaseIdx + 1;
     if (nextIdx >= weeks) {
-      await db.update(projects).set({ status: "done", updated_at: now }).where(eq(projects.id, projectId));
+      // Atomic claim: only ONE concurrent advance may close the campaign.
+      const closed = await db
+        .update(projects)
+        .set({ status: "done", updated_at: now })
+        .where(and(eq(projects.id, projectId), eq(projects.status, "active"), eq(projects.current_phase, phaseIdx)))
+        .returning({ id: projects.id });
+      if (!closed.length) return { advanced: false, status: "done" };
       await snapshotFollowers(workspaceId, projectId).catch(() => null);
       await logProject(
         workspaceId,
@@ -369,7 +375,13 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
       );
       return { advanced: true, status: "done" };
     }
-    await db.update(projects).set({ current_phase: nextIdx, updated_at: now }).where(eq(projects.id, projectId));
+    // Atomic claim: only ONE concurrent advance may bump the week + materialize.
+    const claimed = await db
+      .update(projects)
+      .set({ current_phase: nextIdx, updated_at: now })
+      .where(and(eq(projects.id, projectId), eq(projects.status, "active"), eq(projects.current_phase, phaseIdx)))
+      .returning({ id: projects.id });
+    if (!claimed.length) return { advanced: false, status: "active" };
     await materializePhase(workspaceId, project, nextIdx);
     await logProject(
       workspaceId,
@@ -404,11 +416,25 @@ export async function advanceProject(workspaceId: string, projectId: string): Pr
   const nextIdx = phaseIdx + 1;
   const project = toProject(row);
   if (nextIdx >= project.plan.phases.length) {
-    await db.update(projects).set({ status: "done", updated_at: now }).where(eq(projects.id, projectId));
+    // Atomic claim: only ONE concurrent advance (save-triggered, page-triggered,
+    // cron) may close the project.
+    const closed = await db
+      .update(projects)
+      .set({ status: "done", updated_at: now })
+      .where(and(eq(projects.id, projectId), eq(projects.status, "active"), eq(projects.current_phase, phaseIdx)))
+      .returning({ id: projects.id });
+    if (!closed.length) return { advanced: false, status: "done" };
     await logProject(workspaceId, "status_changed", "system", "sys", `Project “${row.title}” is complete. 🎉`);
     return { advanced: true, status: "done" };
   }
-  await db.update(projects).set({ current_phase: nextIdx, updated_at: now }).where(eq(projects.id, projectId));
+  // Atomic claim: only ONE concurrent advance may bump the phase + materialize —
+  // this is what prevents double-materialized (duplicate) phase tasks.
+  const claimed = await db
+    .update(projects)
+    .set({ current_phase: nextIdx, updated_at: now })
+    .where(and(eq(projects.id, projectId), eq(projects.status, "active"), eq(projects.current_phase, phaseIdx)))
+    .returning({ id: projects.id });
+  if (!claimed.length) return { advanced: false, status: "active" };
   await materializePhase(workspaceId, project, nextIdx);
   await logProject(
     workspaceId,
