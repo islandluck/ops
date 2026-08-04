@@ -68,6 +68,7 @@ import {
   advanceWorkspaceProjects,
   approveProjectPlan,
   cancelProject,
+  healStuckProjectTasks,
   createProject,
   deleteProject,
   getProject,
@@ -440,14 +441,17 @@ export async function advanceProjectAction(
 
 /** Auto-advance every active project whose current phase is fully done. Called
  *  when the Projects page loads so completed phases progress without the cron. */
-export async function advanceMyProjectsAction(): Promise<{ ok: boolean; advanced: number }> {
+export async function advanceMyProjectsAction(): Promise<{ ok: boolean; advanced: number; healed?: number }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, advanced: 0 };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, advanced: 0 };
   try {
+    // Revive any task wedged mid-execution (e.g. a server restart killed the
+    // run) so it returns to the board, THEN advance completed phases.
+    const healed = await healStuckProjectTasks(ws).catch(() => ({ healed: 0 }));
     const r = await advanceWorkspaceProjects(ws);
-    return { ok: true, advanced: r.advanced };
+    return { ok: true, advanced: r.advanced, healed: healed.healed };
   } catch {
     return { ok: false, advanced: 0 };
   }

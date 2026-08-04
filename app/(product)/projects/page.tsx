@@ -71,9 +71,9 @@ export default function ProjectsPage() {
       // Auto-advance any project whose current phase is fully done (so phases
       // progress on visit, without waiting on the cron). Refresh the board when
       // something advanced, so newly materialized tasks appear.
-      const adv = await advanceMyProjectsAction().catch(() => ({ ok: false, advanced: 0 }));
+      const adv = await advanceMyProjectsAction().catch(() => ({ ok: false, advanced: 0, healed: 0 }));
       setProjects(await getProjectsAction());
-      if (adv.advanced > 0) reloadWorkspace();
+      if (adv.advanced > 0 || (adv.healed ?? 0) > 0) reloadWorkspace();
     } finally {
       setLoading(false);
     }

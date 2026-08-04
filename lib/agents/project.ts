@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
@@ -439,6 +439,26 @@ export async function advanceActiveProjects(limit = 20): Promise<{ advanced: num
     }
   }
   return { advanced };
+}
+
+/** Reset project tasks wedged mid-execution (e.g. the server died during a run)
+ *  back to "ready for review", preserving the drafted deliverable. Executions run
+ *  synchronously in seconds, so anything still "executing" after 5 min is dead. */
+export async function healStuckProjectTasks(workspaceId: string): Promise<{ healed: number }> {
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+  const res = await db
+    .update(tasks)
+    .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
+    .where(
+      and(
+        eq(tasks.workspace_id, workspaceId),
+        isNotNull(tasks.project_id),
+        eq(tasks.execution_status, "executing"),
+        lt(tasks.updated_at, staleBefore),
+      ),
+    )
+    .returning({ id: tasks.id });
+  return { healed: res.length };
 }
 
 /** Advance every active project in ONE workspace whose current phase is done.
