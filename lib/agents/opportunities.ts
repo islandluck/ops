@@ -5,7 +5,14 @@ import { and, asc, desc, eq, isNull, lt, lte, ne, or } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { opportunities, opportunityScanners } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
-import { scanConferences, scanEvents, scanGrants, type GrantScanInput, type ScanResult } from "@/lib/ai/opportunities";
+import {
+  scanCompetitions,
+  scanConferences,
+  scanEvents,
+  scanGrants,
+  type GrantScanInput,
+  type ScanResult,
+} from "@/lib/ai/opportunities";
 import { createProject } from "@/lib/agents/project";
 import { guardUnattendedExecution } from "@/lib/integrations/guardrails";
 import type {
@@ -294,7 +301,7 @@ async function runScanner(workspaceId: string, scannerId: string): Promise<{ ok:
     if (row.type === "grant") result = await scanGrants(scanInput);
     else if (row.type === "conference") result = await scanConferences(scanInput);
     else if (row.type === "event") result = await scanEvents(scanInput);
-    // else (competition): lands in a later phase.
+    else if (row.type === "competition") result = await scanCompetitions(scanInput);
 
     let found = 0;
     const fresh: Array<{ id: string; fit: number }> = [];

@@ -58,7 +58,7 @@ const TYPES: {
   { type: "grant", label: "Grants", icon: Landmark, blurb: "Federal, state & foundation grants your company can win.", ready: true },
   { type: "conference", label: "Conferences", icon: Presentation, blurb: "Industry conferences & expos for exposure and connections.", ready: true },
   { type: "event", label: "Events", icon: CalendarDays, blurb: "Local events that put your business in front of the right people.", ready: true },
-  { type: "competition", label: "Awards", icon: Trophy, blurb: "Pitch & essay competitions worth entering.", ready: false },
+  { type: "competition", label: "Awards", icon: Trophy, blurb: "Pitch & essay competitions, challenges & awards worth entering.", ready: true },
 ];
 
 const CADENCE_OPTS: SegmentedOption<ScannerCadence>[] = [
