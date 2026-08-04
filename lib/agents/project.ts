@@ -441,6 +441,27 @@ export async function advanceActiveProjects(limit = 20): Promise<{ advanced: num
   return { advanced };
 }
 
+/** Advance every active project in ONE workspace whose current phase is done.
+ *  Used to auto-progress phases when the user opens the Projects page (so it
+ *  works locally without the cron, and matches "I finished the phase" intent). */
+export async function advanceWorkspaceProjects(workspaceId: string): Promise<{ advanced: number }> {
+  const active = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.status, "active")))
+    .limit(50);
+  let advanced = 0;
+  for (const p of active) {
+    try {
+      const r = await advanceProject(workspaceId, p.id);
+      if (r.advanced) advanced += 1;
+    } catch {
+      /* one bad project never blocks the rest */
+    }
+  }
+  return { advanced };
+}
+
 export async function cancelProject(
   workspaceId: string,
   projectId: string,

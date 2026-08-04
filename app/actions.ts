@@ -65,6 +65,7 @@ import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-tr
 import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
   advanceProject,
+  advanceWorkspaceProjects,
   approveProjectPlan,
   cancelProject,
   createProject,
@@ -435,6 +436,21 @@ export async function advanceProjectAction(
   if (!ws) return { ok: false, error: "No workspace." };
   const r = await advanceProject(ws, projectId);
   return { ok: true, advanced: r.advanced, status: r.status };
+}
+
+/** Auto-advance every active project whose current phase is fully done. Called
+ *  when the Projects page loads so completed phases progress without the cron. */
+export async function advanceMyProjectsAction(): Promise<{ ok: boolean; advanced: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, advanced: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, advanced: 0 };
+  try {
+    const r = await advanceWorkspaceProjects(ws);
+    return { ok: true, advanced: r.advanced };
+  } catch {
+    return { ok: false, advanced: 0 };
+  }
 }
 
 export async function cancelProjectAction(

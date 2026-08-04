@@ -30,6 +30,7 @@ import { CATEGORY_META } from "@/lib/constants";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
+  advanceMyProjectsAction,
   advanceProjectAction,
   approveAllCampaignPostsAction,
   approveProjectPlanAction,
@@ -67,7 +68,12 @@ export default function ProjectsPage() {
 
   async function reload() {
     try {
+      // Auto-advance any project whose current phase is fully done (so phases
+      // progress on visit, without waiting on the cron). Refresh the board when
+      // something advanced, so newly materialized tasks appear.
+      const adv = await advanceMyProjectsAction().catch(() => ({ ok: false, advanced: 0 }));
       setProjects(await getProjectsAction());
+      if (adv.advanced > 0) reloadWorkspace();
     } finally {
       setLoading(false);
     }
