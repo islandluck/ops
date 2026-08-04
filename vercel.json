@@ -12,6 +12,10 @@
     {
       "path": "/api/deep-dive/run",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/opportunities/run",
+      "schedule": "0 */6 * * *"
     }
   ]
 }
