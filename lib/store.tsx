@@ -25,7 +25,6 @@ import {
   runEmailTriageAction,
   runNotionTriageAction,
   runTaskAction,
-  runTaskExecutionAction,
   approveScheduledPostAction,
   scheduleTaskAction,
   unscheduleTaskAction,
@@ -522,7 +521,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (saveTimer.current) clearTimeout(saveTimer.current); // don't clobber server writes
       setBusyTaskId(id);
       pushToast({ tone: "working", title: working });
-      void runTaskExecutionAction(id)
+      // Via the ROUTE, not a server action: a slow execution (external APIs)
+      // inside an action would queue every later load/save behind it and make
+      // the whole app feel stuck. fetch() runs in parallel with actions.
+      const execute = async (): Promise<{ ok: boolean; summary?: string; error?: string }> => {
+        try {
+          const r = await fetch("/api/tasks/execute", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ taskId: id }),
+          });
+          const j = (await r.json().catch(() => null)) as { ok?: boolean; summary?: string; error?: string } | null;
+          return { ok: Boolean(j?.ok), summary: j?.summary, error: j?.error ?? (r.ok ? undefined : "Execution failed") };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "Execution failed" };
+        }
+      };
+      void execute()
         .then(async (res) => {
           await loadServer();
           setBusyTaskId(null);

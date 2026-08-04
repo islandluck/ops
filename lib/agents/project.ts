@@ -471,7 +471,9 @@ export async function advanceActiveProjects(limit = 20): Promise<{ advanced: num
  *  back to "ready for review", preserving the drafted deliverable. Executions run
  *  synchronously in seconds, so anything still "executing" after 5 min is dead. */
 export async function healStuckProjectTasks(workspaceId: string): Promise<{ healed: number }> {
-  const staleBefore = new Date(Date.now() - 5 * 60 * 1000);
+  // Executions run via /api/tasks/execute (maxDuration 300s) — only a run older
+  // than that ceiling is definitely dead. Never yank a live one back to Ready.
+  const staleBefore = new Date(Date.now() - 6 * 60 * 1000);
   // Only revive genuinely-wedged tasks. NEVER touch a task the user already
   // marked done (its execution_status flag may be stale, but done is done) —
   // otherwise a refresh would reopen tasks the owner just closed.

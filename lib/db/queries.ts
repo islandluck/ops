@@ -139,67 +139,68 @@ async function readBundle(
   email: string,
   onboarded: boolean,
 ): Promise<AppState> {
-  const [wsRow] = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
-  const [briefRow] = await db
-    .select()
-    .from(businessBriefs)
-    .where(eq(businessBriefs.workspace_id, wsId))
-    .limit(1);
-  const agentRows = await db.select().from(agents).where(eq(agents.workspace_id, wsId));
-  const integrationRows = await db.select().from(integrations).where(eq(integrations.workspace_id, wsId));
-
-  // Self-heal wedged project tasks BEFORE reading them, so the bundle the client
-  // receives is always actionable (and the client's own save can't fight a
-  // separate server-side reset). An execution runs synchronously in seconds, so a
-  // project task still "executing" after 60s is a dead run (a crash/restart killed
-  // it). Reset it to Ready — but NEVER touch a task already marked done.
-  const staleExec = new Date(Date.now() - 60 * 1000);
-  await db
-    .update(tasks)
-    .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
-    .where(
-      and(
-        eq(tasks.workspace_id, wsId),
-        isNotNull(tasks.project_id),
-        eq(tasks.execution_status, "executing"),
-        ne(tasks.status, "done"),
-        lt(tasks.updated_at, staleExec),
+  // The bundle read used to be ~11 sequential round trips to the remote DB
+  // (seconds per load — and loads run constantly). Batch the independent reads,
+  // and fold in the wedged-task heal:
+  // Heal = reset a project task stuck "executing" back to Ready, so the bundle
+  // the client receives is always actionable. Executions now run via the
+  // /api/tasks/execute route and may legitimately take minutes, so only treat a
+  // run as dead well past that route's ceiling — NEVER yank a live one, and
+  // NEVER touch a task already marked done (just clean its stale flag).
+  const staleExec = new Date(Date.now() - 6 * 60 * 1000);
+  const [wsRows, briefRows, agentRows, integrationRows] = await Promise.all([
+    db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1),
+    db.select().from(businessBriefs).where(eq(businessBriefs.workspace_id, wsId)).limit(1),
+    db.select().from(agents).where(eq(agents.workspace_id, wsId)),
+    db.select().from(integrations).where(eq(integrations.workspace_id, wsId)),
+    db
+      .update(tasks)
+      .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
+      .where(
+        and(
+          eq(tasks.workspace_id, wsId),
+          isNotNull(tasks.project_id),
+          eq(tasks.execution_status, "executing"),
+          ne(tasks.status, "done"),
+          lt(tasks.updated_at, staleExec),
+        ),
       ),
-    );
-  await db
-    .update(tasks)
-    .set({ execution_status: "completed" })
-    .where(
-      and(
-        eq(tasks.workspace_id, wsId),
-        isNotNull(tasks.project_id),
-        eq(tasks.execution_status, "executing"),
-        eq(tasks.status, "done"),
+    db
+      .update(tasks)
+      .set({ execution_status: "completed" })
+      .where(
+        and(
+          eq(tasks.workspace_id, wsId),
+          isNotNull(tasks.project_id),
+          eq(tasks.execution_status, "executing"),
+          eq(tasks.status, "done"),
+        ),
       ),
-    );
+  ]);
+  const [wsRow] = wsRows;
+  const [briefRow] = briefRows;
 
   const taskRows = await db.select().from(tasks).where(eq(tasks.workspace_id, wsId));
   const taskIds = taskRows.map((t) => t.id);
   const taskIdSet = new Set(taskIds);
-  const assetRows = taskIds.length
-    ? await db.select().from(taskAssets).where(inArray(taskAssets.task_id, taskIds))
-    : [];
-  const decisionRows = taskIds.length
-    ? await db.select().from(approvalDecisions).where(inArray(approvalDecisions.task_id, taskIds))
-    : [];
-  const runRows = taskIds.length
-    ? await db.select().from(executionRuns).where(inArray(executionRuns.task_id, taskIds))
-    : [];
-  const activityRows = await db
-    .select()
-    .from(activityEvents)
-    .where(eq(activityEvents.workspace_id, wsId));
-  const documentRows = await db
-    .select()
-    .from(documents)
-    .where(eq(documents.workspace_id, wsId))
-    .orderBy(desc(documents.created_at))
-    .limit(300);
+  const [assetRows, decisionRows, runRows, activityRows, documentRows] = await Promise.all([
+    db.select().from(taskAssets).where(taskIds.length ? inArray(taskAssets.task_id, taskIds) : sql`false`),
+    db
+      .select()
+      .from(approvalDecisions)
+      .where(taskIds.length ? inArray(approvalDecisions.task_id, taskIds) : sql`false`),
+    db
+      .select()
+      .from(executionRuns)
+      .where(taskIds.length ? inArray(executionRuns.task_id, taskIds) : sql`false`),
+    db.select().from(activityEvents).where(eq(activityEvents.workspace_id, wsId)),
+    db
+      .select()
+      .from(documents)
+      .where(eq(documents.workspace_id, wsId))
+      .orderBy(desc(documents.created_at))
+      .limit(300),
+  ]);
 
   const assetsByTask = new Map<string, typeof assetRows>();
   for (const a of assetRows) {
@@ -440,12 +441,15 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
     const deletableIds = wsTasks
       .filter((t) => bundleTaskIds.has(t.id) || !t.project_id || t.created_at <= recentCutoff)
       .map((t) => t.id);
-    for (const id of deletableIds) {
-      await tx.delete(executionRuns).where(eq(executionRuns.task_id, id));
-      await tx.delete(approvalDecisions).where(eq(approvalDecisions.task_id, id));
-      await tx.delete(taskAssets).where(eq(taskAssets.task_id, id));
+    // Bulk deletes — one statement per table. The old per-task loop was 3×N
+    // round trips to the remote DB and made every save take many seconds,
+    // which (with serialized actions) is what made the app feel stuck.
+    if (deletableIds.length) {
+      await tx.delete(executionRuns).where(inArray(executionRuns.task_id, deletableIds));
+      await tx.delete(approvalDecisions).where(inArray(approvalDecisions.task_id, deletableIds));
+      await tx.delete(taskAssets).where(inArray(taskAssets.task_id, deletableIds));
+      await tx.delete(tasks).where(inArray(tasks.id, deletableIds));
     }
-    if (deletableIds.length) await tx.delete(tasks).where(inArray(tasks.id, deletableIds));
 
     // Brief (upsert by workspace).
     await tx

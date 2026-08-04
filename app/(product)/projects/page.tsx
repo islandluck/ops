@@ -82,15 +82,29 @@ export default function ProjectsPage() {
   const anyTransitioning = projects.some(phaseTransitioning);
 
   // While a phase is building (AI-drafting its tasks in the background), poll
-  // lightly so the new tasks appear on their own — reloads are seamless now, so
-  // this never blanks the screen.
+  // lightly so the new tasks appear on their own. One request per tick, and a
+  // tick is SKIPPED if the previous one is still in flight — polls must never
+  // stack up behind a slow call (that pile-up is what made the app feel stuck).
+  // The board itself refreshes once, when the transition finishes.
   useEffect(() => {
     if (!anyTransitioning) return;
+    let inFlight = false;
     const t = setInterval(() => {
-      void getProjectsAction().then(setProjects).catch(() => {});
-      reloadWorkspace();
+      if (inFlight) return;
+      inFlight = true;
+      void getProjectsAction()
+        .then(setProjects)
+        .catch(() => {})
+        .finally(() => {
+          inFlight = false;
+        });
     }, 6000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      // Transition ended (or page left): one board refresh to pull in the
+      // newly materialized tasks.
+      reloadWorkspace();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anyTransitioning]);
 
