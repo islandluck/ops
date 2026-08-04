@@ -17,6 +17,7 @@ import { hasSupabaseClientEnv } from "./config";
 import {
   connectStripeAction,
   createTaskAction,
+  advanceMyProjectsAction,
   disconnectIntegrationAction,
   generateDraft,
   loadWorkspace,
@@ -226,6 +227,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadServer = useCallback(async () => {
     setLoadError(false);
     setHydrated(false);
+    // Before loading, revive any execution wedged by a crash/restart and advance
+    // (or close) projects whose current phase just finished — so completing a
+    // task anywhere progresses its project, not only on the Projects page.
+    try {
+      await advanceMyProjectsAction();
+    } catch {
+      /* best-effort — never block the load */
+    }
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const loaded = await loadWorkspace();
