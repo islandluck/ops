@@ -206,6 +206,11 @@ export async function saveWorkspace(state: AppState): Promise<{ ok: boolean; err
   if (!user) return { ok: false, error: "Not authenticated" };
   try {
     await saveBundleForUser(user.id, state);
+    // Completing the last task of a phase must progress/close its project. Do it
+    // right where task changes persist — awaited so the close is durable before
+    // we return (the client fire-and-forgets this save, so it isn't blocked).
+    const ws = await workspaceIdForUser(user.id);
+    if (ws) await advanceWorkspaceProjects(ws).catch(() => ({ advanced: 0 }));
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Save failed" };
