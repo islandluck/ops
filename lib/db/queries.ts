@@ -202,6 +202,9 @@ async function readBundle(
     budget_limits: briefRow.budget_limits,
     working_hours: briefRow.working_hours,
     timezone: briefRow.timezone,
+    city: briefRow.city,
+    state: briefRow.state,
+    country: briefRow.country,
     connected_systems: briefRow.connected_systems,
     updated_at: iso(briefRow.updated_at),
   };
@@ -647,6 +650,9 @@ export async function getPlanningContext(wsId: string): Promise<{
     voice_rules: string[];
     restricted_phrases: string[];
     timezone: string;
+    city: string;
+    state: string;
+    country: string;
     /** Synthesized Deep Dive understanding of the company; "" until a Deep Dive completes. */
     company_context: string;
   };
@@ -676,6 +682,9 @@ export async function getPlanningContext(wsId: string): Promise<{
       voice_rules: briefRow?.voice_rules ?? [],
       restricted_phrases: briefRow?.restricted_phrases ?? [],
       timezone: briefRow?.timezone ?? "",
+      city: briefRow?.city ?? "",
+      state: briefRow?.state ?? "",
+      country: briefRow?.country ?? "",
       company_context: context?.summary ?? "",
     },
     integrations: integ,

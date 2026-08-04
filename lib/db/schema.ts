@@ -44,6 +44,13 @@ import type {
   GoalStatus,
   InvestorUpdateContent,
   MemoryKind,
+  OpportunityStatus,
+  OpportunityType,
+  ScannerCadence,
+  ScannerMode,
+  ScannerScope,
+  ScannerStatus,
+  ScanUsage,
   UpdateAudience,
   PackagedVariant,
   PageContent,
@@ -109,6 +116,10 @@ export const businessBriefs = pgTable("business_briefs", {
     .default([]),
   working_hours: text("working_hours").notNull().default(""),
   timezone: text("timezone").notNull().default(""),
+  // Company location — feeds local opportunity scanning (web_search user_location).
+  city: text("city").notNull().default(""),
+  state: text("state").notNull().default(""),
+  country: text("country").notNull().default(""),
   connected_systems: text("connected_systems").array().notNull().default([]),
   updated_at: updatedAt,
 });
@@ -612,6 +623,66 @@ export const companyContext = pgTable("company_context", {
     .default({ people: [], timeline: [], themes: [], decisions: [], open_threads: [], risks: [], products: [] }),
   created_at: createdAt,
 });
+
+/** A per-workspace opportunity scanner (grant / conference / event / competition).
+ *  Runs on a cadence and surfaces ranked opportunities; one row per (workspace, type). */
+export const opportunityScanners = pgTable(
+  "opportunity_scanners",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    type: text("type").$type<OpportunityType>().notNull(),
+    enabled: boolean("enabled").notNull().default(false),
+    cadence: text("cadence").$type<ScannerCadence>().notNull().default("weekly"),
+    // The autonomy phase: scan | scan_draft | approve.
+    mode: text("mode").$type<ScannerMode>().notNull().default("scan"),
+    scope: text("scope").$type<ScannerScope>().notNull().default("state"),
+    sources: text("sources").array().notNull().default([]),
+    status: text("status").$type<ScannerStatus>().notNull().default("idle"),
+    last_error: text("last_error"),
+    usage: jsonb("usage")
+      .$type<ScanUsage>()
+      .notNull()
+      .default({ input_tokens: 0, output_tokens: 0, searches: 0, est_cost_cents: 0, runs: 0 }),
+    // Cron cursor + atomic lock so overlapping ticks never double-run a scan.
+    worker_locked_at: timestamp("worker_locked_at", { withTimezone: true }),
+    last_run_at: timestamp("last_run_at", { withTimezone: true }),
+    next_run_at: timestamp("next_run_at", { withTimezone: true }),
+    created_at: createdAt,
+  },
+  (t) => ({ wsTypeUniq: uniqueIndex("opportunity_scanners_ws_type_uniq").on(t.workspace_id, t.type) }),
+);
+
+/** A found opportunity, ranked for fit. Deduped by (workspace, url) across rescans. */
+export const opportunities = pgTable(
+  "opportunities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    scanner_id: uuid("scanner_id")
+      .notNull()
+      .references(() => opportunityScanners.id, { onDelete: "cascade" }),
+    type: text("type").$type<OpportunityType>().notNull(),
+    title: text("title").notNull().default(""),
+    org: text("org").notNull().default(""),
+    url: text("url").notNull().default(""),
+    summary: text("summary").notNull().default(""),
+    deadline: text("deadline").notNull().default(""),
+    amount: text("amount").notNull().default(""),
+    location: text("location").notNull().default(""),
+    fit_score: integer("fit_score").notNull().default(0),
+    fit_rationale: text("fit_rationale").notNull().default(""),
+    requirements: text("requirements").notNull().default(""),
+    status: text("status").$type<OpportunityStatus>().notNull().default("new"),
+    project_id: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    created_at: createdAt,
+  },
+  (t) => ({ wsUrlUniq: uniqueIndex("opportunities_ws_url_uniq").on(t.workspace_id, t.url) }),
+);
 
 /** A generated daily executive brief (synthesized snapshot of the business). */
 export const executiveBriefs = pgTable("executive_briefs", {

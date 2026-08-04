@@ -147,6 +147,9 @@ export interface BusinessBrief {
   budget_limits: { label: string; amount: number; period: string }[];
   working_hours: string;
   timezone: string;
+  city: string;
+  state: string;
+  country: string;
   connected_systems: string[];
   updated_at: string;
 }
@@ -901,5 +904,64 @@ export interface CompanyContext {
   version: number;
   summary: string;
   pack: CompanyContextPack;
+  created_at: string;
+}
+
+/* ---------------------------- Opportunities ----------------------------- */
+
+export type OpportunityType = "grant" | "conference" | "event" | "competition";
+export type ScannerCadence = "weekly" | "biweekly" | "monthly";
+/** The autonomy phase of a scanner. */
+export type ScannerMode = "scan" | "scan_draft" | "approve";
+/** How wide to scan geographically. */
+export type ScannerScope = "local" | "state" | "national";
+export type ScannerStatus = "idle" | "scanning" | "failed";
+export type OpportunityStatus = "new" | "shortlisted" | "dismissed" | "drafted";
+
+/** Metered usage for a scanner (web search is billed per search). */
+export interface ScanUsage {
+  input_tokens: number;
+  output_tokens: number;
+  searches: number;
+  est_cost_cents: number;
+  runs: number;
+}
+
+export interface OpportunityScanner {
+  id: string;
+  type: OpportunityType;
+  enabled: boolean;
+  cadence: ScannerCadence;
+  mode: ScannerMode;
+  scope: ScannerScope;
+  sources: string[];
+  status: ScannerStatus;
+  last_error: string | null;
+  usage: ScanUsage;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+}
+
+export interface Opportunity {
+  id: string;
+  scanner_id: string;
+  type: OpportunityType;
+  title: string;
+  org: string;
+  url: string;
+  summary: string;
+  /** Free text — "March 15, 2026", "Rolling", "Quarterly". */
+  deadline: string;
+  /** Free text — award/prize like "$50k–$250k". */
+  amount: string;
+  location: string;
+  fit_score: number;
+  fit_rationale: string;
+  /** Eligibility / what it would take to apply. */
+  requirements: string;
+  status: OpportunityStatus;
+  /** Set once an application plan is drafted into a project. */
+  project_id: string | null;
   created_at: string;
 }

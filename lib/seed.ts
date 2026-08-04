@@ -69,6 +69,9 @@ export function createSeedState(now: number): AppState {
     ],
     working_hours: "Mon–Fri, 9:00–17:00",
     timezone: "America/Los_Angeles",
+    city: "Portland",
+    state: "OR",
+    country: "USA",
     connected_systems: ["Gmail", "Google Calendar", "Webflow", "HubSpot", "Stripe"],
     updated_at: at(-9 * DAY),
   };
