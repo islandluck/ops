@@ -302,7 +302,7 @@ function ScannerConfig({
         <Field label="Where to look">
           <Segmented options={SCOPE_OPTS} value={scope} onChange={(s) => patch({ scope: s })} size="sm" />
           <p className="mt-1.5 text-[11.5px] leading-snug text-muted-foreground">
-            National casts the widest net; Local and State prioritize programs near you.
+            National scans federal grants (grants.gov). State &amp; Local also search the web for programs near you.
           </p>
         </Field>
 
