@@ -17,9 +17,11 @@ import { hasSupabaseClientEnv } from "./config";
 import {
   connectStripeAction,
   createTaskAction,
+  deleteTaskAction,
   disconnectIntegrationAction,
   generateDraft,
   loadWorkspace,
+  rejectTaskAction,
   resetWorkspace,
   runAgentAction,
   runEmailTriageAction,
@@ -27,6 +29,7 @@ import {
   runTaskAction,
   approveScheduledPostAction,
   scheduleTaskAction,
+  setTaskArchivedAction,
   unscheduleTaskAction,
   saveWorkspace,
   sendDocumentToNotionAction,
@@ -854,9 +857,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ),
         };
       });
+      // Persist the rejection immediately — don't rely on the debounced
+      // bundle-save, which agent-created cards (that enter via a reload) can
+      // lose. The optimistic decision/activity still ride the bundle-save.
+      if (serverMode) void rejectTaskAction(id);
       pushToast({ tone: "info", title: "Task rejected", description: "Nothing was executed." });
     },
-    [patchState, updateTask, logEvent, pushToast],
+    [patchState, updateTask, logEvent, pushToast, serverMode],
   );
 
   // Remove a task entirely (and its decisions/runs). State is client-authoritative,
@@ -870,9 +877,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         runs: prev.runs.filter((r) => r.task_id !== id),
       }));
       setSelectedTaskId((cur) => (cur === id ? null : cur));
+      // Persist the deletion immediately so it survives a refresh / reload
+      // (the debounced bundle-save can drop it for agent-created cards).
+      if (serverMode) void deleteTaskAction(id);
       pushToast({ tone: "info", title: "Task deleted" });
     },
-    [patchState, pushToast],
+    [patchState, pushToast, serverMode],
   );
 
   // Archive hides a task from the board (kept for history) to declutter columns.
@@ -880,17 +890,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       patchState((prev) => ({ ...prev, tasks: updateTask(prev, id, { archived: true }) }));
       setSelectedTaskId((cur) => (cur === id ? null : cur));
+      if (serverMode) void setTaskArchivedAction(id, true);
       pushToast({ tone: "info", title: "Task archived" });
     },
-    [patchState, updateTask, pushToast],
+    [patchState, updateTask, pushToast, serverMode],
   );
 
   const unarchiveTask = useCallback(
     (id: string) => {
       patchState((prev) => ({ ...prev, tasks: updateTask(prev, id, { archived: false }) }));
+      if (serverMode) void setTaskArchivedAction(id, false);
       pushToast({ tone: "info", title: "Task restored" });
     },
-    [patchState, updateTask, pushToast],
+    [patchState, updateTask, pushToast, serverMode],
   );
 
   // Bulk-archive every done task — the one-click "clear the Done column".

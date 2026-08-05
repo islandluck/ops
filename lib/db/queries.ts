@@ -811,6 +811,32 @@ export async function updateTaskAssetContent(
   return { ok: true };
 }
 
+/**
+ * Persist a task removal IMMEDIATELY (not via the debounced bundle-save). The
+ * board is client-authoritative and normally persists through saveBundleForUser,
+ * but that 800ms debounce can be lost on a quick refresh, and agent-created
+ * tasks (CRM Radar) enter the client via a reload that reverts optimistic edits
+ * from the DB. Writing the removal straight to the DB makes delete/reject/archive
+ * stick regardless of timing. All workspace-scoped. Children cascade on delete.
+ */
+export async function deleteTaskForUser(wsId: string, taskId: string): Promise<void> {
+  await db.delete(tasks).where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
+}
+
+export async function rejectTaskForUser(wsId: string, taskId: string): Promise<void> {
+  await db
+    .update(tasks)
+    .set({ approval_status: "rejected", status: "done", execution_status: "none", updated_at: new Date() })
+    .where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
+}
+
+export async function setTaskArchivedForUser(wsId: string, taskId: string, archived: boolean): Promise<void> {
+  await db
+    .update(tasks)
+    .set({ archived, updated_at: new Date() })
+    .where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
+}
+
 /* -------------------------------- media --------------------------------- */
 
 function toPostImage(m: typeof media.$inferSelect): PostImage {

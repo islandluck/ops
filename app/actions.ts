@@ -23,15 +23,18 @@ import {
   getXStyleProfile,
   insertMedia,
   listMediaForTask,
+  deleteTaskForUser,
   listReplyOpportunities,
   listXTargets,
   loadBundleForUser,
   markOpportunityReplied,
+  rejectTaskForUser,
   removeXTarget,
   resetBundleForUser,
   saveBundleForUser,
   setDocumentNotionUrl,
   setOpportunityReplies,
+  setTaskArchivedForUser,
   setXStyleProfile,
   updateTaskAssetContent,
   workspaceIdForUser,
@@ -315,6 +318,51 @@ export async function updateTaskAssetAction(
   if (!ws) return { ok: false, error: "No workspace." };
   const r = await updateTaskAssetContent(ws, assetId, content);
   return r.ok ? { ok: true } : { ok: false, error: "Couldn't save the edit." };
+}
+
+/**
+ * Persist a task removal IMMEDIATELY (delete / reject / archive), so it survives
+ * a refresh and can't be reverted by a background reload — the board's debounced
+ * bundle-save was dropping these for agent-created (CRM Radar) cards. The store
+ * still updates optimistically; these run alongside it for durability.
+ */
+export async function deleteTaskAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await deleteTaskForUser(ws, id);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function rejectTaskAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await rejectTaskForUser(ws, id);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function setTaskArchivedAction(id: string, archived: boolean): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await setTaskArchivedForUser(ws, id, archived);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export async function runTaskExecutionAction(
