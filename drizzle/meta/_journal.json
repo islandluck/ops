@@ -183,6 +183,13 @@
       "when": 1785802788105,
       "tag": "0025_ancient_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785890830317,
+      "tag": "0026_panoramic_fenris",
+      "breakpoints": true
     }
   ]
 }

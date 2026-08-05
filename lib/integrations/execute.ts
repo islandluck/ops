@@ -15,7 +15,7 @@ import {
 import { isProviderConfigured, providerForIntegrationName } from "./registry";
 import { getValidAccessToken } from "./tokens";
 import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
-import { upsertContact } from "./hubspot";
+import { hsCreateNote, upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice, isStripeTestKey } from "./stripe";
 import { postThread, postTweet, uploadMediaToX } from "./x";
@@ -219,11 +219,23 @@ export async function runTaskExecution(
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No HubSpot token");
         const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
+        const contactId = meta?.hubspot_contact_id ? String(meta.hubspot_contact_id) : "";
+        const dealId = meta?.hubspot_deal_id ? String(meta.hubspot_deal_id) : "";
         const contactEmail = meta?.contact_email ? String(meta.contact_email) : "";
-        if (!contactEmail) {
-          steps.push({ label: "HubSpot — no contact specified; skipped", status: "skipped" });
-          skipped.push("HubSpot");
-        } else {
+        if (contactId || dealId) {
+          // CRM Radar / outreach task: log what was done to the record's timeline
+          // so the CRM reflects reality (e.g. the email Gmail just sent).
+          await hsCreateNote(token, {
+            body: `[Operator] ${task.title}\n\n${(draft || task.description).slice(0, 4000)}`,
+            contactId: contactId || undefined,
+            dealId: dealId || undefined,
+          });
+          steps.push({
+            label: `Logged to HubSpot timeline (${dealId ? "deal" : "contact"})`,
+            status: "done",
+          });
+          touched.push("HubSpot");
+        } else if (contactEmail) {
           const r = await upsertContact(token, {
             email: contactEmail,
             firstname: meta?.contact_first ? String(meta.contact_first) : undefined,
@@ -234,6 +246,9 @@ export async function runTaskExecution(
             status: "done",
           });
           touched.push("HubSpot");
+        } else {
+          steps.push({ label: "HubSpot — no contact specified; skipped", status: "skipped" });
+          skipped.push("HubSpot");
         }
       } else if (name === "Google Sheets") {
         const token = await getValidAccessToken(workspaceId, name);

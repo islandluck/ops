@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { after } from "next/server";
 import { getCurrentUser } from "@/lib/supabase/server";
+import { runCrmRadar } from "@/lib/agents/crm";
 import { workspaceIdForUser } from "@/lib/db/queries";
 import { providerByKey } from "@/lib/integrations/registry";
 import { exchangeCodeForTokens } from "@/lib/integrations/oauth";
@@ -60,6 +62,10 @@ export async function GET(
             ? await getXAccount(tokens.access)
             : null);
     await storeProviderTokens(wsId, provider, tokens, account);
+    // Fresh HubSpot connection → run the CRM Radar right away (after the
+    // redirect) so drafted follow-up tasks are waiting on the board within a
+    // minute of connecting. Best-effort.
+    if (providerKey === "hubspot") after(() => runCrmRadar(wsId).catch(() => null));
     return back(`?connected=${providerKey}`);
   } catch (e) {
     return back(`?error=${encodeURIComponent(e instanceof Error ? e.message : "connect_failed")}`);

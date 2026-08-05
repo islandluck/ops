@@ -3,6 +3,7 @@ import "server-only";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { followerSnapshots, orders, pages, posts, projects, tasks } from "@/lib/db/schema";
+import { getHubSpotSnapshot } from "@/lib/integrations/hubspot";
 import type { ExecKpi, GoalMetric } from "@/lib/types";
 
 /**
@@ -140,6 +141,32 @@ export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {
     tone: ready > 0 ? "down" : "neutral",
     hint: "ready to approve",
   });
+
+  // CRM (HubSpot, when connected) — real pipeline numbers, cached 10 min.
+  try {
+    const crm = await getHubSpotSnapshot(workspaceId);
+    if (crm?.connected) {
+      kpis.push({
+        key: "pipeline",
+        label: "Pipeline",
+        value: money(Math.round(crm.pipelineValue * 100)),
+        tone: crm.staleDeals.length > 0 ? "down" : "neutral",
+        hint: `${crm.openDeals.length} open deal${crm.openDeals.length === 1 ? "" : "s"}${
+          crm.staleDeals.length ? `, ${crm.staleDeals.length} going cold` : ""
+        }`,
+      });
+      kpis.push({
+        key: "new_contacts",
+        label: "New contacts",
+        value: String(crm.newContacts7d),
+        delta: crm.newContacts7d > 0 ? "this week" : undefined,
+        tone: crm.newContacts7d > 0 ? "up" : "neutral",
+        hint: crm.uncontacted.length ? `${crm.uncontacted.length} not yet contacted` : undefined,
+      });
+    }
+  } catch {
+    /* CRM KPIs are additive — never break the dashboard on an API hiccup */
+  }
 
   return kpis;
 }

@@ -23,6 +23,7 @@ import {
 import { buildCleanSlateRows } from "./seed-workspace";
 import { hasAnthropicKey } from "@/lib/config";
 import { isProviderConfigured, providerForIntegrationName } from "@/lib/integrations/registry";
+import { getCrmContext } from "@/lib/integrations/hubspot";
 import type {
   ActivityEvent,
   Agent,
@@ -718,6 +719,8 @@ export async function getPlanningContext(wsId: string): Promise<{
     country: string;
     /** Synthesized Deep Dive understanding of the company; "" until a Deep Dive completes. */
     company_context: string;
+    /** Live CRM picture (pipeline, new contacts, stale deals); "" unless HubSpot is connected. */
+    crm_context: string;
   };
   integrations: { name: string; connected: boolean }[];
 }> {
@@ -749,6 +752,7 @@ export async function getPlanningContext(wsId: string): Promise<{
       state: briefRow?.state ?? "",
       country: briefRow?.country ?? "",
       company_context: context?.summary ?? "",
+      crm_context: await getCrmContext(wsId),
     },
     integrations: integ,
   };

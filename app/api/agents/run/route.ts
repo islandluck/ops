@@ -3,6 +3,7 @@ import { runBackgroundAgents } from "@/lib/agents/run";
 import { advanceActiveProjects } from "@/lib/agents/project";
 import { refreshAllReplyRadars } from "@/lib/agents/reply-radar";
 import { generateDueBriefs } from "@/lib/agents/executive";
+import { crmRadarSweep } from "@/lib/agents/crm";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -31,12 +32,15 @@ async function handle(request: NextRequest) {
     const radar = await refreshAllReplyRadars();
     // Refresh each workspace's daily executive brief when it's gone stale.
     const briefs = await generateDueBriefs();
+    // Scan connected CRMs for stale deals / uncontacted leads → drafted tasks.
+    const crm = await crmRadarSweep();
     return NextResponse.json({
       ok: true,
       ...result,
       projectsAdvanced: projects.advanced,
       radar,
       briefsGenerated: briefs.generated,
+      crm,
     });
   } catch (e) {
     return NextResponse.json(

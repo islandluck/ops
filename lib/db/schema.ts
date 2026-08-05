@@ -291,6 +291,21 @@ export const triagedNotion = pgTable(
   (t) => [uniqueIndex("triaged_notion_ws_ref_uniq").on(t.workspace_id, t.ref)],
 );
 
+/** CRM Radar dedup — one row per HubSpot signal (e.g. "deal:123:stale",
+ *  "contact:456:new") already turned into a task, so sweeps never re-surface it. */
+export const triagedCrm = pgTable(
+  "triaged_crm",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    ref: text("ref").notNull(),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("triaged_crm_ws_ref_uniq").on(t.workspace_id, t.ref)],
+);
+
 /** Images attached to a post/task. Binaries live in Supabase Storage; this row
  *  holds the metadata + a public URL. Server-authoritative. */
 export const media = pgTable("media", {

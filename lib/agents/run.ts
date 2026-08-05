@@ -15,6 +15,7 @@ import {
 import { generateAgentTask } from "@/lib/ai/agent";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { getCrmContext } from "@/lib/integrations/hubspot";
 import { saveDocument } from "@/lib/db/queries";
 import { getCurrentContext } from "./deepdive";
 import { runEmailTriage } from "./triage";
@@ -274,7 +275,13 @@ export async function runTaskWithAgent(
       .join("\n\n"),
     rationale: task.rationale,
     companyName: briefRow?.company_name ?? "",
-    companyContext: [`${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(), deepContext?.summary ?? ""]
+    companyContext: [
+      `${briefRow?.business_description ?? ""} ${briefRow?.core_offer ?? ""}`.trim(),
+      deepContext?.summary ?? "",
+      // Live CRM picture (cached 10 min) — lets any agent reference real
+      // pipeline/contact facts instead of guessing.
+      await getCrmContext(workspaceId),
+    ]
       .filter(Boolean)
       .join("\n\n"),
     idealCustomer: briefRow?.ideal_customer_profile ?? "",

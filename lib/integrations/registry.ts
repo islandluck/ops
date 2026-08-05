@@ -62,10 +62,18 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     auth: "oauth",
     authorizeUrl: "https://app.hubspot.com/oauth/authorize",
     tokenUrl: "https://api.hubapi.com/oauth/v1/token",
-    scopes: ["crm.objects.contacts.read", "crm.objects.contacts.write", "oauth"],
+    // Granular scopes only — the notes.* scopes aren't reliably grantable to
+    // public OAuth apps; contacts.write covers note-logging in practice.
+    scopes: [
+      "crm.objects.contacts.read",
+      "crm.objects.contacts.write",
+      "crm.objects.deals.read",
+      "crm.objects.deals.write",
+      "oauth",
+    ],
     clientIdEnv: "HUBSPOT_CLIENT_ID",
     clientSecretEnv: "HUBSPOT_CLIENT_SECRET",
-    actionLabel: "Create / update CRM contacts and log activity",
+    actionLabel: "Watch pipeline & contacts, log activity, keep the CRM updated",
   },
   stripe: {
     key: "stripe",

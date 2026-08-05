@@ -159,6 +159,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     brief.company_context
       ? `\nCOMPANY CONTEXT (what you learned from a Deep Dive of the company's own material — background you already know, don't re-derive):\n${brief.company_context}`
       : "",
+    brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
     "",
     "You have a complete, live view of the business. Ground EVERY claim in the data below — never invent numbers.",
     "",
@@ -444,6 +445,7 @@ async function gatherBriefDossier(
     `COMPANY: ${brief.company_name || "the company"}. ${[brief.business_description, brief.core_offer].filter(Boolean).join(" ")}`.trim(),
     brief.ideal_customer_profile ? `Audience: ${brief.ideal_customer_profile}` : "",
     brief.company_context ? `\nCOMPANY CONTEXT (from the Deep Dive):\n${brief.company_context}` : "",
+    brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
     "",
     "KPIs:",
     ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),
