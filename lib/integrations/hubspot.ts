@@ -62,6 +62,51 @@ export async function upsertContact(
   throw new Error(`HubSpot create failed: ${err.message ?? createRes.status}`);
 }
 
+/**
+ * Validate a HubSpot token (a private-app token, `pat-…`, or an OAuth access
+ * token) by making a real CRM read, and return a friendly account label. Used
+ * by the "connect with a private app token" path — the simplest way for a
+ * single company to connect its own CRM (no developer app / OAuth dance).
+ */
+export async function hsValidateToken(
+  token: string,
+): Promise<{ ok: boolean; account: string | null; error?: string }> {
+  try {
+    const ping = await hsFetch(token, "/crm/v3/objects/contacts?limit=1");
+    if (!ping.ok) {
+      if (ping.status === 401)
+        return {
+          ok: false,
+          account: null,
+          error: "That token was rejected (401). Copy the access token again from the private app’s Auth tab.",
+        };
+      if (ping.status === 403)
+        return {
+          ok: false,
+          account: null,
+          error:
+            "The token is valid but missing CRM scopes. In the private app, enable crm.objects.contacts.read/write and crm.objects.deals.read/write, then copy the token again.",
+        };
+      return { ok: false, account: null, error: `HubSpot rejected the token (${ping.status}).` };
+    }
+  } catch {
+    return { ok: false, account: null, error: "Couldn’t reach HubSpot to validate the token." };
+  }
+
+  // Best-effort friendly label (account-info may 403 on a minimal private app).
+  let account: string | null = "HubSpot account";
+  try {
+    const info = await hsFetch(token, "/account-info/v3/details");
+    if (info.ok) {
+      const j = (await info.json()) as { portalId?: number; uiDomain?: string };
+      account = j.uiDomain ? `HubSpot · ${j.uiDomain}` : j.portalId ? `HubSpot · ${j.portalId}` : account;
+    }
+  } catch {
+    /* keep the default label */
+  }
+  return { ok: true, account };
+}
+
 /* --------------------------------- types -------------------------------- */
 
 export interface HsContact {

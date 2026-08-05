@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Plug, ShieldCheck, Wand2, Zap } from "lucide-react";
+import { AlertTriangle, Check, KeyRound, Loader2, Plug, ShieldCheck, Wand2, Zap } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { useStore } from "@/lib/store";
+import { connectHubSpotTokenAction } from "@/app/actions";
 import { hasSupabaseClientEnv } from "@/lib/config";
 import { PERMISSION_META } from "@/lib/constants";
 import { cn } from "@/lib/cn";
@@ -36,7 +38,7 @@ const ERROR_LABELS: Record<string, string> = {
 };
 
 export default function IntegrationsPage() {
-  const { state, connectIntegration, disconnectIntegration, setIntegrationMode } = useStore();
+  const { state, connectIntegration, disconnectIntegration, setIntegrationMode, reloadWorkspace } = useStore();
   const serverMode = hasSupabaseClientEnv;
   const [banner, setBanner] = useState<{ tone: "success" | "error"; msg: string } | null>(null);
 
@@ -111,6 +113,7 @@ export default function IntegrationsPage() {
               onConnect={() => connectIntegration(i.id)}
               onDisconnect={() => disconnectIntegration(i.id)}
               onMode={(m) => setIntegrationMode(i.id, m)}
+              onReload={reloadWorkspace}
             />
           ))}
         </Section>
@@ -124,6 +127,7 @@ export default function IntegrationsPage() {
               onConnect={() => connectIntegration(i.id)}
               onDisconnect={() => disconnectIntegration(i.id)}
               onMode={(m) => setIntegrationMode(i.id, m)}
+              onReload={reloadWorkspace}
             />
           ))}
         </Section>
@@ -162,16 +166,20 @@ function IntegrationCard({
   onConnect,
   onDisconnect,
   onMode,
+  onReload,
 }: {
   integration: Integration;
   serverMode: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onMode: (m: PermissionMode) => void;
+  onReload: () => void;
 }) {
   // In server mode, only registry-backed providers (Gmail/Calendar/HubSpot/Stripe) are live.
   const wired = !serverMode || Boolean(i.oauth_provider);
   const needsSetup = serverMode && Boolean(i.oauth_provider) && !i.configured;
+  // HubSpot connects via a private-app token — no developer app / OAuth needed.
+  const hubspotToken = serverMode && i.name === "HubSpot" && !i.connected;
 
   return (
     <Card className="flex flex-col p-4">
@@ -191,7 +199,7 @@ function IntegrationCard({
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-700">
                 <Check className="h-3 w-3" /> Connected
               </span>
-            ) : needsSetup ? (
+            ) : needsSetup && !hubspotToken ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-amber-700">
                 Setup required
               </span>
@@ -239,6 +247,8 @@ function IntegrationCard({
             Disconnect
           </button>
         </div>
+      ) : hubspotToken ? (
+        <HubSpotTokenConnect onReload={onReload} />
       ) : (
         <div className="mt-4">
           <Button
@@ -254,5 +264,60 @@ function IntegrationCard({
         </div>
       )}
     </Card>
+  );
+}
+
+/**
+ * Connect HubSpot by pasting a private-app access token — the fast path for a
+ * company connecting its own CRM (no developer app, no OAuth redirect). On
+ * success the workspace reloads and the card flips to Connected.
+ */
+function HubSpotTokenConnect({ onReload }: { onReload: () => void }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function connect() {
+    if (busy || !token.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const r = await connectHubSpotTokenAction(token);
+      if (r.ok) {
+        setToken("");
+        onReload();
+      } else {
+        setError(r.error ?? "That token didn’t work.");
+      }
+    } catch {
+      setError("Couldn’t reach the server. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 space-y-2">
+      <Input
+        type="password"
+        placeholder="Paste private app token (pat-…)"
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void connect();
+        }}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {error && <p className="text-[11.5px] text-red-600">{error}</p>}
+      <Button size="sm" className="w-full" disabled={busy || !token.trim()} onClick={connect}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+        {busy ? "Verifying…" : "Connect HubSpot"}
+      </Button>
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        In HubSpot: Settings → Integrations → <strong>Private apps</strong> → Create a private app → enable the
+        CRM contacts &amp; deals scopes → copy the access token.
+      </p>
+    </div>
   );
 }

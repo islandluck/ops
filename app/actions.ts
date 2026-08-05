@@ -49,8 +49,11 @@ import {
   getValidAccessToken,
   markApiKeyConnected,
   setIntegrationPermissionMode,
+  storeProviderTokens,
 } from "@/lib/integrations/tokens";
 import { getStripeAccount } from "@/lib/integrations/stripe";
+import { hsValidateToken } from "@/lib/integrations/hubspot";
+import { runCrmRadar } from "@/lib/agents/crm";
 import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { executionKilled } from "@/lib/integrations/guardrails";
@@ -269,6 +272,35 @@ export async function connectStripeAction(): Promise<{ ok: boolean; account?: st
   if (!account) return { ok: false, error: "Stripe key appears invalid." };
   await markApiKeyConnected(ws, provider, account);
   return { ok: true, account };
+}
+
+/**
+ * Connect HubSpot with a private-app access token (`pat-…`). The simplest path
+ * for a single company connecting its OWN CRM — no developer app, no OAuth. The
+ * token is validated against the live API, then stored encrypted exactly like
+ * an OAuth access token (connected=true, no refresh), so everything downstream
+ * — snapshot, KPIs, CRM Radar, timeline logging — works unchanged.
+ */
+export async function connectHubSpotTokenAction(
+  token: string,
+): Promise<{ ok: boolean; account?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const provider = providerByKey("hubspot");
+  if (!provider) return { ok: false, error: "HubSpot provider not found." };
+
+  const clean = token.trim();
+  if (!clean) return { ok: false, error: "Paste your private app token first." };
+
+  const check = await hsValidateToken(clean);
+  if (!check.ok) return { ok: false, error: check.error ?? "That token didn’t work." };
+
+  await storeProviderTokens(ws, provider, { access: clean }, check.account);
+  // Surface value immediately: scan the CRM for follow-ups after we respond.
+  after(() => runCrmRadar(ws).catch(() => null));
+  return { ok: true, account: check.account ?? "HubSpot account" };
 }
 
 /** Approve + execute a task for real (server-side provider calls). */
