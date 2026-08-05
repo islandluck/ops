@@ -142,10 +142,12 @@ export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {
     hint: "ready to approve",
   });
 
-  // CRM (HubSpot, when connected) — real pipeline numbers, cached 10 min.
+  // CRM (HubSpot, when connected) — real numbers, cached 10 min. Each KPI is
+  // gated on its object's scope being present, so a contacts-only private app
+  // still shows the contacts KPI instead of a misleading "$0 pipeline".
   try {
     const crm = await getHubSpotSnapshot(workspaceId);
-    if (crm?.connected) {
+    if (crm?.connected && crm.dealsAvailable) {
       kpis.push({
         key: "pipeline",
         label: "Pipeline",
@@ -155,6 +157,8 @@ export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {
           crm.staleDeals.length ? `, ${crm.staleDeals.length} going cold` : ""
         }`,
       });
+    }
+    if (crm?.connected && crm.contactsAvailable) {
       kpis.push({
         key: "new_contacts",
         label: "New contacts",

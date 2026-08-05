@@ -133,6 +133,10 @@ export interface HsDeal {
 
 export interface HubSpotSnapshot {
   connected: boolean;
+  /** False when the token lacks the contacts scope (or that read failed). */
+  contactsAvailable: boolean;
+  /** False when the token lacks the deals scope (or that read failed). */
+  dealsAvailable: boolean;
   contactsSampled: number;
   newContacts7d: number;
   uncontacted: HsContact[];
@@ -320,7 +324,14 @@ export async function getHubSpotSnapshot(workspaceId: string): Promise<HubSpotSn
   const token = await getValidAccessToken(workspaceId, "HubSpot");
   if (!token) return null;
 
-  const [recent, deals] = await Promise.all([hsRecentContacts(token, 30), hsOpenDeals(token)]);
+  // Fetch contacts and deals INDEPENDENTLY. A private app is often scoped to
+  // one object (e.g. contacts but not deals) — a failed read on one must NOT
+  // nuke the whole snapshot, or every CRM feature (KPIs, agent context, Radar)
+  // silently goes dark despite the other object working fine.
+  const [recentR, dealsR] = await Promise.allSettled([hsRecentContacts(token, 30), hsOpenDeals(token)]);
+  const recent = recentR.status === "fulfilled" ? recentR.value : [];
+  const deals = dealsR.status === "fulfilled" ? dealsR.value : [];
+
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
   const staleCutoff = now - STALE_DEAL_DAYS * 24 * 60 * 60 * 1000;
@@ -333,6 +344,8 @@ export async function getHubSpotSnapshot(workspaceId: string): Promise<HubSpotSn
 
   return {
     connected: true,
+    contactsAvailable: recentR.status === "fulfilled",
+    dealsAvailable: dealsR.status === "fulfilled",
     contactsSampled: recent.length,
     newContacts7d,
     uncontacted,
@@ -363,20 +376,27 @@ export async function getCrmContext(workspaceId: string): Promise<string> {
 export function snapshotToContext(snap: HubSpotSnapshot | null): string {
   if (!snap || !snap.connected) return "";
   const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
-  const parts = [
-    `CRM (HubSpot): ${snap.openDeals.length} open deal${snap.openDeals.length === 1 ? "" : "s"} worth ${money(snap.pipelineValue)}`,
-    `${snap.newContacts7d} new contact${snap.newContacts7d === 1 ? "" : "s"} this week`,
-  ];
-  if (snap.staleDeals.length) {
-    const top = snap.staleDeals
-      .slice(0, 3)
-      .map((d) => `${d.name}${d.amount ? ` (${money(d.amount)})` : ""} — ${d.stageLabel}`)
-      .join("; ");
+  const parts: string[] = [];
+  if (snap.dealsAvailable) {
     parts.push(
-      `${snap.staleDeals.length} deal${snap.staleDeals.length === 1 ? "" : "s"} idle >${STALE_DEAL_DAYS}d: ${top}`,
+      `${snap.openDeals.length} open deal${snap.openDeals.length === 1 ? "" : "s"} worth ${money(snap.pipelineValue)}`,
     );
+    if (snap.staleDeals.length) {
+      const top = snap.staleDeals
+        .slice(0, 3)
+        .map((d) => `${d.name}${d.amount ? ` (${money(d.amount)})` : ""} — ${d.stageLabel}`)
+        .join("; ");
+      parts.push(
+        `${snap.staleDeals.length} deal${snap.staleDeals.length === 1 ? "" : "s"} idle >${STALE_DEAL_DAYS}d: ${top}`,
+      );
+    }
   }
-  if (snap.uncontacted.length)
-    parts.push(`${snap.uncontacted.length} recent contact${snap.uncontacted.length === 1 ? "" : "s"} never contacted`);
-  return parts.join(". ") + ".";
+  if (snap.contactsAvailable) {
+    parts.push(`${snap.newContacts7d} new contact${snap.newContacts7d === 1 ? "" : "s"} this week`);
+    if (snap.uncontacted.length)
+      parts.push(
+        `${snap.uncontacted.length} recent contact${snap.uncontacted.length === 1 ? "" : "s"} never contacted`,
+      );
+  }
+  return parts.length ? `CRM (HubSpot): ${parts.join(". ")}.` : "";
 }
