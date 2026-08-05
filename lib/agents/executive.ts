@@ -17,6 +17,7 @@ import {
   tasks,
 } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
+import { getCalendarSnapshot, formatEventWhen } from "@/lib/integrations/google";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
@@ -160,6 +161,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
       ? `\nCOMPANY CONTEXT (what you learned from a Deep Dive of the company's own material — background you already know, don't re-derive):\n${brief.company_context}`
       : "",
     brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
+    brief.calendar_context ? `\nSCHEDULE: ${brief.calendar_context}` : "",
     "",
     "You have a complete, live view of the business. Ground EVERY claim in the data below — never invent numbers.",
     "",
@@ -389,7 +391,7 @@ async function gatherBriefDossier(
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-  const [goals, memory, activeProjects, taskRows, postRows, pageRows, activity, mv] = await Promise.all([
+  const [goals, memory, activeProjects, taskRows, postRows, pageRows, activity, mv, cal] = await Promise.all([
     db
       .select()
       .from(companyGoals)
@@ -424,6 +426,7 @@ async function gatherBriefDossier(
       .orderBy(desc(activityEvents.created_at))
       .limit(18),
     computeMetricValues(workspaceId),
+    getCalendarSnapshot(workspaceId, brief.timezone || undefined),
   ]);
   const gl = goalLines(goals, mv);
 
@@ -446,6 +449,22 @@ async function gatherBriefDossier(
     brief.ideal_customer_profile ? `Audience: ${brief.ideal_customer_profile}` : "",
     brief.company_context ? `\nCOMPANY CONTEXT (from the Deep Dive):\n${brief.company_context}` : "",
     brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
+    ...(cal
+      ? [
+          "",
+          "YOUR SCHEDULE (next 7 days) — open the brief with what's on today, and flag deadlines/prep:",
+          ...(cal.events.length
+            ? cal.events
+                .slice(0, 12)
+                .map(
+                  (e) =>
+                    `- ${formatEventWhen(e.start, e.allDay, brief.timezone)} — ${e.title}${
+                      e.attendees ? ` (${e.attendees} attendee${e.attendees === 1 ? "" : "s"})` : ""
+                    }`,
+                )
+            : ["- No events on the calendar in the next 7 days."]),
+        ]
+      : []),
     "",
     "KPIs:",
     ...kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`),

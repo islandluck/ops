@@ -24,6 +24,7 @@ import { buildCleanSlateRows } from "./seed-workspace";
 import { hasAnthropicKey } from "@/lib/config";
 import { isProviderConfigured, providerForIntegrationName } from "@/lib/integrations/registry";
 import { getCrmContext } from "@/lib/integrations/hubspot";
+import { getCalendarContext } from "@/lib/integrations/google";
 import type {
   ActivityEvent,
   Agent,
@@ -721,6 +722,8 @@ export async function getPlanningContext(wsId: string): Promise<{
     company_context: string;
     /** Live CRM picture (pipeline, new contacts, stale deals); "" unless HubSpot is connected. */
     crm_context: string;
+    /** Upcoming schedule (today's + this week's events); "" unless Google Calendar is connected. */
+    calendar_context: string;
   };
   integrations: { name: string; connected: boolean }[];
 }> {
@@ -753,6 +756,7 @@ export async function getPlanningContext(wsId: string): Promise<{
       country: briefRow?.country ?? "",
       company_context: context?.summary ?? "",
       crm_context: await getCrmContext(wsId),
+      calendar_context: await getCalendarContext(wsId, briefRow?.timezone || undefined),
     },
     integrations: integ,
   };

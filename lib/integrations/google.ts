@@ -1,5 +1,7 @@
 import "server-only";
 
+import { getValidAccessToken } from "./tokens";
+
 /** Google API calls (Gmail send, Calendar events) with an OAuth access token. */
 
 export async function getGoogleEmail(accessToken: string): Promise<string | null> {
@@ -231,4 +233,124 @@ export async function createCalendarEvent(
     throw new Error(`Calendar event failed: ${err ?? res.status}`);
   }
   return { id: String(json.id), htmlLink: json.htmlLink ? String(json.htmlLink) : undefined };
+}
+
+/* ---------------------------- Calendar read (senses) --------------------- */
+
+export interface CalEvent {
+  id: string;
+  title: string;
+  /** ISO start (dateTime for timed events, YYYY-MM-DD for all-day). */
+  start: string;
+  allDay: boolean;
+  attendees: number;
+  location: string;
+  hangoutLink?: string;
+}
+
+export interface CalendarSnapshot {
+  connected: boolean;
+  events: CalEvent[];
+  todayCount: number;
+  weekCount: number;
+  fetchedAt: string;
+}
+
+/** Upcoming events on the primary calendar (next `days`, chronological). */
+export async function listUpcomingEvents(
+  accessToken: string,
+  opts?: { days?: number; max?: number },
+): Promise<CalEvent[]> {
+  const days = opts?.days ?? 7;
+  const max = opts?.max ?? 25;
+  const now = new Date();
+  const timeMin = now.toISOString();
+  const timeMax = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  const url =
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events` +
+    `?singleEvents=true&orderBy=startTime&maxResults=${max}` +
+    `&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const err = ((await res.json().catch(() => ({}))) as { error?: { message?: string } }).error?.message;
+    throw new Error(`Calendar list failed: ${err ?? res.status}`);
+  }
+  const json = (await res.json()) as {
+    items?: Array<{
+      id?: string;
+      summary?: string;
+      status?: string;
+      location?: string;
+      hangoutLink?: string;
+      start?: { dateTime?: string; date?: string };
+      attendees?: unknown[];
+    }>;
+  };
+  return (json.items ?? [])
+    .filter((it) => it.status !== "cancelled" && (it.start?.dateTime || it.start?.date))
+    .map((it) => ({
+      id: String(it.id ?? ""),
+      title: String(it.summary ?? "(no title)"),
+      start: String(it.start?.dateTime ?? it.start?.date),
+      allDay: !it.start?.dateTime,
+      attendees: Array.isArray(it.attendees) ? it.attendees.length : 0,
+      location: String(it.location ?? ""),
+      hangoutLink: it.hangoutLink ? String(it.hangoutLink) : undefined,
+    }));
+}
+
+/** A short human label for an event's time, in the workspace timezone. */
+export function formatEventWhen(iso: string, allDay: boolean, tz?: string): string {
+  const d = new Date(iso);
+  const day = d.toLocaleDateString("en-US", { timeZone: tz || undefined, weekday: "short", month: "short", day: "numeric" });
+  if (allDay) return `${day} (all day)`;
+  const time = d.toLocaleTimeString("en-US", { timeZone: tz || undefined, hour: "numeric", minute: "2-digit" });
+  return `${day} ${time}`;
+}
+
+/** The agent-readable schedule picture. Null = Calendar isn't connected. */
+export async function getCalendarSnapshot(workspaceId: string, tz?: string): Promise<CalendarSnapshot | null> {
+  const token = await getValidAccessToken(workspaceId, "Google Calendar");
+  if (!token) return null;
+  let events: CalEvent[];
+  try {
+    events = await listUpcomingEvents(token, { days: 7, max: 25 });
+  } catch {
+    // Token present but the read failed (expired/revoked refresh token, or a
+    // transient error). Return null so callers OMIT the schedule rather than
+    // showing a misleading "nothing scheduled" for a broken connection.
+    return null;
+  }
+  const localDate = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: tz || undefined });
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz || undefined });
+  const todayCount = events.filter((e) => localDate(e.start) === todayStr).length;
+  return { connected: true, events, todayCount, weekCount: events.length, fetchedAt: new Date().toISOString() };
+}
+
+/** One-line schedule summary for agent prompts ("" when not connected / empty). */
+export function calendarToContext(snap: CalendarSnapshot | null, tz?: string): string {
+  if (!snap || !snap.connected || !snap.events.length) return "";
+  const next = snap.events[0];
+  return (
+    `Calendar: ${snap.todayCount} event${snap.todayCount === 1 ? "" : "s"} today, ` +
+    `${snap.weekCount} in the next 7 days. Next: ${next.title} (${formatEventWhen(next.start, next.allDay, tz)}).`
+  );
+}
+
+/** Cached (10 min) schedule context line for planners/drafters. Never throws. */
+const calContextCache = new Map<string, { at: number; text: string }>();
+export async function getCalendarContext(workspaceId: string, tz?: string): Promise<string> {
+  const cacheKey = `${workspaceId}|${tz ?? ""}`;
+  const hit = calContextCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.text;
+  try {
+    const text = calendarToContext(await getCalendarSnapshot(workspaceId, tz), tz);
+    calContextCache.set(cacheKey, { at: Date.now(), text });
+    return text;
+  } catch {
+    return hit?.text ?? "";
+  }
 }
