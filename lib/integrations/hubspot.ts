@@ -236,7 +236,7 @@ interface SearchResult {
 
 async function hsSearch(
   token: string,
-  object: "contacts" | "deals" | "emails" | "companies" | "meetings",
+  object: "contacts" | "deals" | "companies" | "meetings",
   body: SearchBody,
 ): Promise<SearchResult> {
   const res = await hsFetch(token, `/crm/v3/objects/${object}/search`, {
@@ -304,45 +304,68 @@ export async function hsOpenDeals(token: string, limit = 100): Promise<HsDeal[]>
   return (json.results ?? []).map(toDeal);
 }
 
-function toEmail(r: NonNullable<SearchResult["results"]>[number]): HsEmail {
-  const p = r.properties ?? {};
-  const fromName = [str(p.hs_email_from_firstname), str(p.hs_email_from_lastname)].filter(Boolean).join(" ").trim();
-  return {
-    id: r.id,
-    subject: str(p.hs_email_subject) || "(no subject)",
-    text: str(p.hs_email_text).slice(0, 4000),
-    direction: str(p.hs_email_direction),
-    fromEmail: str(p.hs_email_from_email),
-    fromName: fromName || str(p.hs_email_from_email),
-    timestamp: str(p.hs_timestamp) || r.createdAt || "",
-  };
+interface ConvoMessage {
+  type?: string;
+  text?: string;
+  richText?: string;
+  subject?: string;
+  direction?: string; // INCOMING | OUTGOING
+  createdAt?: string;
+  senders?: Array<{ name?: string; deliveryIdentifier?: { type?: string; value?: string } }>;
 }
 
-/** Inbound email engagements in the last `sinceDays`, newest first. */
-export async function hsRecentEmails(token: string, sinceDays: number, limit = 100): Promise<HsEmail[]> {
-  const since = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
-  const json = await hsSearch(token, "emails", {
-    filterGroups: [
-      {
-        filters: [
-          { propertyName: "hs_email_direction", operator: "EQ", value: "INCOMING_EMAIL" },
-          { propertyName: "hs_timestamp", operator: "GTE", value: String(since) },
-        ],
-      },
-    ],
-    sorts: [{ propertyName: "hs_timestamp", direction: "DESCENDING" }],
-    properties: [
-      "hs_email_subject",
-      "hs_email_text",
-      "hs_email_direction",
-      "hs_email_from_email",
-      "hs_email_from_firstname",
-      "hs_email_from_lastname",
-      "hs_timestamp",
-    ],
-    limit: Math.min(limit, 100),
-  });
-  return (json.results ?? []).map(toEmail);
+/**
+ * Inbound messages awaiting a reply, from the Conversations inbox
+ * (`conversations.read`). This is HubSpot's path to email/chat CONTENT — the
+ * email-engagement object has no grantable read scope on this app type. Returns
+ * the latest INCOMING message per open thread. Best-effort + defensive, since
+ * it can't be exercised until the scope is granted.
+ */
+export async function hsAwaitingReply(token: string, threadLimit = 15): Promise<HsEmail[]> {
+  const listRes = await hsFetch(token, `/conversations/v3/conversations/threads?limit=${threadLimit}`);
+  if (!listRes.ok) throw new Error(`HubSpot conversations list failed (${listRes.status})`);
+  const list = (await listRes.json()) as {
+    results?: Array<{ id?: string; status?: string; latestMessageTimestamp?: string }>;
+  };
+  const threads = (list.results ?? [])
+    .filter((t) => t.id && t.status !== "CLOSED")
+    .sort(
+      (a, b) => new Date(b.latestMessageTimestamp ?? 0).getTime() - new Date(a.latestMessageTimestamp ?? 0).getTime(),
+    )
+    .slice(0, 12);
+
+  const out: HsEmail[] = [];
+  for (const t of threads) {
+    try {
+      const mRes = await hsFetch(token, `/conversations/v3/conversations/threads/${t.id}/messages?limit=20`);
+      if (!mRes.ok) continue;
+      const mj = (await mRes.json()) as { results?: ConvoMessage[] };
+      const msgs = (mj.results ?? []).filter((m) => m.type === "MESSAGE" && (m.text || m.richText));
+      if (!msgs.length) continue;
+      msgs.sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+      const latest = msgs[0];
+      if (latest.direction !== "INCOMING") continue; // latest is outbound → already handled
+      const sender = latest.senders?.[0];
+      const fromEmail =
+        sender?.deliveryIdentifier?.type === "HS_EMAIL_ADDRESS" ? str(sender.deliveryIdentifier.value) : "";
+      out.push({
+        id: str(t.id),
+        subject: str(latest.subject) || "your message",
+        text: String(latest.text ?? latest.richText ?? "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 4000),
+        direction: "INCOMING_EMAIL",
+        fromEmail,
+        fromName: str(sender?.name) || fromEmail || "Contact",
+        timestamp: str(latest.createdAt) || str(t.latestMessageTimestamp),
+      });
+    } catch {
+      /* skip this thread */
+    }
+  }
+  return out;
 }
 
 function toCompany(r: NonNullable<SearchResult["results"]>[number]): HsCompany {
@@ -490,7 +513,7 @@ export async function getHubSpotSnapshot(workspaceId: string): Promise<HubSpotSn
   const [recentR, dealsR, emailsR, companiesR, meetingsR] = await Promise.allSettled([
     hsRecentContacts(token, 30),
     hsOpenDeals(token),
-    hsRecentEmails(token, 7),
+    hsAwaitingReply(token),
     hsRecentCompanies(token),
     hsUpcomingMeetings(token),
   ]);
@@ -587,7 +610,7 @@ export function snapshotToContext(snap: HubSpotSnapshot | null): string {
   }
   if (snap.emailsAvailable && snap.awaitingReply.length) {
     parts.push(
-      `${snap.awaitingReply.length} email${snap.awaitingReply.length === 1 ? "" : "s"} awaiting a reply` +
+      `${snap.awaitingReply.length} conversation${snap.awaitingReply.length === 1 ? "" : "s"} awaiting a reply` +
         (snap.awaitingReply[0] ? ` (latest from ${snap.awaitingReply[0].fromName})` : ""),
     );
   }

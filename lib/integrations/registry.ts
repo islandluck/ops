@@ -62,13 +62,18 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     auth: "oauth",
     authorizeUrl: "https://app.hubspot.com/oauth/authorize",
     tokenUrl: "https://api.hubapi.com/oauth/v1/token",
-    // Granular scopes only — the notes.* scopes aren't reliably grantable to
-    // public OAuth apps; contacts.write covers note-logging in practice.
+    // Verified against a real account's scope list (2026-08-05):
+    // - meetings/calls/notes engagement reads ride on contacts.read (no own scope).
+    // - the email-engagement object has NO grantable scope on this app type;
+    //   email/chat CONTENT comes via conversations.read (the Conversations inbox).
+    // - notes.* write isn't grantable to public apps; note-logging rides on contacts.write.
     scopes: [
       "crm.objects.contacts.read",
       "crm.objects.contacts.write",
       "crm.objects.deals.read",
       "crm.objects.deals.write",
+      "crm.objects.companies.read",
+      "conversations.read",
       "oauth",
     ],
     clientIdEnv: "HUBSPOT_CLIENT_ID",
