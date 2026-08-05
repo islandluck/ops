@@ -131,18 +131,56 @@ export interface HsDeal {
   createdAt: string;
 }
 
+export interface HsEmail {
+  id: string;
+  subject: string;
+  /** Plain-text body, truncated — the "context" the agent drafts a reply from. */
+  text: string;
+  direction: string; // EMAIL (sent) | INCOMING_EMAIL | FORWARDED_EMAIL
+  fromEmail: string;
+  fromName: string;
+  timestamp: string; // ISO
+}
+
+export interface HsCompany {
+  id: string;
+  name: string;
+  domain: string;
+  industry: string;
+  employees: number;
+  lifecycleStage: string;
+}
+
+export interface HsMeeting {
+  id: string;
+  title: string;
+  startTime: string; // ISO
+  endTime: string;
+  location: string;
+  createdAt: string;
+}
+
 export interface HubSpotSnapshot {
   connected: boolean;
-  /** False when the token lacks the contacts scope (or that read failed). */
+  /** Per-object scope availability — a private app is often scoped to a subset,
+   *  so each feature gates on its own flag rather than nuking the whole snapshot. */
   contactsAvailable: boolean;
-  /** False when the token lacks the deals scope (or that read failed). */
   dealsAvailable: boolean;
+  emailsAvailable: boolean;
+  companiesAvailable: boolean;
+  meetingsAvailable: boolean;
   contactsSampled: number;
   newContacts7d: number;
   uncontacted: HsContact[];
   openDeals: HsDeal[];
   pipelineValue: number;
   staleDeals: HsDeal[];
+  /** Latest inbound email per sender (last 7d) — candidates for a reply. */
+  awaitingReply: HsEmail[];
+  /** Active accounts with firmographics (for account context + personalization). */
+  companies: HsCompany[];
+  /** Future meetings on the CRM (e.g. booked via a HubSpot scheduling page). */
+  upcomingMeetings: HsMeeting[];
   fetchedAt: string;
 }
 
@@ -196,7 +234,11 @@ interface SearchResult {
   results?: Array<{ id: string; properties?: Record<string, string | null>; createdAt?: string; updatedAt?: string }>;
 }
 
-async function hsSearch(token: string, object: "contacts" | "deals", body: SearchBody): Promise<SearchResult> {
+async function hsSearch(
+  token: string,
+  object: "contacts" | "deals" | "emails" | "companies" | "meetings",
+  body: SearchBody,
+): Promise<SearchResult> {
   const res = await hsFetch(token, `/crm/v3/objects/${object}/search`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -262,6 +304,123 @@ export async function hsOpenDeals(token: string, limit = 100): Promise<HsDeal[]>
   return (json.results ?? []).map(toDeal);
 }
 
+function toEmail(r: NonNullable<SearchResult["results"]>[number]): HsEmail {
+  const p = r.properties ?? {};
+  const fromName = [str(p.hs_email_from_firstname), str(p.hs_email_from_lastname)].filter(Boolean).join(" ").trim();
+  return {
+    id: r.id,
+    subject: str(p.hs_email_subject) || "(no subject)",
+    text: str(p.hs_email_text).slice(0, 4000),
+    direction: str(p.hs_email_direction),
+    fromEmail: str(p.hs_email_from_email),
+    fromName: fromName || str(p.hs_email_from_email),
+    timestamp: str(p.hs_timestamp) || r.createdAt || "",
+  };
+}
+
+/** Inbound email engagements in the last `sinceDays`, newest first. */
+export async function hsRecentEmails(token: string, sinceDays: number, limit = 100): Promise<HsEmail[]> {
+  const since = Date.now() - sinceDays * 24 * 60 * 60 * 1000;
+  const json = await hsSearch(token, "emails", {
+    filterGroups: [
+      {
+        filters: [
+          { propertyName: "hs_email_direction", operator: "EQ", value: "INCOMING_EMAIL" },
+          { propertyName: "hs_timestamp", operator: "GTE", value: String(since) },
+        ],
+      },
+    ],
+    sorts: [{ propertyName: "hs_timestamp", direction: "DESCENDING" }],
+    properties: [
+      "hs_email_subject",
+      "hs_email_text",
+      "hs_email_direction",
+      "hs_email_from_email",
+      "hs_email_from_firstname",
+      "hs_email_from_lastname",
+      "hs_timestamp",
+    ],
+    limit: Math.min(limit, 100),
+  });
+  return (json.results ?? []).map(toEmail);
+}
+
+function toCompany(r: NonNullable<SearchResult["results"]>[number]): HsCompany {
+  const p = r.properties ?? {};
+  return {
+    id: r.id,
+    name: str(p.name) || "Unnamed company",
+    domain: str(p.domain),
+    industry: str(p.industry),
+    employees: num(p.numberofemployees),
+    lifecycleStage: str(p.lifecyclestage),
+  };
+}
+
+/** Active accounts, most recently touched first. */
+export async function hsRecentCompanies(token: string, limit = 100): Promise<HsCompany[]> {
+  const json = await hsSearch(token, "companies", {
+    sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
+    properties: ["name", "domain", "industry", "numberofemployees", "lifecyclestage", "hs_lastmodifieddate"],
+    limit: Math.min(limit, 100),
+  });
+  return (json.results ?? []).map(toCompany);
+}
+
+function toMeeting(r: NonNullable<SearchResult["results"]>[number]): HsMeeting {
+  const p = r.properties ?? {};
+  return {
+    id: r.id,
+    title: str(p.hs_meeting_title) || "Meeting",
+    startTime: str(p.hs_meeting_start_time),
+    endTime: str(p.hs_meeting_end_time),
+    location: str(p.hs_meeting_location),
+    createdAt: str(p.hs_createdate) || r.createdAt || "",
+  };
+}
+
+/** Future meetings (e.g. booked via a HubSpot scheduling page), soonest first. */
+export async function hsUpcomingMeetings(token: string, limit = 25): Promise<HsMeeting[]> {
+  const json = await hsSearch(token, "meetings", {
+    filterGroups: [{ filters: [{ propertyName: "hs_meeting_start_time", operator: "GTE", value: String(Date.now()) }] }],
+    sorts: [{ propertyName: "hs_meeting_start_time", direction: "ASCENDING" }],
+    properties: [
+      "hs_meeting_title",
+      "hs_meeting_start_time",
+      "hs_meeting_end_time",
+      "hs_meeting_location",
+      "hs_createdate",
+    ],
+    limit: Math.min(limit, 100),
+  });
+  return (json.results ?? []).map(toMeeting);
+}
+
+/** The primary contact associated with an engagement (meeting/email), or null.
+ *  Best-effort — used to log to the right timeline + personalize the draft. */
+export async function hsAssociatedContact(
+  token: string,
+  object: "meetings" | "emails",
+  id: string,
+): Promise<HsContact | null> {
+  try {
+    const assoc = await hsFetch(token, `/crm/v4/objects/${object}/${id}/associations/contacts?limit=1`);
+    if (!assoc.ok) return null;
+    const aj = (await assoc.json()) as { results?: Array<{ toObjectId?: string | number }> };
+    const cid = aj.results?.[0]?.toObjectId;
+    if (!cid) return null;
+    const cres = await hsFetch(
+      token,
+      `/crm/v3/objects/contacts/${cid}?properties=email,firstname,lastname,company,lifecyclestage`,
+    );
+    if (!cres.ok) return null;
+    const c = (await cres.json()) as { id: string; properties?: Record<string, string | null> };
+    return toContact({ id: c.id, properties: c.properties });
+  } catch {
+    return null;
+  }
+}
+
 export async function hsSearchContactByEmail(token: string, email: string): Promise<HsContact | null> {
   const json = await hsSearch(token, "contacts", {
     filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
@@ -324,13 +483,22 @@ export async function getHubSpotSnapshot(workspaceId: string): Promise<HubSpotSn
   const token = await getValidAccessToken(workspaceId, "HubSpot");
   if (!token) return null;
 
-  // Fetch contacts and deals INDEPENDENTLY. A private app is often scoped to
-  // one object (e.g. contacts but not deals) — a failed read on one must NOT
-  // nuke the whole snapshot, or every CRM feature (KPIs, agent context, Radar)
-  // silently goes dark despite the other object working fine.
-  const [recentR, dealsR] = await Promise.allSettled([hsRecentContacts(token, 30), hsOpenDeals(token)]);
+  // Fetch every object INDEPENDENTLY. A private app is often scoped to a subset
+  // (e.g. contacts but not deals/emails) — a failed read on one must NOT nuke
+  // the whole snapshot, or every CRM feature silently goes dark despite the
+  // others working. Each capability gates on its own availability flag.
+  const [recentR, dealsR, emailsR, companiesR, meetingsR] = await Promise.allSettled([
+    hsRecentContacts(token, 30),
+    hsOpenDeals(token),
+    hsRecentEmails(token, 7),
+    hsRecentCompanies(token),
+    hsUpcomingMeetings(token),
+  ]);
   const recent = recentR.status === "fulfilled" ? recentR.value : [];
   const deals = dealsR.status === "fulfilled" ? dealsR.value : [];
+  const emails = emailsR.status === "fulfilled" ? emailsR.value : [];
+  const companies = companiesR.status === "fulfilled" ? companiesR.value : [];
+  const meetings = meetingsR.status === "fulfilled" ? meetingsR.value : [];
 
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
@@ -342,16 +510,35 @@ export async function getHubSpotSnapshot(workspaceId: string): Promise<HubSpotSn
     (d) => d.lastModifiedAt && new Date(d.lastModifiedAt).getTime() < staleCutoff,
   );
 
+  // Awaiting reply = the latest inbound email per sender (dedup; each email is
+  // only ever drafted once anyway, via the Radar's triaged_crm claim).
+  const latestBySender = new Map<string, HsEmail>();
+  for (const e of emails) {
+    if (!e.fromEmail) continue;
+    const key = e.fromEmail.toLowerCase();
+    const prev = latestBySender.get(key);
+    if (!prev || new Date(e.timestamp).getTime() > new Date(prev.timestamp).getTime()) latestBySender.set(key, e);
+  }
+  const awaitingReply = [...latestBySender.values()]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 10);
+
   return {
     connected: true,
     contactsAvailable: recentR.status === "fulfilled",
     dealsAvailable: dealsR.status === "fulfilled",
+    emailsAvailable: emailsR.status === "fulfilled",
+    companiesAvailable: companiesR.status === "fulfilled",
+    meetingsAvailable: meetingsR.status === "fulfilled",
     contactsSampled: recent.length,
     newContacts7d,
     uncontacted,
     openDeals: deals,
     pipelineValue: deals.reduce((sum, d) => sum + d.amount, 0),
     staleDeals,
+    awaitingReply,
+    companies: companies.slice(0, 50),
+    upcomingMeetings: meetings.slice(0, 10),
     fetchedAt: new Date(now).toISOString(),
   };
 }
@@ -397,6 +584,22 @@ export function snapshotToContext(snap: HubSpotSnapshot | null): string {
       parts.push(
         `${snap.uncontacted.length} recent contact${snap.uncontacted.length === 1 ? "" : "s"} never contacted`,
       );
+  }
+  if (snap.emailsAvailable && snap.awaitingReply.length) {
+    parts.push(
+      `${snap.awaitingReply.length} email${snap.awaitingReply.length === 1 ? "" : "s"} awaiting a reply` +
+        (snap.awaitingReply[0] ? ` (latest from ${snap.awaitingReply[0].fromName})` : ""),
+    );
+  }
+  if (snap.meetingsAvailable && snap.upcomingMeetings.length) {
+    const next = snap.upcomingMeetings[0];
+    parts.push(
+      `${snap.upcomingMeetings.length} upcoming meeting${snap.upcomingMeetings.length === 1 ? "" : "s"} booked` +
+        (next ? ` (next: ${next.title})` : ""),
+    );
+  }
+  if (snap.companiesAvailable && snap.companies.length) {
+    parts.push(`${snap.companies.length} active account${snap.companies.length === 1 ? "" : "s"}`);
   }
   return parts.length ? `CRM (HubSpot): ${parts.join(". ")}.` : "";
 }
