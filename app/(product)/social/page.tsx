@@ -43,7 +43,6 @@ import {
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
   postOpportunityReplyAction,
-  postReplyAction,
   refreshReplyRadarAction,
   removePostImageAction,
   removeXTargetAction,
@@ -705,14 +704,13 @@ function ReplyAssistantSection() {
   const [options, setOptions] = useState<{ reply: string; note: string }[] | null>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [draft, setDraft] = useState("");
-  const [posting, setPosting] = useState(false);
-  const [postedUrl, setPostedUrl] = useState<string | null>(null);
+  const [opened, setOpened] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   async function suggest() {
     setLoading(true);
     setErr(null);
-    setPostedUrl(null);
+    setOpened(false);
     const r = await suggestRepliesAction(url, needsText ? pastedText : undefined);
     setLoading(false);
     if (!r.ok) {
@@ -738,14 +736,20 @@ function ReplyAssistantSection() {
     if (options?.[i]) setDraft(options[i].reply);
   }
 
-  async function post() {
+  // X blocks posting replies via the API to tweets you weren't mentioned in
+  // (anti-spam rule). So we draft it, copy it, and open X's composer pre-filled
+  // as a reply — you post it there in one click. Manual posting isn't restricted.
+  function openOnX() {
     if (!target) return;
-    setPosting(true);
     setErr(null);
-    const r = await postReplyAction(target.id, draft);
-    setPosting(false);
-    if (r.ok && r.url) setPostedUrl(r.url);
-    else setErr(r.error ?? "Couldn't post the reply.");
+    try {
+      void navigator.clipboard?.writeText(draft);
+    } catch {
+      /* clipboard may be unavailable; the composer is still pre-filled */
+    }
+    const intent = `https://x.com/intent/tweet?in_reply_to=${encodeURIComponent(target.id)}&text=${encodeURIComponent(draft)}`;
+    window.open(intent, "_blank", "noopener,noreferrer");
+    setOpened(true);
   }
 
   function reset() {
@@ -755,7 +759,7 @@ function ReplyAssistantSection() {
     setTarget(null);
     setOptions(null);
     setDraft("");
-    setPostedUrl(null);
+    setOpened(false);
     setErr(null);
   }
 
@@ -768,29 +772,12 @@ function ReplyAssistantSection() {
         <div>
           <h2 className="text-[15px] font-semibold">Reply assistant</h2>
           <p className="text-[12.5px] text-muted-foreground">
-            Paste a tweet from a big account in your niche — get value-add replies in your voice, then post.
+            Paste a tweet from a big account in your niche — get value-add replies in your voice, then post it on X.
           </p>
         </div>
       </div>
 
-      {postedUrl ? (
-        <div className="mt-4 space-y-3">
-          <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[13px] text-emerald-700">
-            ✅ Reply posted.{" "}
-            <a
-              href={postedUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-medium underline"
-            >
-              View on X <ExternalLink className="h-3 w-3" />
-            </a>
-          </p>
-          <Button size="sm" variant="outline" onClick={reset}>
-            Reply to another
-          </Button>
-        </div>
-      ) : !target ? (
+      {!target ? (
         <div className="mt-4 space-y-3">
           <div className="space-y-1.5">
             <Label>Tweet link</Label>
@@ -852,9 +839,9 @@ function ReplyAssistantSection() {
 
           <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} className="min-h-[80px]" />
           <div className="flex items-center gap-2">
-            <Button variant="success" onClick={post} disabled={posting || !draft.trim() || draft.length > 280}>
-              {posting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Post reply
+            <Button variant="success" onClick={openOnX} disabled={!draft.trim() || draft.length > 280}>
+              <ExternalLink className="h-4 w-4" />
+              Copy &amp; open on X
             </Button>
             <Button variant="ghost" onClick={reset}>
               Start over
@@ -868,10 +855,16 @@ function ReplyAssistantSection() {
               {draft.length}/280
             </span>
           </div>
-          <p className="text-[11.5px] text-muted-foreground">
-            Posts a real reply to your connected X. Add genuine value — quality replies grow your account; spammy
-            ones get you muted.
-          </p>
+          {opened ? (
+            <p className="text-[11.5px] text-emerald-600">
+              Opened X with your reply pre-filled (and copied to your clipboard) — review and hit Post there.
+            </p>
+          ) : (
+            <p className="text-[11.5px] text-muted-foreground">
+              X blocks apps from posting replies to accounts you weren&apos;t mentioned by, so this opens X&apos;s
+              composer pre-filled — you post it in one click. Add genuine value; spammy replies get you muted.
+            </p>
+          )}
         </div>
       )}
 
