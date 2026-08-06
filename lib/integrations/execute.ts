@@ -22,6 +22,7 @@ import { postThread, postTweet, uploadMediaToX } from "./x";
 import { executionKilled, guardUnattendedExecution } from "./guardrails";
 import { listMediaRowsForTask } from "@/lib/db/queries";
 import { getImageBytes } from "@/lib/media/storage";
+import { extractCalendarEvent } from "@/lib/agents/calendar-extract";
 import { setPageStatus } from "@/lib/pages";
 import type { ExecutionStep } from "@/lib/types";
 
@@ -205,16 +206,49 @@ export async function runTaskExecution(
       } else if (name === "Google Calendar") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No Calendar token");
-        const start = task.due_at ? new Date(task.due_at) : new Date(Date.now() + 3600_000);
-        const end = new Date(start.getTime() + 30 * 60_000);
-        await createCalendarEvent(token, {
-          summary: task.title,
-          description: task.description,
-          startISO: start.toISOString(),
-          endISO: end.toISOString(),
-        });
-        steps.push({ label: "Created Google Calendar event", status: "done" });
-        touched.push("Google Calendar");
+        // Parse the ACTUAL event out of the request — day, start/end times,
+        // timezone, and recurrence — instead of dumping the task title at
+        // due_at + 30 min. The drafted content (agenda/plan) becomes the event
+        // description.
+        const [briefRow] = await db
+          .select({ tz: businessBriefs.timezone })
+          .from(businessBriefs)
+          .where(eq(businessBriefs.workspace_id, workspaceId))
+          .limit(1);
+        const ev = await extractCalendarEvent(
+          `${task.title}\n${task.description}`,
+          now.toISOString(),
+          briefRow?.tz || "America/New_York",
+        );
+        if (ev && ev.isEvent) {
+          const r = await createCalendarEvent(token, {
+            summary: ev.title,
+            description: draft || task.description,
+            startISO: ev.startLocal,
+            endISO: ev.endLocal,
+            timeZone: ev.timeZone,
+            recurrence: ev.recurrence ? [ev.recurrence] : undefined,
+          });
+          steps.push({
+            label:
+              `Created Google Calendar event — ${ev.title}` +
+              `${ev.recurrence ? " (recurring)" : ""}${r.htmlLink ? ` — ${r.htmlLink}` : ""}`,
+            status: "done",
+          });
+          touched.push("Google Calendar");
+        } else {
+          // No parseable time — fall back to a single event at the due date.
+          const start = task.due_at ? new Date(task.due_at) : new Date(Date.now() + 3600_000);
+          const end = new Date(start.getTime() + 30 * 60_000);
+          await createCalendarEvent(token, {
+            summary: task.title,
+            description: draft || task.description,
+            startISO: start.toISOString(),
+            endISO: end.toISOString(),
+          });
+          steps.push({ label: "Created Google Calendar event", status: "done" });
+          touched.push("Google Calendar");
+        }
       } else if (name === "HubSpot") {
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No HubSpot token");

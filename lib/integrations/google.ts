@@ -212,7 +212,19 @@ export async function createSpreadsheet(
 
 export async function createCalendarEvent(
   accessToken: string,
-  ev: { summary: string; description: string; startISO: string; endISO: string },
+  ev: {
+    summary: string;
+    description: string;
+    /** Start time. With `timeZone`, a local wall-clock ("2026-08-10T08:30:00");
+     *  without it, an absolute UTC ISO ("...Z"). */
+    startISO: string;
+    endISO: string;
+    /** IANA zone (e.g. "America/New_York") when startISO/endISO are local. */
+    timeZone?: string;
+    /** RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"]. */
+    recurrence?: string[];
+    attendees?: string[];
+  },
 ): Promise<{ id: string; htmlLink?: string }> {
   const res = await fetch(
     "https://www.googleapis.com/calendar/v3/calendars/primary/events",
@@ -222,8 +234,10 @@ export async function createCalendarEvent(
       body: JSON.stringify({
         summary: ev.summary,
         description: ev.description,
-        start: { dateTime: ev.startISO },
-        end: { dateTime: ev.endISO },
+        start: { dateTime: ev.startISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
+        end: { dateTime: ev.endISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
+        ...(ev.recurrence?.length ? { recurrence: ev.recurrence } : {}),
+        ...(ev.attendees?.length ? { attendees: ev.attendees.map((email) => ({ email })) } : {}),
       }),
     },
   );
