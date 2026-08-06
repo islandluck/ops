@@ -5,8 +5,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { agents, tasks } from "@/lib/db/schema";
-import { getPlanningContext, markNoteActioned } from "@/lib/db/queries";
+import { getConnectedIntegrationNames, getPlanningContext, markNoteActioned } from "@/lib/db/queries";
 import { createProject } from "@/lib/agents/project";
+import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import type { Category, Note, NoteProposal } from "@/lib/types";
 
 /**
@@ -109,6 +110,7 @@ export async function analyzeNote(workspaceId: string, note: Note): Promise<Note
 async function createNoteTask(
   workspaceId: string,
   t: { title: string; category: Category; description: string; rationale: string },
+  connected: string[],
 ): Promise<void> {
   const [agent] = await db
     .select({ id: agents.id })
@@ -122,6 +124,7 @@ async function createNoteTask(
       ),
     )
     .limit(1);
+  const systems = inferAffectedSystems(`${t.title} ${t.description}`, connected);
   const now = new Date();
   await db.insert(tasks).values({
     id: randomUUID(),
@@ -133,14 +136,15 @@ async function createNoteTask(
     status: "new",
     risk_level: "low",
     priority: "medium",
-    due_at: null,
+    // A scheduling task gets a real time so the calendar event lands sensibly.
+    due_at: systems.includes("Google Calendar") ? new Date(now.getTime() + 24 * 3600 * 1000) : null,
     agent_id: agent?.id ?? null,
     created_by_type: "agent",
     requires_approval: true,
     approval_status: "pending",
     execution_status: "none",
-    affected_systems: [],
-    proposed_actions: 0,
+    affected_systems: systems,
+    proposed_actions: systems.length,
     impact_score: 45,
     archived: false,
     created_at: now,
@@ -162,7 +166,8 @@ export async function actionNote(
   }
   const list = proposal.tasks ?? [];
   if (!list.length) return { ok: false, kind: "tasks", error: "Nothing to create." };
-  for (const t of list) await createNoteTask(workspaceId, t);
+  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => []);
+  for (const t of list) await createNoteTask(workspaceId, t, connected);
   await markNoteActioned(workspaceId, note.id, { taskCount: list.length });
   return { ok: true, kind: "tasks", taskCount: list.length };
 }

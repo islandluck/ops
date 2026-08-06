@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
-import { getPlanningContext } from "@/lib/db/queries";
+import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
+import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import { planProjectWithClaude } from "@/lib/ai/project";
 import { generateAndSavePage } from "@/lib/pages";
 import { runTaskWithAgent } from "./run";
@@ -182,6 +183,7 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
     .from(agents)
     .where(and(eq(agents.workspace_id, workspaceId), eq(agents.premium, false), eq(agents.archived, false)));
   const workerFor = (cat: Category) => workers.find((w) => w.category === cat)?.id ?? null;
+  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => []);
 
   const toDraft: string[] = [];
   const pageJobs: Array<{ taskId: string; step: ProjectStep }> = [];
@@ -210,7 +212,7 @@ async function materializePhase(workspaceId: string, project: Project, phaseInde
       requires_approval: true,
       approval_status: "pending",
       execution_status: "none",
-      affected_systems: [],
+      affected_systems: isPage ? [] : inferAffectedSystems(`${step.title} ${step.brief}`, connected),
       proposed_actions: 1,
       impact_score: 42,
       created_at: now,

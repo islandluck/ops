@@ -825,6 +825,16 @@ export async function deleteTaskForUser(wsId: string, taskId: string): Promise<v
   await db.delete(tasks).where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
 }
 
+/** Display names of the workspace's currently-connected integrations. Used to
+ *  intersect a task's inferred systems so we never tag a disconnected one. */
+export async function getConnectedIntegrationNames(wsId: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: integrations.name })
+    .from(integrations)
+    .where(and(eq(integrations.workspace_id, wsId), eq(integrations.connected, true)));
+  return rows.map((r) => r.name);
+}
+
 export async function rejectTaskForUser(wsId: string, taskId: string): Promise<void> {
   await db
     .update(tasks)

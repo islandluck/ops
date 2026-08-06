@@ -16,7 +16,8 @@ import { generateAgentTask } from "@/lib/ai/agent";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { getCrmContext } from "@/lib/integrations/hubspot";
-import { saveDocument } from "@/lib/db/queries";
+import { getConnectedIntegrationNames, saveDocument } from "@/lib/db/queries";
+import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import { getCurrentContext } from "./deepdive";
 import { runEmailTriage } from "./triage";
 import { runNotionTriage } from "./notion-triage";
@@ -79,6 +80,11 @@ export async function runAgentForWorkspace(
   const now = new Date();
   const taskId = randomUUID();
   const auto = a.permissions_mode === "auto";
+  // Tag the task with the systems its intent implies (∩ connected), not the
+  // agent's whole allowlist — so execution acts on what the task needs and
+  // nothing spurious.
+  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => []);
+  const systems = inferAffectedSystems(`${gen.title} ${gen.rationale}`, connected);
 
   await db.insert(tasks).values({
     id: taskId,
@@ -96,8 +102,8 @@ export async function runAgentForWorkspace(
     requires_approval: !auto,
     approval_status: "pending",
     execution_status: "none",
-    affected_systems: a.allowed_integrations,
-    proposed_actions: 1,
+    affected_systems: systems,
+    proposed_actions: systems.length,
     impact_score: 42,
     created_at: now,
     updated_at: now,

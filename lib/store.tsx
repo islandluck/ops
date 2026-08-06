@@ -587,8 +587,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           });
         return;
       }
-      if (serverMode && snap && taskUsesLiveIntegration(snap, id)) {
-        executeLive(id, "Approved — executing live…");
+      // Server mode ALWAYS runs the real execution path — it's honest about what
+      // it did (real integration calls, or "no connected system to act on").
+      // The client-side simulation below is demo-mode only; it used to fake
+      // "done" steps for tasks with no live integration.
+      if (serverMode && snap) {
+        executeLive(id, "Approved — executing…");
         return;
       }
       patchState((prev) => {
@@ -1161,7 +1165,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const retry = useCallback(
     (id: string) => {
       const snap = latest.current;
-      if (serverMode && snap && taskUsesLiveIntegration(snap, id)) {
+      if (serverMode && snap) {
         executeLive(id, "Retrying execution…");
         return;
       }
@@ -1781,16 +1785,6 @@ function labelForStatus(status: TaskStatus): string {
     done: "Done",
   };
   return map[status];
-}
-
-/** Does the task touch an integration that is connected AND provider-configured? */
-function taskUsesLiveIntegration(s: AppState, taskId: string): boolean {
-  const task = s.tasks.find((t) => t.id === taskId);
-  if (!task) return false;
-  return task.affected_systems.some((name) => {
-    const integ = s.integrations.find((i) => i.name === name);
-    return Boolean(integ?.connected && integ?.configured);
-  });
 }
 
 function assetTypeFor(category: Category): AssetType {

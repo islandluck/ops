@@ -16,7 +16,8 @@ import {
   projects,
   tasks,
 } from "@/lib/db/schema";
-import { getPlanningContext } from "@/lib/db/queries";
+import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
+import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import { getCalendarSnapshot, formatEventWhen } from "@/lib/integrations/google";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
@@ -591,6 +592,8 @@ async function createBriefTask(workspaceId: string, s: BriefSuggestion): Promise
       ),
     )
     .limit(1);
+  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => []);
+  const systems = inferAffectedSystems(`${s.title} ${s.goal} ${s.rationale}`, connected);
   const now = new Date();
   await db.insert(tasks).values({
     id: uid(),
@@ -602,14 +605,14 @@ async function createBriefTask(workspaceId: string, s: BriefSuggestion): Promise
     status: "new",
     risk_level: "low",
     priority: "medium",
-    due_at: null,
+    due_at: systems.includes("Google Calendar") ? new Date(now.getTime() + 24 * 3600 * 1000) : null,
     agent_id: agent?.id ?? null,
     created_by_type: "agent",
     requires_approval: true,
     approval_status: "pending",
     execution_status: "none",
-    affected_systems: [],
-    proposed_actions: 0,
+    affected_systems: systems,
+    proposed_actions: systems.length,
     impact_score: 45,
     archived: false,
     created_at: now,
