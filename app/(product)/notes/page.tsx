@@ -330,7 +330,7 @@ function NoteEditor({
             </p>
             <Button size="sm" disabled={empty || analyzing} onClick={analyze}>
               {analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {analyzing ? "Thinking…" : "Action this note"}
+              {analyzing ? "Thinking…" : "Send to Executive"}
             </Button>
           </div>
         )
