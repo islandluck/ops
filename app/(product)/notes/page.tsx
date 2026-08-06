@@ -88,8 +88,8 @@ export default function NotesPage() {
             <div>
               <h3 className="text-[15px] font-semibold">No notes yet</h3>
               <p className="mx-auto mt-1 max-w-md text-[13px] text-muted-foreground">
-                Capture a quick thought — “email the UConn lab about a letter of support”, “book TGA rig time”,
-                “follow up with Undeterred”. Then let the Executive make it happen.
+                Jot down a to-do, an idea, or a reminder — anything you don’t want to forget. When you’re ready,
+                hand it to the Executive and it’ll turn it into a project or tasks your team can run.
               </p>
             </div>
             <Button size="sm" onClick={newNote}>
@@ -212,12 +212,13 @@ function NoteEditor({
     }
   }
 
-  async function approve() {
-    if (!proposal || creating) return;
+  async function approve(chosen?: NoteProposal) {
+    const p = chosen ?? proposal;
+    if (!p || creating) return;
     setCreating(true);
     setError("");
     try {
-      const r = await actionNoteAction(note.id, proposal);
+      const r = await actionNoteAction(note.id, p);
       if (r.ok) {
         onPatch(note.id, {
           status: "actioned",
@@ -225,7 +226,7 @@ function NoteEditor({
           spawned_task_count: r.taskCount ?? 0,
         });
         setProposal(null);
-        setDone({ kind: proposal.kind, taskCount: r.taskCount });
+        setDone({ kind: p.kind, taskCount: r.taskCount });
         onActioned(); // refresh the board so new tasks show up
       } else {
         setError(r.error ?? "Couldn't create the work.");
@@ -346,14 +347,32 @@ function ProposalPanel({
 }: {
   proposal: NoteProposal;
   creating: boolean;
-  onApprove: () => void;
+  onApprove: (chosen: NoteProposal) => void;
   onCancel: () => void;
 }) {
+  const taskList = proposal.tasks ?? [];
+  // Each task starts approved; the user can reject any before creating.
+  const [included, setIncluded] = useState<boolean[]>(() => taskList.map(() => true));
+  const chosenCount = included.filter(Boolean).length;
+
+  function toggle(i: number) {
+    setIncluded((prev) => prev.map((v, idx) => (idx === i ? !v : v)));
+  }
+
+  function approve() {
+    if (proposal.kind === "project") onApprove(proposal);
+    else onApprove({ ...proposal, tasks: taskList.filter((_, i) => included[i]) });
+  }
+
+  const canApprove = proposal.kind === "project" || chosenCount > 0;
+
   return (
     <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
       <div className="mb-2 flex items-center gap-1.5 text-[12px] font-semibold text-primary">
         <Sparkles className="h-3.5 w-3.5" />
-        The Executive suggests {proposal.kind === "project" ? "a project" : `${proposal.tasks?.length ?? 0} task(s)`}
+        {proposal.kind === "project"
+          ? "The Executive suggests a project"
+          : "The Executive suggests these tasks — keep the ones you want, uncheck any to skip"}
       </div>
       {proposal.summary && <p className="mb-2.5 text-[12.5px] text-foreground/80">{proposal.summary}</p>}
 
@@ -367,32 +386,51 @@ function ProposalPanel({
         </div>
       ) : (
         <div className="space-y-1.5">
-          {(proposal.tasks ?? []).map((t, i) => {
+          {taskList.map((t, i) => {
             const meta = CATEGORY_META[t.category as Category];
+            const on = included[i];
             return (
-              <div key={i} className="rounded-lg border border-border bg-card p-2.5">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold",
-                      meta?.tag ?? "bg-slate-100 text-slate-600",
-                    )}
-                  >
-                    {meta?.label ?? t.category}
-                  </span>
-                  <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{t.title}</p>
+              <label
+                key={i}
+                className={cn(
+                  "flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 transition-colors",
+                  on ? "border-border bg-card" : "border-dashed border-border bg-muted/40",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => toggle(i)}
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+                />
+                <div className={cn("min-w-0 flex-1", !on && "opacity-55")}>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold",
+                        meta?.tag ?? "bg-slate-100 text-slate-600",
+                      )}
+                    >
+                      {meta?.label ?? t.category}
+                    </span>
+                    <p className={cn("min-w-0 flex-1 truncate text-[12.5px] font-medium", !on && "line-through")}>
+                      {t.title}
+                    </p>
+                  </div>
+                  {t.description && <p className="mt-1 text-[11.5px] text-muted-foreground">{t.description}</p>}
                 </div>
-                {t.description && <p className="mt-1 text-[11.5px] text-muted-foreground">{t.description}</p>}
-              </div>
+              </label>
             );
           })}
         </div>
       )}
 
       <div className="mt-3 flex items-center gap-2">
-        <Button size="sm" variant="success" disabled={creating} onClick={onApprove}>
+        <Button size="sm" variant="success" disabled={creating || !canApprove} onClick={approve}>
           {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          Approve &amp; create
+          {proposal.kind === "project"
+            ? "Approve & create project"
+            : `Approve ${chosenCount} task${chosenCount === 1 ? "" : "s"}`}
         </Button>
         <Button size="sm" variant="outline" disabled={creating} onClick={onCancel}>
           Cancel
