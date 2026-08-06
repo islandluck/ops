@@ -58,12 +58,44 @@ The CRM as the richest context source the agents read.
 - `a9f653f` **Degrade gracefully when scoped to one object** — snapshot fetches
   contacts + deals independently (`Promise.allSettled`); a missing deals scope no
   longer nukes the whole snapshot (KPIs/context/Radar keep working on contacts).
+- `bf40ee2` **Deepen to emails + companies + meetings** — snapshot now reads
+  inbound email (with body), companies (firmographics), and upcoming meetings
+  (booked via a HubSpot scheduling page), each behind its own availability flag.
+  Two new Radar signals: **reply** (drafts an in-context response to an inbound
+  email + logs to the contact timeline) and **meeting-prep** (drafts a prep
+  brief for a booked meeting). Outreach/reply drafts get account firmographics.
+  Conversations inbox (`conversations.read`) deferred.
+- `3a875ad` **Scope correction (verified against a real account).** The
+  `crm.objects.emails.read`/`crm.objects.meetings.read` scopes I'd named do NOT
+  exist. Probed each object with the live token + read the required scope from
+  HubSpot's 403s: **meetings/calls/notes reads ride on `crm.objects.contacts.read`
+  (already working — no new scope)**; the email-engagement object has **no
+  grantable scope** on this app type; **companies** needs `crm.objects.companies.read`;
+  **email/chat content** comes via **`conversations.read`** (the Conversations
+  inbox). Replaced the dead email-engagement read with a Conversations-based
+  `hsAwaitingReply`; registry scopes corrected. **Scopes to add + reconnect:
+  `crm.objects.companies.read` + `conversations.read`.**
 
 #### Google Calendar — schedule senses
 - `019f5a6` Read the primary calendar (next 7 days) into `getCalendarSnapshot` →
   a "Your schedule (next 7 days)" section in the daily brief + a schedule line in
   the Executive chat. Reuses the existing `calendar.events` scope. The write side
   (`createCalendarEvent` on approved tasks with a due date) already existed.
+
+#### Board persistence fix
+- `d1c1fd4` **Delete / reject / archive persist immediately.** Agent-created
+  (CRM Radar) cards couldn't be removed — they entered the client via a reload
+  that armed `skipFirstSave` + reverted optimistic edits, and the 800ms debounced
+  bundle-save was dropped on a quick refresh. Now these write straight to the DB
+  via server actions alongside the optimistic update, so they stick.
+
+#### Notes — jot it down, get it done
+- `9294787` A quick-capture **Notes** section (`/notes`) — write freely, autosave.
+  "Action this note" hands it to the Executive, which (grounded in brief + CRM +
+  calendar) proposes **a project OR a set of tasks**; approve → real delegated
+  work on the board / Projects; the note is badged "Actioned →". New `notes`
+  table (migration 0027), self-contained (not in the bundle), immediate-persist
+  editor. Reuses `createProject` + the brief's task-creation.
 
 ### Key decisions & lessons
 
