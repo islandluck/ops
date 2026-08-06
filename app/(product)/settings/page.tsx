@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut, RefreshCw, Save, UserRound } from "lucide-react";
+import { AlertTriangle, Loader2, LogOut, RefreshCw, Save, Trash2, UserRound } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,8 @@ import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
 import { CategoryIcon } from "@/components/badges";
 import { useStore } from "@/lib/store";
+import { hardResetAccountAction } from "@/app/actions";
+import { hasSupabaseClientEnv } from "@/lib/config";
 import { CATEGORY_META, PERMISSION_META } from "@/lib/constants";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -140,9 +142,154 @@ export default function SettingsPage() {
               </Button>
             </div>
           </Card>
+
+          {/* Danger zone — server mode only (hard reset needs a real account) */}
+          {hasSupabaseClientEnv && <DangerZone />}
         </div>
       </PageBody>
     </>
+  );
+}
+
+/** Permanently wipe the account, behind a 3-gate confirmation ending in
+ *  type-to-confirm. On success the user is sent back through onboarding. */
+function DangerZone() {
+  const [step, setStep] = useState(0);
+  const [phrase, setPhrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const matches = phrase.trim().toUpperCase() === "RESET";
+
+  function cancel() {
+    setStep(0);
+    setPhrase("");
+    setError("");
+  }
+
+  async function doReset() {
+    if (!matches || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const r = await hardResetAccountAction(phrase);
+      if (r.ok) {
+        // Everything is gone; the fresh workspace + onboarding load on reload.
+        window.location.href = "/onboarding";
+      } else {
+        setError(r.error ?? "Couldn't reset the account.");
+        setBusy(false);
+      }
+    } catch {
+      setError("Something went wrong. Please try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="border-red-200 p-5">
+      <div className="flex items-center gap-3">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-600">
+          <AlertTriangle className="h-4.5 w-4.5" />
+        </span>
+        <div>
+          <h2 className="text-[15px] font-semibold text-red-700">Danger zone</h2>
+          <p className="text-[12.5px] text-muted-foreground">Irreversible. Proceed with care.</p>
+        </div>
+      </div>
+
+      {step === 0 && (
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[13.5px] font-medium">Reset account</p>
+            <p className="text-[12.5px] text-muted-foreground">
+              Permanently erase everything in this account and start fresh.
+            </p>
+          </div>
+          <Button variant="destructive" size="sm" onClick={() => setStep(1)}>
+            <Trash2 className="h-4 w-4" />
+            Reset account
+          </Button>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50/50 p-4">
+          <p className="text-[13.5px] font-semibold text-red-700">
+            This permanently deletes everything in your account.
+          </p>
+          <p className="mt-1.5 text-[12.5px] text-foreground/80">Gone forever — there is no recovery:</p>
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-[12.5px] text-foreground/80">
+            <li>All tasks, projects, and their history</li>
+            <li>Every Executive chat, daily brief, goal, and saved memory</li>
+            <li>All notes, documents, pages, and content</li>
+            <li>Your CRM &amp; calendar data, and all connected integrations (disconnected)</li>
+            <li>Your business profile — you&apos;ll set it up again from scratch</li>
+          </ul>
+          <div className="mt-3 flex gap-2">
+            <Button variant="outline" size="sm" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => setStep(2)}>
+              Continue
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50/50 p-4">
+          <p className="text-[13.5px] font-semibold text-red-700">Are you absolutely sure?</p>
+          <p className="mt-1.5 text-[12.5px] text-foreground/80">
+            This cannot be undone. Everything is erased immediately and you&apos;ll be returned to onboarding to set
+            up a brand-new account. There is no way to get any of it back.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button variant="outline" size="sm" onClick={cancel}>
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => setStep(3)}>
+              I understand — continue
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="mt-4 rounded-xl border border-red-300 bg-red-50/60 p-4">
+          <p className="text-[13.5px] font-semibold text-red-700">Final confirmation</p>
+          <p className="mt-1.5 text-[12.5px] text-foreground/80">
+            Type <span className="rounded bg-red-100 px-1 font-mono font-semibold text-red-700">RESET</span> to
+            permanently erase this account.
+          </p>
+          <Input
+            value={phrase}
+            onChange={(e) => setPhrase(e.target.value)}
+            placeholder="RESET"
+            autoFocus
+            className="mt-2 max-w-[220px]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void doReset();
+            }}
+          />
+          {error && <p className="mt-2 text-[12px] text-red-600">{error}</p>}
+          <div className="mt-3 flex gap-2">
+            <Button variant="outline" size="sm" onClick={cancel} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={doReset}
+              disabled={busy || !matches}
+              className="border-red-600 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              Permanently reset account
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

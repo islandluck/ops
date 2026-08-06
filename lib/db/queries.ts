@@ -901,6 +901,20 @@ export async function deleteNoteForUser(wsId: string, noteId: string): Promise<v
   await db.delete(notes).where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
 }
 
+/**
+ * HARD reset: delete the user's workspace so EVERY workspace-scoped row cascade-
+ * deletes (business brief, agents, integrations + tokens, tasks, projects,
+ * notes, documents, pages, orders, CRM data, Executive chats/briefs/memory/goals,
+ * Deep Dives, opportunities — everything). Nothing survives except the user's
+ * auth account + profile. The next app load re-provisions a fresh clean-slate
+ * workspace via getOrCreateWorkspace. Scoped to the caller's own workspace.
+ */
+export async function hardResetWorkspace(userId: string): Promise<void> {
+  const wsId = await getWorkspaceId(userId);
+  if (!wsId) return;
+  await db.delete(workspaces).where(eq(workspaces.id, wsId));
+}
+
 /** Mark a note actioned and link what it spawned (a project and/or N tasks). */
 export async function markNoteActioned(
   wsId: string,

@@ -27,6 +27,7 @@ import {
   deleteNoteForUser,
   deleteTaskForUser,
   getNoteForUser,
+  hardResetWorkspace,
   listNotesForUser,
   listReplyOpportunities,
   listXTargets,
@@ -1892,6 +1893,31 @@ export async function signOutAction(): Promise<void> {
   const supabase = await createSupabaseServerClient();
   await supabase.auth.signOut();
   // Navigation is handled by the caller so it works uniformly in both modes.
+}
+
+/**
+ * HARD-reset the account: permanently wipe the workspace and send the user back
+ * through onboarding. The typed phrase is re-validated server-side (defense in
+ * depth — the 3-gate UI is not the only check). The next load re-provisions a
+ * fresh clean-slate workspace.
+ */
+export async function hardResetAccountAction(confirmation: string): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  if (confirmation.trim().toUpperCase() !== "RESET") {
+    return { ok: false, error: "Type RESET to confirm." };
+  }
+  try {
+    await hardResetWorkspace(user.id);
+    // Route back through onboarding (a brand-new-account experience).
+    await supabase.auth.updateUser({ data: { onboarded: false } });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Reset failed." };
+  }
 }
 
 /* ---------------------------- Opportunities ----------------------------- */
