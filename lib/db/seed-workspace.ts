@@ -217,7 +217,11 @@ export function buildCleanSlateRows(workspaceId: string, now: number): SeedRows 
     tasks_prepared: 0,
     instructions: a.instructions,
     folder: a.folder,
-    background_enabled: a.background_enabled,
+    // A brand-new / reset workspace starts genuinely idle: no agent runs in the
+    // background until the owner turns it on (per-agent "Work in the background"
+    // toggle). Otherwise the first cron tick would refill a supposedly-empty
+    // board with drafts before the owner has set anything up.
+    background_enabled: false,
     allowed_integrations: a.allowed_integrations,
     log_activity: a.log_activity,
     tier: a.tier,

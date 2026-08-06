@@ -696,9 +696,14 @@ export async function applyOnboardingForUser(
       })
       .where(eq(businessBriefs.workspace_id, wsId));
 
+    // Apply the chosen default autonomy AND pause background work: a freshly
+    // onboarded board must stay empty until the owner explicitly turns an agent
+    // on. Without this, the next cron tick runs the background-enabled Social
+    // agent and refills the just-cleared board (the "sidebar still shows N items
+    // after reset" bug).
     await tx
       .update(agents)
-      .set({ permissions_mode: input.approvalDefault })
+      .set({ permissions_mode: input.approvalDefault, background_enabled: false })
       .where(eq(agents.workspace_id, wsId));
   });
 }
