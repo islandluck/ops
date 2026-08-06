@@ -23,10 +23,15 @@ import {
   getXStyleProfile,
   insertMedia,
   listMediaForTask,
+  createNoteForUser,
+  deleteNoteForUser,
   deleteTaskForUser,
+  getNoteForUser,
+  listNotesForUser,
   listReplyOpportunities,
   listXTargets,
   loadBundleForUser,
+  markNoteActioned,
   markOpportunityReplied,
   rejectTaskForUser,
   removeXTarget,
@@ -36,6 +41,7 @@ import {
   setOpportunityReplies,
   setTaskArchivedForUser,
   setXStyleProfile,
+  updateNoteForUser,
   updateTaskAssetContent,
   workspaceIdForUser,
 } from "@/lib/db/queries";
@@ -57,6 +63,7 @@ import {
 import { getStripeAccount } from "@/lib/integrations/stripe";
 import { hsValidateToken } from "@/lib/integrations/hubspot";
 import { runCrmRadar } from "@/lib/agents/crm";
+import { actionNote, analyzeNote } from "@/lib/agents/notes";
 import { createNotionPage } from "@/lib/integrations/notion";
 import { runTaskExecution } from "@/lib/integrations/execute";
 import { executionKilled } from "@/lib/integrations/guardrails";
@@ -167,6 +174,8 @@ import type {
   UpdateAudience,
   OnboardingInput,
   Opportunity,
+  Note,
+  NoteProposal,
   OpportunityScanner,
   OpportunityStatus,
   OpportunityType,
@@ -362,6 +371,97 @@ export async function setTaskArchivedAction(id: string, archived: boolean): Prom
     return { ok: true };
   } catch {
     return { ok: false };
+  }
+}
+
+/* --------------------------------- notes -------------------------------- */
+
+export async function listNotesAction(): Promise<Note[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listNotesForUser(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createNoteAction(): Promise<Note | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await createNoteForUser(ws);
+  } catch {
+    return null;
+  }
+}
+
+export async function updateNoteAction(
+  id: string,
+  patch: { title?: string; content?: string },
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await updateNoteForUser(ws, id, patch);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function deleteNoteAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await deleteNoteForUser(ws, id);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Hand a note to the Executive → a proposal (project OR tasks) to approve. */
+export async function analyzeNoteAction(
+  id: string,
+): Promise<{ ok: boolean; proposal?: NoteProposal; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const note = await getNoteForUser(ws, id);
+  if (!note) return { ok: false, error: "Note not found." };
+  try {
+    const proposal = await analyzeNote(ws, note);
+    return { ok: true, proposal };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't analyze the note." };
+  }
+}
+
+/** Approve a proposal → create the project/tasks; mark the note actioned. */
+export async function actionNoteAction(
+  id: string,
+  proposal: NoteProposal,
+): Promise<{ ok: boolean; kind?: NoteProposal["kind"]; projectId?: string; taskCount?: number; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const note = await getNoteForUser(ws, id);
+  if (!note) return { ok: false, error: "Note not found." };
+  try {
+    return await actionNote(ws, note, proposal);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't action the note." };
   }
 }
 

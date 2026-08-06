@@ -12,6 +12,7 @@ import {
   executionRuns,
   integrations,
   media,
+  notes,
   profiles,
   replyOpportunities,
   taskAssets,
@@ -35,6 +36,7 @@ import type {
   Document,
   ExecutionRun,
   Integration,
+  Note,
   OnboardingInput,
   PlannedTask,
   PostImage,
@@ -835,6 +837,84 @@ export async function setTaskArchivedForUser(wsId: string, taskId: string, archi
     .update(tasks)
     .set({ archived, updated_at: new Date() })
     .where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
+}
+
+/* --------------------------------- notes -------------------------------- */
+
+function toNote(r: typeof notes.$inferSelect): Note {
+  return {
+    id: r.id,
+    workspace_id: r.workspace_id,
+    title: r.title,
+    content: r.content,
+    status: r.status === "actioned" ? "actioned" : "draft",
+    spawned_project_id: r.spawned_project_id ?? null,
+    spawned_task_count: r.spawned_task_count,
+    created_at: iso(r.created_at),
+    updated_at: iso(r.updated_at),
+  };
+}
+
+export async function listNotesForUser(wsId: string): Promise<Note[]> {
+  const rows = await db
+    .select()
+    .from(notes)
+    .where(eq(notes.workspace_id, wsId))
+    .orderBy(desc(notes.updated_at));
+  return rows.map(toNote);
+}
+
+export async function createNoteForUser(wsId: string): Promise<Note> {
+  const [row] = await db
+    .insert(notes)
+    .values({ workspace_id: wsId, title: "", content: "" })
+    .returning();
+  return toNote(row);
+}
+
+export async function updateNoteForUser(
+  wsId: string,
+  noteId: string,
+  patch: { title?: string; content?: string },
+): Promise<void> {
+  await db
+    .update(notes)
+    .set({
+      ...(patch.title !== undefined ? { title: patch.title.slice(0, 300) } : {}),
+      ...(patch.content !== undefined ? { content: patch.content.slice(0, 100_000) } : {}),
+      updated_at: new Date(),
+    })
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
+}
+
+export async function deleteNoteForUser(wsId: string, noteId: string): Promise<void> {
+  await db.delete(notes).where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
+}
+
+/** Mark a note actioned and link what it spawned (a project and/or N tasks). */
+export async function markNoteActioned(
+  wsId: string,
+  noteId: string,
+  spawn: { projectId?: string | null; taskCount?: number },
+): Promise<void> {
+  await db
+    .update(notes)
+    .set({
+      status: "actioned",
+      spawned_project_id: spawn.projectId ?? null,
+      spawned_task_count: spawn.taskCount ?? 0,
+      updated_at: new Date(),
+    })
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
+}
+
+export async function getNoteForUser(wsId: string, noteId: string): Promise<Note | null> {
+  const [row] = await db
+    .select()
+    .from(notes)
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)))
+    .limit(1);
+  return row ? toNote(row) : null;
 }
 
 /* -------------------------------- media --------------------------------- */

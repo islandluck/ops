@@ -566,6 +566,33 @@ export interface Document {
   updated_at: string;
 }
 
+/** A freeform note the user jots down, optionally handed to the Executive to
+ *  turn into a project or tasks. */
+export interface Note {
+  id: string;
+  workspace_id: string;
+  title: string;
+  content: string;
+  status: "draft" | "actioned";
+  /** Set when actioning produced a project. */
+  spawned_project_id: string | null;
+  /** How many tasks actioning this note created. */
+  spawned_task_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What the Executive proposes when a note is actioned: a project OR discrete tasks. */
+export interface NoteProposal {
+  kind: "project" | "tasks";
+  /** One-line reasoning shown to the user. */
+  summary: string;
+  /** For kind "project". */
+  project?: { title: string; goal: string };
+  /** For kind "tasks". */
+  tasks?: Array<{ title: string; category: Category; description: string; rationale: string }>;
+}
+
 export interface AppState {
   workspace: Workspace;
   brief: BusinessBrief;

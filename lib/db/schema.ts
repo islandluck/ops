@@ -348,6 +348,24 @@ export const documents = pgTable("documents", {
   updated_at: updatedAt,
 });
 
+/** Freeform notes the user jots down. A note can be handed to the Executive,
+ *  which proposes a project or tasks from it; `status` flips to "actioned" and
+ *  `spawned_project_id` links to what it created (tasks link back via note_id). */
+export const notes = pgTable("notes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  title: text("title").notNull().default(""),
+  content: text("content").notNull().default(""),
+  /** "draft" until handed to the Executive and approved → "actioned". */
+  status: text("status").notNull().default("draft"),
+  spawned_project_id: uuid("spawned_project_id"),
+  spawned_task_count: integer("spawned_task_count").notNull().default(0),
+  created_at: createdAt,
+  updated_at: updatedAt,
+});
+
 /** A multi-step project a leadership agent (Manager/Executive) plans and runs:
  *  a goal decomposed into a phased plan whose steps become tasks over time. */
 export const projects = pgTable("projects", {
