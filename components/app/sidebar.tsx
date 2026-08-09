@@ -38,24 +38,44 @@ import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/constants";
 import { cn } from "@/lib/cn";
 import type { Category } from "@/lib/types";
 
-const NAV: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/approvals", label: "Approval Center", icon: SquareKanban },
-  { href: "/executive", label: "Executive", icon: Compass },
-  { href: "/notes", label: "Notes", icon: NotebookPen },
-  { href: "/email", label: "Email Manager", icon: Mail },
-  { href: "/deep-dive", label: "Deep Dive", icon: Telescope },
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/agents", label: "Agents", icon: Users },
-  { href: "/projects", label: "Projects", icon: FolderKanban },
-  { href: "/opportunities", label: "Opportunities", icon: Target },
-  { href: "/pages", label: "Pages", icon: Globe },
-  { href: "/social", label: "Social", icon: Megaphone },
-  { href: "/content", label: "Content", icon: Newspaper },
-  { href: "/documents", label: "Documents", icon: FolderOpen },
-  { href: "/activity", label: "Activity log", icon: ScrollText },
-  { href: "/integrations", label: "Integrations", icon: Plug },
-  { href: "/brief", label: "Business brief", icon: FileText },
-  { href: "/settings", label: "Settings", icon: Settings },
+const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: LucideIcon }[] }[] = [
+  {
+    title: "Command",
+    items: [
+      { href: "/approvals", label: "Approval Center", icon: SquareKanban },
+      { href: "/executive", label: "Executive", icon: Compass },
+      { href: "/email", label: "Email Manager", icon: Mail },
+      { href: "/notes", label: "Notes", icon: NotebookPen },
+    ],
+  },
+  {
+    title: "Create",
+    items: [
+      { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/content", label: "Content", icon: Newspaper },
+      { href: "/social", label: "Social", icon: Megaphone },
+      { href: "/pages", label: "Pages", icon: Globe },
+      { href: "/documents", label: "Documents", icon: FolderOpen },
+    ],
+  },
+  {
+    title: "Intelligence",
+    items: [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/deep-dive", label: "Deep Dive", icon: Telescope },
+      { href: "/opportunities", label: "Opportunities", icon: Target },
+    ],
+  },
+  {
+    title: "Setup",
+    items: [
+      { href: "/agents", label: "Agents", icon: Users },
+      { href: "/integrations", label: "Integrations", icon: Plug },
+      { href: "/brief", label: "Business brief", icon: FileText },
+      { href: "/activity", label: "Activity log", icon: ScrollText },
+      { href: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
 const SAVED_VIEWS: { id: string; label: string; icon: LucideIcon }[] = [
@@ -144,37 +164,39 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {/* Primary nav */}
-        <div className="space-y-0.5">
-          {NAV.map((item) => {
-            const active = pathname === item.href;
-            const ready =
-              item.href === "/approvals" && counts
-                ? Object.values(counts).reduce((a, c) => a + c.ready, 0)
-                : 0;
-            const badge = item.href === "/executive" ? attention : ready;
-            return (
-              <button
-                key={item.href}
-                onClick={() => go(item.href)}
-                className={cn(
-                  "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
-                  active
-                    ? "bg-primary/10 text-primary"
-                    : "text-foreground/75 hover:bg-accent hover:text-foreground",
-                )}
-              >
-                <item.icon className={cn("h-4.5 w-4.5", active ? "text-primary" : "text-muted-foreground")} />
-                <span className="flex-1 text-left">{item.label}</span>
-                {badge > 0 && (
-                  <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-700">
-                    {badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Primary nav — grouped into sections */}
+        {NAV_GROUPS.map((group) => (
+          <Section key={group.title} title={group.title}>
+            {group.items.map((item) => {
+              const active = pathname === item.href;
+              const ready =
+                item.href === "/approvals" && counts
+                  ? Object.values(counts).reduce((a, c) => a + c.ready, 0)
+                  : 0;
+              const badge = item.href === "/executive" ? attention : ready;
+              return (
+                <button
+                  key={item.href}
+                  onClick={() => go(item.href)}
+                  className={cn(
+                    "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
+                    active
+                      ? "bg-primary/10 text-primary"
+                      : "text-foreground/75 hover:bg-accent hover:text-foreground",
+                  )}
+                >
+                  <item.icon className={cn("h-4.5 w-4.5", active ? "text-primary" : "text-muted-foreground")} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  {badge > 0 && (
+                    <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-700">
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </Section>
+        ))}
 
         {/* Categories */}
         <Section title="Categories">
