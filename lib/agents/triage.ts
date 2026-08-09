@@ -364,3 +364,42 @@ export async function summarizeInboxToExecutive(workspaceId: string): Promise<In
 
   return { ok: true, count: rows.length };
 }
+
+/* --------------------------- auto-triage cadence --------------------------- */
+
+/**
+ * Cron sweep — run email triage for each workspace whose auto-triage cadence is due
+ * (hourly / daily). Drafts + summarizes to the Executive; NEVER sends. Claims the
+ * run time before running so overlapping cron ticks don't double-fire a workspace.
+ */
+export async function runDueEmailTriage(): Promise<{ ran: number }> {
+  // tenant-scope-exempt: cron sweeps every workspace on its own configured cadence;
+  // each triage run below is scoped to its workspace_id.
+  const rows = await db
+    .select({
+      ws: businessBriefs.workspace_id,
+      cadence: businessBriefs.email_triage_cadence,
+      last: businessBriefs.email_triage_last_run_at,
+    })
+    .from(businessBriefs);
+
+  const now = Date.now();
+  let ran = 0;
+  for (const r of rows) {
+    const interval = r.cadence === "hourly" ? 3_600_000 : r.cadence === "daily" ? 86_400_000 : 0;
+    if (!interval) continue;
+    if (r.last && now - r.last.getTime() < interval) continue;
+    // Claim the slot first so a concurrent tick won't re-fire this workspace.
+    await db
+      .update(businessBriefs)
+      .set({ email_triage_last_run_at: new Date(now) })
+      .where(eq(businessBriefs.workspace_id, r.ws));
+    try {
+      await runEmailTriage(r.ws);
+      ran += 1;
+    } catch {
+      /* skip and continue */
+    }
+  }
+  return { ran };
+}

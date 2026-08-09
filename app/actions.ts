@@ -85,6 +85,7 @@ import {
 } from "@/lib/agents/triage";
 import {
   archiveEmail,
+  bulkSendReplies,
   getEmailBody,
   getEmailManagerState,
   saveEmailDraft,
@@ -1822,13 +1823,31 @@ export async function sendInboxSummaryToExecutiveAction(): Promise<InboxSummaryR
   return summarizeInboxToExecutive(ws);
 }
 
-/** Save the founder's email signature + reply style. */
+/** Save the founder's email signature + reply style + auto-triage cadence. */
 export async function saveEmailSettingsAction(settings: EmailSettings) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return saveEmailSettings(ws, settings);
+}
+
+/** Check for new mail now — sweep unread Primary+Updates, triage + draft, notify Executive. */
+export async function checkInboxNowAction(): Promise<TriageResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runEmailTriage(ws);
+}
+
+/** Bulk-send the given drafted replies (all ready, or the checked subset). */
+export async function bulkSendRepliesAction(messageIds: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return bulkSendReplies(ws, messageIds);
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

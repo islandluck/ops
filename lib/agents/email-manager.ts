@@ -16,6 +16,7 @@ import {
 } from "@/lib/integrations/google";
 import type {
   EmailBody,
+  EmailCadence,
   EmailListItem,
   EmailManagerState,
   EmailSettings,
@@ -64,25 +65,51 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 
 /* -------------------------------- settings -------------------------------- */
 
+const CADENCES: EmailCadence[] = ["off", "hourly", "daily"];
+
 async function getSettings(workspaceId: string): Promise<EmailSettings> {
   const [b] = await db
-    .select({ signature: businessBriefs.email_signature, reply_style: businessBriefs.email_reply_style })
+    .select({
+      signature: businessBriefs.email_signature,
+      reply_style: businessBriefs.email_reply_style,
+      cadence: businessBriefs.email_triage_cadence,
+    })
     .from(businessBriefs)
     .where(eq(businessBriefs.workspace_id, workspaceId))
     .limit(1);
-  return { signature: b?.signature ?? "", reply_style: b?.reply_style ?? "" };
+  const cadence = (CADENCES as string[]).includes(b?.cadence ?? "") ? (b!.cadence as EmailCadence) : "off";
+  return { signature: b?.signature ?? "", reply_style: b?.reply_style ?? "", cadence };
 }
 
 export async function saveEmailSettings(workspaceId: string, settings: EmailSettings): Promise<ActionResult> {
+  const cadence: EmailCadence = (CADENCES as string[]).includes(settings.cadence) ? settings.cadence : "off";
   await db
     .update(businessBriefs)
     .set({
       email_signature: settings.signature.slice(0, 2000),
       email_reply_style: settings.reply_style.slice(0, 2000),
+      email_triage_cadence: cadence,
       updated_at: new Date(),
     })
     .where(eq(businessBriefs.workspace_id, workspaceId));
   return { ok: true };
+}
+
+/** Send every provided draft sequentially (bulk send). Returns how many went out. */
+export async function bulkSendReplies(
+  workspaceId: string,
+  messageIds: string[],
+): Promise<{ ok: true; sent: number; failed: number } | { ok: false; error: string }> {
+  const ids = [...new Set(messageIds)].filter(Boolean);
+  if (!ids.length) return { ok: false, error: "No drafts to send." };
+  let sent = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const r = await sendEmailReply(workspaceId, id);
+    if (r.ok) sent += 1;
+    else failed += 1;
+  }
+  return { ok: true, sent, failed };
 }
 
 /* ------------------------------ triage info ------------------------------- */

@@ -689,9 +689,13 @@ export interface EmailTriageInfo {
   lines: string[];
 }
 
+/** How often the Admin agent auto-triages the inbox in the background. */
+export type EmailCadence = "off" | "hourly" | "daily";
+
 export interface EmailSettings {
   signature: string;
   reply_style: string;
+  cadence: EmailCadence;
 }
 
 export interface EmailManagerState {

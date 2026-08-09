@@ -1,0 +1,2 @@
+ALTER TABLE "business_briefs" ADD COLUMN "email_triage_cadence" text DEFAULT 'off' NOT NULL;--> statement-breakpoint
+ALTER TABLE "business_briefs" ADD COLUMN "email_triage_last_run_at" timestamp with time zone;

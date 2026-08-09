@@ -113,6 +113,9 @@ export const businessBriefs = pgTable("business_briefs", {
   // drafted reply so replies sound like them and sign off correctly.
   email_signature: text("email_signature").notNull().default(""),
   email_reply_style: text("email_reply_style").notNull().default(""),
+  // Auto-triage cadence: off | hourly | daily. Drives runDueEmailTriage (never auto-sends).
+  email_triage_cadence: text("email_triage_cadence").notNull().default("off"),
+  email_triage_last_run_at: timestamp("email_triage_last_run_at", { withTimezone: true }),
   approval_rules: jsonb("approval_rules").$type<ApprovalRule[]>().notNull().default([]),
   budget_limits: jsonb("budget_limits")
     .$type<{ label: string; amount: number; period: string }[]>()

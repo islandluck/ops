@@ -7,10 +7,12 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Inbox,
   Loader2,
   Mail,
   Plug,
+  RefreshCw,
   Send,
   Settings2,
   Sparkles,
@@ -24,6 +26,8 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
   archiveEmailAction,
+  bulkSendRepliesAction,
+  checkInboxNowAction,
   getEmailBodyAction,
   getEmailManagerAction,
   saveEmailDraftAction,
@@ -33,7 +37,7 @@ import {
   trashEmailAction,
   triageEmailsAction,
 } from "@/app/actions";
-import type { EmailBody, EmailListItem, EmailManagerState } from "@/lib/types";
+import type { EmailBody, EmailCadence, EmailListItem, EmailManagerState, EmailSettings } from "@/lib/types";
 
 const CAT_BADGE: Record<string, string> = {
   Investor: "bg-violet-100 text-violet-700",
@@ -83,6 +87,8 @@ export default function EmailManagerPage() {
   const [showSettings, setShowSettings] = useState(false);
   const [toExecState, setToExecState] = useState<"idle" | "busy" | "done">("idle");
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATS);
+  const [checkingNow, setCheckingNow] = useState(false);
+  const [bulkSending, setBulkSending] = useState(false);
 
   const curToken = pageStack[pageStack.length - 1];
 
@@ -195,6 +201,44 @@ export default function EmailManagerPage() {
     else reloadWorkspace();
   }
 
+  // Check now — sweep new unread mail, triage + draft it, then jump to the first page.
+  async function checkNow() {
+    if (checkingNow) return;
+    setCheckingNow(true);
+    setError("");
+    try {
+      const r = await checkInboxNowAction();
+      if (!r.ok) setError(r.error ?? "Couldn't check for new mail.");
+      setSelectedId(null);
+      setChecked(new Set());
+      setPageStack([]);
+      await load(undefined, categories);
+      reloadWorkspace();
+    } finally {
+      setCheckingNow(false);
+    }
+  }
+
+  // Bulk send: the checked drafts if any are selected, else every ready draft on the page.
+  const draftItems = items.filter((i) => i.draft_reply.trim() && i.status !== "sent");
+  const checkedDraftIds = draftItems.filter((i) => checked.has(i.id)).map((i) => i.id);
+  const bulkIds = checkedDraftIds.length ? checkedDraftIds : draftItems.map((i) => i.id);
+
+  async function bulkSend() {
+    if (!bulkIds.length || bulkSending) return;
+    setBulkSending(true);
+    setError("");
+    try {
+      const r = await bulkSendRepliesAction(bulkIds);
+      if (!r.ok) setError(r.error);
+      else if (r.failed) setError(`Sent ${r.sent}, ${r.failed} couldn't send.`);
+      setChecked(new Set());
+      await reload();
+    } finally {
+      setBulkSending(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -202,9 +246,13 @@ export default function EmailManagerPage() {
         description="See your inbox, let the Admin agent triage and draft replies, then edit, approve, and send — you stay in control of every email that goes out."
         actions={
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" disabled={checkingNow || !state?.connected} onClick={checkNow}>
+              {checkingNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Check now
+            </Button>
             <Button size="sm" variant="outline" onClick={() => setShowSettings((v) => !v)}>
               <Settings2 className="h-4 w-4" />
-              Signature &amp; style
+              Email settings
             </Button>
             <Button size="sm" disabled={triaging || !state?.connected || !items.length} onClick={triagePrimary}>
               {triaging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -271,6 +319,25 @@ export default function EmailManagerPage() {
                     );
                   })}
                 </div>
+                {/* Bulk send bar — appears when drafts are ready on this page */}
+                {draftItems.length > 0 && (
+                  <div className="flex items-center justify-between gap-2 border-b border-border bg-primary/5 px-3 py-1.5">
+                    <span className="text-[11.5px] text-muted-foreground">
+                      {checkedDraftIds.length
+                        ? `${checkedDraftIds.length} selected with a draft`
+                        : `${draftItems.length} draft${draftItems.length === 1 ? "" : "s"} ready`}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="success"
+                      disabled={bulkSending || !bulkIds.length}
+                      onClick={bulkSend}
+                    >
+                      {bulkSending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                      Send {bulkIds.length}
+                    </Button>
+                  </div>
+                )}
                 <div className="flex-1 overflow-y-auto">
                   {items.length === 0 ? (
                     <div className="p-8 text-center text-[12.5px] text-muted-foreground">
@@ -698,16 +765,17 @@ function SettingsPanel({
   initial,
   onClose,
 }: {
-  initial: { signature: string; reply_style: string };
+  initial: EmailSettings;
   onClose: () => void;
 }) {
   const [signature, setSignature] = useState(initial.signature);
   const [replyStyle, setReplyStyle] = useState(initial.reply_style);
+  const [cadence, setCadence] = useState<EmailCadence>(initial.cadence);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   async function save() {
     setSaveState("saving");
-    const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle });
+    const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle, cadence });
     setSaveState(r.ok ? "saved" : "idle");
   }
 
@@ -715,10 +783,36 @@ function SettingsPanel({
     <Card className="p-4">
       <div className="mb-3 flex items-center gap-2">
         <Mail className="h-4 w-4 text-primary" />
-        <p className="text-[13px] font-semibold">Email signature &amp; reply style</p>
+        <p className="text-[13px] font-semibold">Email settings</p>
         <span className="ml-auto text-[11px] text-muted-foreground">
           {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : ""}
         </span>
+      </div>
+
+      {/* Auto-triage cadence */}
+      <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <p className="text-[12.5px] font-medium">Auto-triage my inbox</p>
+        </div>
+        <p className="mt-1 text-[11.5px] text-muted-foreground">
+          The Admin agent triages new Primary + Updates mail and drafts replies on this cadence. It never sends —
+          you always approve every email that goes out.
+        </p>
+        <div className="mt-2 inline-flex rounded-lg border border-border p-0.5">
+          {(["off", "hourly", "daily"] as EmailCadence[]).map((c) => (
+            <button
+              key={c}
+              onClick={() => setCadence(c)}
+              className={cn(
+                "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition-colors",
+                cadence === c ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
