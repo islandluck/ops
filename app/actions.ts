@@ -88,6 +88,7 @@ import {
   bulkSendReplies,
   getEmailBody,
   getEmailManagerState,
+  listDraftQueue,
   saveEmailDraft,
   saveEmailSettings,
   sendEmailReply,
@@ -208,6 +209,7 @@ import type {
   Project,
   ReplyOpportunity,
   XTarget,
+  EmailListItem,
   EmailManagerState,
   EmailSettings,
 } from "@/lib/types";
@@ -1848,6 +1850,19 @@ export async function bulkSendRepliesAction(messageIds: string[]) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return bulkSendReplies(ws, messageIds);
+}
+
+/** The review queue — all triaged emails with a ready draft to approve + send. */
+export async function getDraftQueueAction(): Promise<{ items: EmailListItem[] } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return { items: await listDraftQueue(ws) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load your drafts." };
+  }
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

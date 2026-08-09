@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, businessBriefs, emailTriage } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
@@ -140,6 +140,42 @@ async function buildTriageInfo(workspaceId: string): Promise<EmailTriageInfo> {
 }
 
 /* ------------------------------- page state ------------------------------- */
+
+/**
+ * The review queue — every triaged email with a ready draft that hasn't been sent,
+ * archived, or trashed yet. Rendered straight from email_triage (no live Gmail call),
+ * so after a big triage you can rip through the drafts in one place.
+ */
+export async function listDraftQueue(workspaceId: string): Promise<EmailListItem[]> {
+  const rows = await db
+    .select()
+    .from(emailTriage)
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        eq(emailTriage.status, "triaged"),
+        ne(emailTriage.draft_reply, ""),
+      ),
+    )
+    .orderBy(desc(emailTriage.triaged_at))
+    .limit(60);
+  return rows.map((r) => ({
+    id: r.gmail_message_id,
+    thread_id: r.thread_id,
+    from_name: r.from_name,
+    from_email: r.from_email,
+    subject: r.subject,
+    date: r.triaged_at instanceof Date ? r.triaged_at.toISOString() : String(r.triaged_at ?? ""),
+    snippet: r.snippet,
+    unread: false,
+    status: r.status as EmailStatus,
+    category: r.category,
+    urgency: r.urgency,
+    action_type: r.action_type,
+    summary: r.summary,
+    draft_reply: r.draft_reply,
+  }));
+}
 
 /** Assemble the Email Manager page: one live inbox page merged with the triage overlay. */
 export async function getEmailManagerState(

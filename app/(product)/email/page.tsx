@@ -28,6 +28,7 @@ import {
   archiveEmailAction,
   bulkSendRepliesAction,
   checkInboxNowAction,
+  getDraftQueueAction,
   getEmailBodyAction,
   getEmailManagerAction,
   saveEmailDraftAction,
@@ -89,6 +90,9 @@ export default function EmailManagerPage() {
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATS);
   const [checkingNow, setCheckingNow] = useState(false);
   const [bulkSending, setBulkSending] = useState(false);
+  const [view, setView] = useState<"inbox" | "drafts">("inbox");
+  const [draftQueue, setDraftQueue] = useState<EmailListItem[]>([]);
+  const [notice, setNotice] = useState("");
 
   const curToken = pageStack[pageStack.length - 1];
 
@@ -104,15 +108,38 @@ export default function EmailManagerPage() {
     setLoading(false);
   }, []);
 
+  const loadDrafts = useCallback(async () => {
+    const r = await getDraftQueueAction();
+    if (!("error" in r)) setDraftQueue(r.items);
+  }, []);
+
   useEffect(() => {
     void load(undefined, DEFAULT_CATS);
-  }, [load]);
+    void loadDrafts();
+  }, [load, loadDrafts]);
 
-  const items = state?.items ?? [];
+  const inboxItems = state?.items ?? [];
+  const items = view === "drafts" ? draftQueue : inboxItems;
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
-  function reload() {
-    return load(curToken, categories);
+  // Refresh the current list, and keep the Drafts tab count fresh.
+  async function reload() {
+    if (view === "drafts") {
+      await loadDrafts();
+      return;
+    }
+    await load(curToken, categories);
+    await loadDrafts();
+  }
+
+  function switchView(v: "inbox" | "drafts") {
+    if (v === view) return;
+    setView(v);
+    setSelectedId(null);
+    setChecked(new Set());
+    setNotice("");
+    if (v === "drafts") void loadDrafts();
+    else void load(curToken, categories);
   }
 
   function goNext() {
@@ -160,9 +187,15 @@ export default function EmailManagerPage() {
     if (!ids.length || triaging) return;
     setTriaging(true);
     setError("");
+    setNotice("");
     try {
       const r = await triageEmailsAction(ids);
-      if (!r.ok) setError(r.error ?? "Triage failed.");
+      if (!r.ok) {
+        setError(r.error ?? "Triage failed.");
+      } else {
+        const d = r.replyDrafts ?? 0;
+        setNotice(`Triaged ${r.triaged ?? 0} — ${d} draft${d === 1 ? "" : "s"} ready to review.`);
+      }
       await reload();
       reloadWorkspace(); // any implied action tasks land on the board
     } finally {
@@ -201,18 +234,35 @@ export default function EmailManagerPage() {
     else reloadWorkspace();
   }
 
-  // Check now — sweep new unread mail, triage + draft it, then jump to the first page.
+  // Check now — sweep new unread mail, triage + draft it, then drop into the review queue.
   async function checkNow() {
     if (checkingNow) return;
     setCheckingNow(true);
     setError("");
+    setNotice("");
+    setSelectedId(null);
+    setChecked(new Set());
     try {
       const r = await checkInboxNowAction();
-      if (!r.ok) setError(r.error ?? "Couldn't check for new mail.");
-      setSelectedId(null);
-      setChecked(new Set());
-      setPageStack([]);
-      await load(undefined, categories);
+      if (!r.ok) {
+        setError(r.error ?? "Couldn't check for new mail.");
+        return;
+      }
+      const triaged = r.triaged ?? 0;
+      const drafts = r.replyDrafts ?? 0;
+      setNotice(
+        triaged
+          ? `Triaged ${triaged} new email${triaged === 1 ? "" : "s"} — ${drafts} draft${drafts === 1 ? "" : "s"} ready to review${r.remaining ? `, ${r.remaining} more to check` : ""}.`
+          : "No new mail to triage right now.",
+      );
+      await loadDrafts();
+      if (drafts > 0) {
+        setView("drafts"); // land in the review queue where the drafts are
+      } else {
+        setView("inbox");
+        setPageStack([]);
+        await load(undefined, categories);
+      }
       reloadWorkspace();
     } finally {
       setCheckingNow(false);
@@ -275,6 +325,11 @@ export default function EmailManagerPage() {
                 {error}
               </div>
             )}
+            {notice && !error && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800">
+                {notice}
+              </div>
+            )}
             {showSettings && (
               <SettingsPanel
                 initial={state.settings}
@@ -284,10 +339,32 @@ export default function EmailManagerPage() {
             <div className="grid gap-4 lg:grid-cols-[340px_1fr_300px]">
               {/* LEFT — Inbox */}
               <Card className="flex max-h-[calc(100vh-190px)] flex-col overflow-hidden p-0">
-                <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-                  <div className="flex items-center gap-2 text-[13px] font-semibold">
-                    <Inbox className="h-4 w-4 text-muted-foreground" />
-                    Inbox
+                <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                  <div className="inline-flex rounded-lg border border-border p-0.5">
+                    <button
+                      onClick={() => switchView("inbox")}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
+                        view === "inbox" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      <Inbox className="h-3.5 w-3.5" />
+                      Inbox
+                    </button>
+                    <button
+                      onClick={() => switchView("drafts")}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
+                        view === "drafts" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      Drafts
+                      {draftQueue.length > 0 && (
+                        <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-white">
+                          {draftQueue.length}
+                        </span>
+                      )}
+                    </button>
                   </div>
                   <label className="flex cursor-pointer items-center gap-1.5 text-[11.5px] text-muted-foreground">
                     <input
@@ -299,26 +376,28 @@ export default function EmailManagerPage() {
                     Select all
                   </label>
                 </div>
-                {/* Gmail category tabs — declutter to what matters */}
-                <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
-                  {CATEGORY_CHIPS.map((c) => {
-                    const on = categories.includes(c.key);
-                    return (
-                      <button
-                        key={c.key}
-                        onClick={() => toggleCategory(c.key)}
-                        className={cn(
-                          "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-                          on
-                            ? "border-primary/40 bg-primary/10 text-primary"
-                            : "border-border text-muted-foreground hover:bg-muted",
-                        )}
-                      >
-                        {c.label}
-                      </button>
-                    );
-                  })}
-                </div>
+                {/* Gmail category tabs — declutter to what matters (inbox view only) */}
+                {view === "inbox" && (
+                  <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
+                    {CATEGORY_CHIPS.map((c) => {
+                      const on = categories.includes(c.key);
+                      return (
+                        <button
+                          key={c.key}
+                          onClick={() => toggleCategory(c.key)}
+                          className={cn(
+                            "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                            on
+                              ? "border-primary/40 bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          {c.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {/* Bulk send bar — appears when drafts are ready on this page */}
                 {draftItems.length > 0 && (
                   <div className="flex items-center justify-between gap-2 border-b border-border bg-primary/5 px-3 py-1.5">
@@ -341,7 +420,9 @@ export default function EmailManagerPage() {
                 <div className="flex-1 overflow-y-auto">
                   {items.length === 0 ? (
                     <div className="p-8 text-center text-[12.5px] text-muted-foreground">
-                      Your inbox is clear. 🎉
+                      {view === "drafts"
+                        ? "No drafts to review yet. Triage some mail to generate replies."
+                        : "Your inbox is clear. 🎉"}
                     </div>
                   ) : (
                     items.map((it) => (
@@ -359,23 +440,25 @@ export default function EmailManagerPage() {
                     ))
                   )}
                 </div>
-                <div className="flex items-center justify-between border-t border-border px-3 py-2 text-[11.5px] text-muted-foreground">
-                  <button
-                    onClick={goBack}
-                    disabled={!pageStack.length}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-muted disabled:opacity-40"
-                  >
-                    <ChevronLeft className="h-3.5 w-3.5" /> Newer
-                  </button>
-                  <span>Page {pageStack.length + 1}</span>
-                  <button
-                    onClick={goNext}
-                    disabled={!state.nextPageToken}
-                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-muted disabled:opacity-40"
-                  >
-                    Older <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                {view === "inbox" && (
+                  <div className="flex items-center justify-between border-t border-border px-3 py-2 text-[11.5px] text-muted-foreground">
+                    <button
+                      onClick={goBack}
+                      disabled={!pageStack.length}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-muted disabled:opacity-40"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" /> Newer
+                    </button>
+                    <span>Page {pageStack.length + 1}</span>
+                    <button
+                      onClick={goNext}
+                      disabled={!state.nextPageToken}
+                      className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-muted disabled:opacity-40"
+                    >
+                      Older <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
               </Card>
 
               {/* MIDDLE — Reader + Draft */}
