@@ -17,6 +17,7 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  Wand2,
 } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
@@ -26,9 +27,11 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
   archiveEmailAction,
+  bulkArchiveAction,
   bulkSendRepliesAction,
   checkInboxNowAction,
   getDraftQueueAction,
+  learnEmailStyleAction,
   getEmailBodyAction,
   getEmailManagerAction,
   saveEmailDraftAction,
@@ -93,6 +96,7 @@ export default function EmailManagerPage() {
   const [view, setView] = useState<"inbox" | "drafts">("inbox");
   const [draftQueue, setDraftQueue] = useState<EmailListItem[]>([]);
   const [notice, setNotice] = useState("");
+  const [archivingSuggested, setArchivingSuggested] = useState(false);
 
   const curToken = pageStack[pageStack.length - 1];
 
@@ -289,6 +293,26 @@ export default function EmailManagerPage() {
     }
   }
 
+  // Batch archive — the agent flags low-value mail (Noise / Archive, no reply) to clear in one click.
+  const suggestedArchive = items.filter(
+    (i) => i.status !== "new" && !i.draft_reply.trim() && (i.category === "Noise" || i.action_type === "Archive"),
+  );
+  async function archiveSuggested() {
+    if (!suggestedArchive.length || archivingSuggested) return;
+    setArchivingSuggested(true);
+    setError("");
+    setNotice("");
+    try {
+      const r = await bulkArchiveAction(suggestedArchive.map((i) => i.id));
+      if (!r.ok) setError(r.error);
+      else setNotice(`Archived ${r.archived} low-value email${r.archived === 1 ? "" : "s"}.`);
+      setSelectedId(null);
+      await reload();
+    } finally {
+      setArchivingSuggested(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -414,6 +438,23 @@ export default function EmailManagerPage() {
                     >
                       {bulkSending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                       Send {bulkIds.length}
+                    </Button>
+                  </div>
+                )}
+                {/* Batch archive — the agent's low-value suggestions, cleared on one click */}
+                {view === "inbox" && suggestedArchive.length > 0 && (
+                  <div className="flex items-center justify-between gap-2 border-b border-border bg-amber-50 px-3 py-1.5">
+                    <span className="text-[11.5px] text-amber-800">
+                      {suggestedArchive.length} low-value email{suggestedArchive.length === 1 ? "" : "s"} flagged to
+                      clear
+                    </span>
+                    <Button size="sm" variant="outline" disabled={archivingSuggested} onClick={archiveSuggested}>
+                      {archivingSuggested ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Archive className="h-3.5 w-3.5" />
+                      )}
+                      Archive {suggestedArchive.length}
                     </Button>
                   </div>
                 )}
@@ -579,6 +620,10 @@ function InboxRow({
             ) : item.draft_reply ? (
               <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9.5px] font-semibold text-primary">
                 Draft ready
+              </span>
+            ) : item.category === "Noise" || item.action_type === "Archive" ? (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9.5px] font-semibold text-amber-700">
+                Archive?
               </span>
             ) : null}
           </div>
@@ -855,11 +900,33 @@ function SettingsPanel({
   const [replyStyle, setReplyStyle] = useState(initial.reply_style);
   const [cadence, setCadence] = useState<EmailCadence>(initial.cadence);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [learning, setLearning] = useState(false);
+  const [learnMsg, setLearnMsg] = useState("");
 
   async function save() {
     setSaveState("saving");
     const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle, cadence });
     setSaveState(r.ok ? "saved" : "idle");
+  }
+
+  // Learn the founder's signature + style from their Sent mail — fills the fields to review.
+  async function learnStyle() {
+    if (learning) return;
+    setLearning(true);
+    setLearnMsg("");
+    try {
+      const r = await learnEmailStyleAction();
+      if (r.ok) {
+        setSignature(r.style.signature);
+        setReplyStyle(r.style.reply_style);
+        setSaveState("idle");
+        setLearnMsg("Learned from your sent mail — review and Save.");
+      } else {
+        setLearnMsg(r.error);
+      }
+    } finally {
+      setLearning(false);
+    }
   }
 
   return (
@@ -897,6 +964,19 @@ function SettingsPanel({
           ))}
         </div>
       </div>
+
+      {/* Learn from sent mail */}
+      <div className="mb-3 flex flex-col gap-2 rounded-lg border border-dashed border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[11.5px] text-muted-foreground">
+          Not sure what to write? Let the agent study your Sent mail and propose a signature + style.
+        </p>
+        <Button size="sm" variant="outline" disabled={learning} onClick={learnStyle}>
+          {learning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+          Learn from sent mail
+        </Button>
+      </div>
+      {learnMsg && <p className="mb-2 text-[11.5px] text-emerald-700">{learnMsg}</p>}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <label className="text-[12px] font-medium">Signature</label>

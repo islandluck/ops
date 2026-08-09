@@ -85,9 +85,11 @@ import {
 } from "@/lib/agents/triage";
 import {
   archiveEmail,
+  bulkArchive,
   bulkSendReplies,
   getEmailBody,
   getEmailManagerState,
+  learnEmailStyleFromSent,
   listDraftQueue,
   saveEmailDraft,
   saveEmailSettings,
@@ -1863,6 +1865,24 @@ export async function getDraftQueueAction(): Promise<{ items: EmailListItem[] } 
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your drafts." };
   }
+}
+
+/** Bulk-archive the given messages (the agent's low-value suggestions, on your approval). */
+export async function bulkArchiveAction(messageIds: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return bulkArchive(ws, messageIds);
+}
+
+/** Learn the founder's signature + reply style from their recent Sent mail (to review + save). */
+export async function learnEmailStyleAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return learnEmailStyleFromSent(ws);
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

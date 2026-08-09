@@ -12,8 +12,10 @@ import {
   listInboxPage,
   sendGmail,
   trashMessage,
+  type GmailMessage,
   type GmailMeta,
 } from "@/lib/integrations/google";
+import { learnEmailStyle, type LearnedStyle } from "@/lib/ai/email-style";
 import type {
   EmailBody,
   EmailCadence,
@@ -110,6 +112,46 @@ export async function bulkSendReplies(
     else failed += 1;
   }
   return { ok: true, sent, failed };
+}
+
+/** Archive every provided message sequentially — the batch "clear the low-value mail" action. */
+export async function bulkArchive(
+  workspaceId: string,
+  messageIds: string[],
+): Promise<{ ok: true; archived: number; failed: number } | { ok: false; error: string }> {
+  const ids = [...new Set(messageIds)].filter(Boolean);
+  if (!ids.length) return { ok: false, error: "Nothing to archive." };
+  let archived = 0;
+  let failed = 0;
+  for (const id of ids) {
+    const r = await moveOut(workspaceId, id, "archived");
+    if (r.ok) archived += 1;
+    else failed += 1;
+  }
+  return { ok: true, archived, failed };
+}
+
+/**
+ * Learn the founder's email voice from their recent Sent mail — returns a proposed
+ * signature + reply style for them to review and save. Read-only; nothing is applied.
+ */
+export async function learnEmailStyleFromSent(
+  workspaceId: string,
+): Promise<{ ok: true; style: LearnedStyle } | { ok: false; error: string }> {
+  const token = await getValidAccessToken(workspaceId, "Gmail");
+  if (!token) return { ok: false, error: "Gmail isn't connected." };
+  try {
+    const page = await listInboxPage(token, { query: "in:sent", max: 15 });
+    const details = (
+      await Promise.all(page.items.slice(0, 12).map((m) => getMessageDetail(token, m.id).catch(() => null)))
+    ).filter((d): d is GmailMessage => d !== null);
+    const bodies = details.map((d) => d.body).filter((b) => b.trim());
+    if (!bodies.length) return { ok: false, error: "No sent emails found to learn from yet." };
+    const style = await learnEmailStyle(bodies);
+    return { ok: true, style };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't learn your style." };
+  }
 }
 
 /* ------------------------------ triage info ------------------------------- */
