@@ -149,7 +149,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           title="Switch workspace"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 text-sm font-bold text-white">
-            N
+            {(state?.workspace.name?.trim()?.charAt(0) ?? "W").toUpperCase()}
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-semibold leading-tight">
