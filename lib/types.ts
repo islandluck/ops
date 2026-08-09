@@ -656,6 +656,63 @@ export interface ExecMessage {
 
 export type MemoryKind = "fact" | "preference" | "decision" | "insight";
 
+/* ------------------------------ Email Manager ------------------------------ */
+
+/** Lifecycle of an inbox message in the Email Manager. "new" = not yet triaged. */
+export type EmailStatus = "new" | "triaged" | "sent" | "archived" | "trashed";
+
+/** An inbox row: live Gmail metadata + the triage overlay (if triaged). */
+export interface EmailListItem {
+  id: string;
+  thread_id: string;
+  from_name: string;
+  from_email: string;
+  subject: string;
+  date: string;
+  snippet: string;
+  unread: boolean;
+  status: EmailStatus;
+  category: string;
+  urgency: string;
+  action_type: string;
+  summary: string;
+  draft_reply: string;
+}
+
+/** The "Daily Triage Info" panel — counts + the attention shortlist. */
+export interface EmailTriageInfo {
+  total: number;
+  attention: number;
+  drafts: number;
+  sent: number;
+  cleared: number;
+  lines: string[];
+}
+
+export interface EmailSettings {
+  signature: string;
+  reply_style: string;
+}
+
+export interface EmailManagerState {
+  connected: boolean;
+  items: EmailListItem[];
+  nextPageToken: string | null;
+  triageInfo: EmailTriageInfo;
+  settings: EmailSettings;
+}
+
+/** Full body of a selected email (fetched on demand for the reader pane). */
+export interface EmailBody {
+  id: string;
+  from_name: string;
+  from_email: string;
+  to: string;
+  subject: string;
+  date: string;
+  body: string;
+}
+
 /** A durable thing the Executive Agent knows about the business. */
 export interface ExecMemory {
   id: string;

@@ -1,25 +1,35 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityEvents, agents, taskAssets, tasks, triagedEmails } from "@/lib/db/schema";
+import {
+  activityEvents,
+  agents,
+  businessBriefs,
+  emailTriage,
+  executiveMemory,
+  taskAssets,
+  tasks,
+} from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { getMessageDetail, listInboxMessages, type GmailMessage } from "@/lib/integrations/google";
-import { triageEmails, type TriagedEmail } from "@/lib/ai/triage";
-import { getPlanningContext, saveDocument } from "@/lib/db/queries";
+import { triageEmails } from "@/lib/ai/triage";
+import { getPlanningContext } from "@/lib/db/queries";
 
 /**
- * Email triage — the Admin agent reads recent unread inbox mail, classifies it,
- * writes a prioritized digest, drafts approval-gated replies, and creates action
- * tasks (routed to the right team) for the work an email implies. Read-only
- * against Gmail; nothing is sent, labelled, or deleted without an approval.
+ * Email triage — the Admin agent reads inbox mail, classifies it, drafts an
+ * approval-gated reply (in the founder's voice, with their signature), and files
+ * any non-email work an email implies as a board task. Read-only against Gmail:
+ * every reply is stored as an EDITABLE DRAFT in email_triage and only leaves the
+ * outbox when the user sends it from the Email Manager. Nothing is sent, archived,
+ * or trashed here — those stay one explicit human click away.
  */
 
 export interface TriageResult {
   ok: boolean;
   triaged?: number;
-  replyTasks?: number;
+  replyDrafts?: number;
   actionTasks?: number;
   /** New unread emails still waiting after this batch (backlog). */
   remaining?: number;
@@ -28,7 +38,7 @@ export interface TriageResult {
 
 /** Max emails triaged per run — one Claude pass, fetched in parallel. */
 const TRIAGE_MAX = 40;
-/** How many recent unread ids to consider, so dedup can still fill a batch. */
+/** How many recent inbox ids to consider, so dedup can still fill a batch. */
 const CANDIDATE_MAX = 150;
 
 const URGENCY_RANK: Record<string, number> = { Critical: 0, High: 1, Normal: 2, Low: 3 };
@@ -40,91 +50,57 @@ const CATEGORY_EMOJI: Record<string, string> = {
   Noise: "🔕",
 };
 
-function needsAttention(t: TriagedEmail): boolean {
-  return (
-    t.urgency === "Critical" ||
-    t.urgency === "High" ||
-    t.action_type === "Reply" ||
-    t.action_type === "Schedule"
-  );
+function needsAttention(category: string, urgency: string, action: string): boolean {
+  return urgency === "Critical" || urgency === "High" || action === "Reply" || action === "Schedule";
 }
 
-function buildDigest(emails: GmailMessage[], triaged: TriagedEmail[], remaining = 0): string {
-  const rows = emails.map((e, i) => ({ e, t: triaged[i] }));
-  const line = (r: { e: GmailMessage; t: TriagedEmail }) =>
-    `• ${CATEGORY_EMOJI[r.t.category] ?? ""} [${r.t.category} · ${r.t.urgency}] ${r.e.from.name} — “${r.e.subject}” — ${r.t.summary}${r.t.action_type !== "Read" ? ` → ${r.t.action_type}` : ""}`;
+/* ------------------------------- email style ------------------------------- */
 
-  const attention = rows
-    .filter((r) => needsAttention(r.t))
-    .sort((a, b) => (URGENCY_RANK[a.t.urgency] ?? 9) - (URGENCY_RANK[b.t.urgency] ?? 9));
-  const lower = rows.filter((r) => !needsAttention(r.t));
-  const replies = rows.filter((r) => r.t.suggested_reply.trim()).length;
-  const taskCount = rows.filter((r) => r.t.task_title.trim()).length;
-
-  const parts: string[] = [`Triaged ${emails.length} unread email${emails.length === 1 ? "" : "s"}.`];
-  const made: string[] = [];
-  if (replies) made.push(`${replies} reply draft${replies === 1 ? "" : "s"}`);
-  if (taskCount) made.push(`${taskCount} task${taskCount === 1 ? "" : "s"}`);
-  if (made.length) parts.push(`Prepared ${made.join(" and ")} for your review.`);
-  parts.push("");
-  if (attention.length) {
-    parts.push("Needs attention", ...attention.map(line), "");
-  }
-  if (lower.length) {
-    parts.push("Lower priority", ...lower.map(line));
-  }
-  const body = parts.join("\n").trim();
-  return remaining > 0
-    ? `${body}\n\n${remaining} more unread email${remaining === 1 ? "" : "s"} not yet triaged — run triage again to continue.`
-    : body;
-}
-
-/** Run one triage pass for a workspace. Safe to call on-demand or from cron. */
-export async function runEmailTriage(
+async function getEmailStyle(
   workspaceId: string,
-  actor: { name: string; email: string },
-): Promise<TriageResult> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
-  if (!token) return { ok: false, error: "Gmail isn't connected. Connect it in Integrations first." };
+): Promise<{ signature: string; replyStyle: string }> {
+  const [b] = await db
+    .select({
+      signature: businessBriefs.email_signature,
+      replyStyle: businessBriefs.email_reply_style,
+    })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  return { signature: b?.signature?.trim() ?? "", replyStyle: b?.replyStyle?.trim() ?? "" };
+}
 
-  let emails: GmailMessage[];
-  let remaining = 0;
-  try {
-    // List candidate ids (cheap), then skip already-triaged ones so repeat and
-    // background runs process only new mail — grinding a backlog down 40 at a time.
-    const candidates = await listInboxMessages(token, { max: CANDIDATE_MAX, query: "in:inbox is:unread" });
-    const seenRows = await db
-      .select({ mid: triagedEmails.gmail_message_id })
-      .from(triagedEmails)
-      .where(eq(triagedEmails.workspace_id, workspaceId));
-    const seen = new Set(seenRows.map((r) => r.mid));
-    const fresh = candidates.filter((m) => !seen.has(m.id));
-    const batch = fresh.slice(0, TRIAGE_MAX);
-    remaining = fresh.length - batch.length;
-    // Fetch bodies in parallel; skip any that fail rather than aborting the run.
-    const settled = await Promise.all(batch.map((m) => getMessageDetail(token, m.id).catch(() => null)));
-    emails = settled.filter((e): e is GmailMessage => e !== null);
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Couldn't read the inbox." };
-  }
+/** Append the founder's signature to a non-empty drafted reply. */
+function withSignature(reply: string, signature: string): string {
+  const r = reply.trim();
+  if (!r) return "";
+  return signature ? `${r}\n\n${signature}` : r;
+}
 
+/* ---------------------------------- core ----------------------------------- */
+
+/**
+ * Triage a set of already-fetched emails: classify each, draft a signed reply into
+ * email_triage, and file any implied non-email work as a board task. Shared by the
+ * on-demand page triage and the background cron sweep. Assumes the caller already
+ * filtered out messages that were triaged before (dedup).
+ */
+async function triageAndStore(
+  workspaceId: string,
+  emails: GmailMessage[],
+): Promise<{ replyDrafts: number; actionTasks: number }> {
   const now = new Date();
-  if (!emails.length) return { ok: true, triaged: 0, replyTasks: 0, remaining };
-
   const { brief } = await getPlanningContext(workspaceId);
-  let triaged: TriagedEmail[];
-  try {
-    triaged = await triageEmails(emails, brief);
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Triage failed." };
-  }
+  const { signature, replyStyle } = await getEmailStyle(workspaceId);
 
+  const triaged = await triageEmails(emails, brief, { replyStyle });
+
+  // The Admin agent owns triage; action tasks route to each team's first worker.
   const allAgents = await db
     .select({
       id: agents.id,
       name: agents.name,
       category: agents.category,
-      folder: agents.folder,
       premium: agents.premium,
       archived: agents.archived,
       tasks_prepared: agents.tasks_prepared,
@@ -134,114 +110,49 @@ export async function runEmailTriage(
   const admin = allAgents.find((a) => a.category === "admin" && !a.premium && !a.archived) ?? null;
   const adminId = admin?.id ?? null;
   const adminName = admin?.name ?? "Admin Agent";
-  // Route action tasks to the first worker agent in each department.
   const agentByDept = new Map<string, string>();
   for (const a of allAgents) {
     if (!a.premium && !a.archived && !agentByDept.has(a.category)) agentByDept.set(a.category, a.id);
   }
 
-  // 1) Prioritized digest — informational (no execution, no approval needed).
-  const digestId = randomUUID();
-  await db.insert(tasks).values({
-    id: digestId,
-    workspace_id: workspaceId,
-    category: "admin",
-    title: `Inbox triage — ${emails.length} email${emails.length === 1 ? "" : "s"}`,
-    description: "Prioritized summary of your unread inbox, triaged by the Admin agent.",
-    rationale: "Turns your raw inbox into a prioritized queue.",
-    status: "ready",
-    risk_level: "low",
-    priority: "medium",
-    due_at: null,
-    agent_id: adminId,
-    created_by_type: "agent",
-    requires_approval: false,
-    approval_status: "pending",
-    execution_status: "none",
-    affected_systems: [],
-    proposed_actions: 0,
-    impact_score: 30,
-    created_at: now,
-    updated_at: now,
-  });
-  const digestContent = buildDigest(emails, triaged, remaining);
-  const digestName = `Inbox triage — ${emails.length} email${emails.length === 1 ? "" : "s"}`;
-  await db.insert(taskAssets).values({
-    id: randomUUID(),
-    task_id: digestId,
-    asset_type: "summary",
-    title: "Inbox triage digest",
-    content: digestContent,
-    metadata: null,
-  });
-  await saveDocument({
-    workspaceId,
-    agentId: adminId,
-    authorName: adminName,
-    taskId: digestId,
-    taskTitle: digestName,
-    name: digestName,
-    content: digestContent,
-    folder: admin?.folder ?? "Inbox",
-    docType: "summary",
-  });
+  let replyDrafts = 0;
+  let actionTasks = 0;
 
-  // 2) Reply drafts + action tasks per email, as the agent flagged them.
-  let replyCount = 0;
-  let taskCount = 0;
   for (let i = 0; i < emails.length; i++) {
     const e = emails[i];
     const t = triaged[i];
+    const draft = withSignature(t.suggested_reply, signature);
+    if (draft) replyDrafts += 1;
 
-    // (a) Reply task — a drafted reply to send (in-thread) on approval.
-    if (t.suggested_reply.trim()) {
-      replyCount += 1;
-      const taskId = randomUUID();
-      const replySubject = /^re:/i.test(e.subject) ? e.subject : `Re: ${e.subject}`;
-      const risk = t.category === "Investor" || t.category === "Customer" ? "medium" : "low";
-      await db.insert(tasks).values({
-        id: taskId,
-        workspace_id: workspaceId,
-        category: "admin",
-        title: `Reply to ${e.from.name}: ${e.subject}`.slice(0, 120),
-        description: t.summary,
-        rationale: `${t.category} · ${t.urgency} · ${t.intent}`.slice(0, 300),
-        status: "ready",
-        risk_level: risk,
-        priority: t.urgency === "Critical" || t.urgency === "High" ? "high" : "medium",
-        due_at: null,
-        agent_id: adminId,
-        created_by_type: "agent",
-        requires_approval: true,
-        approval_status: "pending",
-        execution_status: "none",
-        affected_systems: ["Gmail"],
-        proposed_actions: 1,
-        impact_score: 55,
-        created_at: now,
-        updated_at: now,
-      });
-      await db.insert(taskAssets).values({
+    // (1) Store the triage + editable draft — this is what the Email Manager renders.
+    await db
+      .insert(emailTriage)
+      .values({
         id: randomUUID(),
-        task_id: taskId,
-        asset_type: "email",
-        title: `Suggested reply to ${e.from.email}`,
-        content: t.suggested_reply,
-        metadata: {
-          kind: "reply",
-          to: e.from.email,
-          subject: replySubject,
-          thread_id: e.threadId,
-          in_reply_to: e.messageId,
-        },
-      });
-    }
+        workspace_id: workspaceId,
+        gmail_message_id: e.id,
+        thread_id: e.threadId,
+        source_message_id: e.messageId,
+        from_name: e.from.name,
+        from_email: e.from.email,
+        subject: e.subject,
+        snippet: e.snippet,
+        category: t.category,
+        urgency: t.urgency,
+        action_type: t.action_type,
+        summary: t.summary,
+        draft_reply: draft,
+        status: "triaged",
+        triaged_at: now,
+        updated_at: now,
+      })
+      .onConflictDoNothing();
 
-    // (b) Action task — the work the email implies, routed to the right team.
+    // (2) Non-email work the email implies → a board task, routed to the right team.
     if (t.task_title.trim()) {
-      taskCount += 1;
-      const actionId = randomUUID();
+      actionTasks += 1;
       const highUrgency = t.urgency === "Critical" || t.urgency === "High";
+      const actionId = randomUUID();
       await db.insert(tasks).values({
         id: actionId,
         workspace_id: workspaceId,
@@ -275,15 +186,15 @@ export async function runEmailTriage(
     }
   }
 
-  // 3) Audit trail + agent stats.
+  // Audit + agent stats.
   await db.insert(activityEvents).values({
     id: randomUUID(),
     workspace_id: workspaceId,
-    task_id: digestId,
+    task_id: null,
     event_type: "agent_updated_draft",
     actor_type: "agent",
     actor_id: adminId ?? "sys",
-    summary: `${adminName} triaged ${emails.length} email${emails.length === 1 ? "" : "s"} — ${replyCount} repl${replyCount === 1 ? "y" : "ies"} + ${taskCount} task${taskCount === 1 ? "" : "s"} prepared.`,
+    summary: `${adminName} triaged ${emails.length} email${emails.length === 1 ? "" : "s"} — ${replyDrafts} reply draft${replyDrafts === 1 ? "" : "s"} + ${actionTasks} task${actionTasks === 1 ? "" : "s"} prepared.`,
     created_at: now,
   });
   if (admin) {
@@ -291,17 +202,161 @@ export async function runEmailTriage(
       .update(agents)
       .set({
         last_run_at: now,
-        tasks_prepared: admin.tasks_prepared + 1 + replyCount + taskCount,
+        tasks_prepared: admin.tasks_prepared + replyDrafts + actionTasks,
         status: "waiting",
       })
       .where(eq(agents.id, admin.id));
   }
 
-  // Remember what we triaged so future (and background) runs skip it.
-  await db
-    .insert(triagedEmails)
-    .values(emails.map((e) => ({ workspace_id: workspaceId, gmail_message_id: e.id })))
-    .onConflictDoNothing();
+  return { replyDrafts, actionTasks };
+}
 
-  return { ok: true, triaged: emails.length, replyTasks: replyCount, actionTasks: taskCount, remaining };
+/* ------------------------------- entry points ------------------------------ */
+
+/**
+ * On-demand triage of a specific set of inbox messages (the page's "Triage All" /
+ * "Triage selected"). Skips any already triaged. Does NOT auto-notify the Executive
+ * — the user decides that with the "Send to Executive" button.
+ */
+export async function triageMessages(
+  workspaceId: string,
+  messageIds: string[],
+): Promise<TriageResult> {
+  const ids = [...new Set(messageIds)].filter(Boolean);
+  if (!ids.length) return { ok: true, triaged: 0, replyDrafts: 0, actionTasks: 0 };
+
+  const token = await getValidAccessToken(workspaceId, "Gmail");
+  if (!token) return { ok: false, error: "Gmail isn't connected. Connect it in Integrations first." };
+
+  // Dedup: only triage messages we haven't triaged before.
+  const seenRows = await db
+    .select({ mid: emailTriage.gmail_message_id })
+    .from(emailTriage)
+    .where(and(eq(emailTriage.workspace_id, workspaceId), inArray(emailTriage.gmail_message_id, ids)));
+  const seen = new Set(seenRows.map((r) => r.mid));
+  const fresh = ids.filter((id) => !seen.has(id));
+  if (!fresh.length) return { ok: true, triaged: 0, replyDrafts: 0, actionTasks: 0 };
+
+  let emails: GmailMessage[];
+  try {
+    const settled = await Promise.all(fresh.map((id) => getMessageDetail(token, id).catch(() => null)));
+    emails = settled.filter((e): e is GmailMessage => e !== null);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't read the selected emails." };
+  }
+  if (!emails.length) return { ok: false, error: "Couldn't read the selected emails." };
+
+  let out: { replyDrafts: number; actionTasks: number };
+  try {
+    out = await triageAndStore(workspaceId, emails);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Triage failed." };
+  }
+  return { ok: true, triaged: emails.length, replyDrafts: out.replyDrafts, actionTasks: out.actionTasks };
+}
+
+/**
+ * Background sweep — triage recent UNREAD inbox mail, grinding a backlog down
+ * TRIAGE_MAX at a time, then post a summary to the Executive. Safe to call from the
+ * cron (the Admin agent's background job).
+ */
+export async function runEmailTriage(workspaceId: string): Promise<TriageResult> {
+  const token = await getValidAccessToken(workspaceId, "Gmail");
+  if (!token) return { ok: false, error: "Gmail isn't connected. Connect it in Integrations first." };
+
+  let emails: GmailMessage[];
+  let remaining = 0;
+  try {
+    const candidates = await listInboxMessages(token, { max: CANDIDATE_MAX, query: "in:inbox is:unread" });
+    const seenRows = await db
+      .select({ mid: emailTriage.gmail_message_id })
+      .from(emailTriage)
+      .where(eq(emailTriage.workspace_id, workspaceId));
+    const seen = new Set(seenRows.map((r) => r.mid));
+    const fresh = candidates.filter((m) => !seen.has(m.id));
+    const batch = fresh.slice(0, TRIAGE_MAX);
+    remaining = fresh.length - batch.length;
+    const settled = await Promise.all(batch.map((m) => getMessageDetail(token, m.id).catch(() => null)));
+    emails = settled.filter((e): e is GmailMessage => e !== null);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't read the inbox." };
+  }
+
+  if (!emails.length) return { ok: true, triaged: 0, replyDrafts: 0, actionTasks: 0, remaining };
+
+  let out: { replyDrafts: number; actionTasks: number };
+  try {
+    out = await triageAndStore(workspaceId, emails);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Triage failed." };
+  }
+
+  // Keep the Executive in the loop automatically on the background path.
+  await summarizeInboxToExecutive(workspaceId).catch(() => {});
+
+  return { ok: true, triaged: emails.length, replyDrafts: out.replyDrafts, actionTasks: out.actionTasks, remaining };
+}
+
+/* --------------------------- Executive hand-off ---------------------------- */
+
+export interface InboxSummaryResult {
+  ok: boolean;
+  count?: number;
+  error?: string;
+}
+
+/**
+ * Build a compact summary of recently-triaged mail and drop it into the Executive's
+ * memory, so your chief-of-staff stays current on what's moving in the inbox. Used
+ * by the "Send to Executive" button and automatically by the background sweep.
+ */
+export async function summarizeInboxToExecutive(workspaceId: string): Promise<InboxSummaryResult> {
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  const rows = await db
+    .select()
+    .from(emailTriage)
+    .where(and(eq(emailTriage.workspace_id, workspaceId), gte(emailTriage.triaged_at, since)))
+    .orderBy(desc(emailTriage.triaged_at))
+    .limit(80);
+  if (!rows.length) return { ok: false, error: "Nothing triaged in the last day to summarize." };
+
+  const attention = rows
+    .filter((r) => needsAttention(r.category, r.urgency, r.action_type))
+    .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 9) - (URGENCY_RANK[b.urgency] ?? 9));
+  const drafts = rows.filter((r) => r.draft_reply.trim()).length;
+  const sent = rows.filter((r) => r.status === "sent").length;
+  const archived = rows.filter((r) => r.status === "archived" || r.status === "trashed").length;
+
+  const head = `Inbox update — triaged ${rows.length} email${rows.length === 1 ? "" : "s"} in the last day. ${attention.length} need attention, ${drafts} repl${drafts === 1 ? "y" : "ies"} drafted for review${sent ? `, ${sent} sent` : ""}${archived ? `, ${archived} cleared` : ""}.`;
+  const lines = attention
+    .slice(0, 6)
+    .map(
+      (r) =>
+        `• ${CATEGORY_EMOJI[r.category] ?? ""} [${r.category} · ${r.urgency}] ${r.from_name} — “${r.subject}”: ${r.summary}`,
+    );
+  const content = [head, "", ...lines].join("\n").slice(0, 600);
+
+  const now = new Date();
+  await db.insert(executiveMemory).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    content,
+    kind: "insight",
+    source: "agent",
+    pinned: false,
+    created_at: now,
+    updated_at: now,
+  });
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: null,
+    event_type: "agent_updated_draft",
+    actor_type: "agent",
+    actor_id: "sys",
+    summary: `Inbox summary sent to the Executive — ${rows.length} email${rows.length === 1 ? "" : "s"}, ${attention.length} flagged.`,
+    created_at: now,
+  });
+
+  return { ok: true, count: rows.length };
 }

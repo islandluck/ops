@@ -76,7 +76,22 @@ import {
   type RunAgentResult,
   type RunTaskResult,
 } from "@/lib/agents/run";
-import { runEmailTriage, type TriageResult } from "@/lib/agents/triage";
+import {
+  runEmailTriage,
+  summarizeInboxToExecutive,
+  triageMessages,
+  type InboxSummaryResult,
+  type TriageResult,
+} from "@/lib/agents/triage";
+import {
+  archiveEmail,
+  getEmailBody,
+  getEmailManagerState,
+  saveEmailDraft,
+  saveEmailSettings,
+  sendEmailReply,
+  trashEmail,
+} from "@/lib/agents/email-manager";
 import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
 import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
@@ -192,6 +207,8 @@ import type {
   Project,
   ReplyOpportunity,
   XTarget,
+  EmailManagerState,
+  EmailSettings,
 } from "@/lib/types";
 
 function displayName(user: User): string {
@@ -1711,7 +1728,7 @@ export async function runEmailTriageAction(): Promise<TriageResult> {
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return runEmailTriage(ws, { name: displayName(user), email: user.email ?? "" });
+  return runEmailTriage(ws);
 }
 
 /** Run Notion triage now — read shared Notion pages and turn action items into tasks. */
@@ -1721,6 +1738,95 @@ export async function runNotionTriageAction(): Promise<NotionTriageResult> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return runNotionTriage(ws, { name: displayName(user) });
+}
+
+/* ------------------------------ Email Manager ------------------------------ */
+
+/** Load the Email Manager: a live inbox page + the triage overlay + settings. */
+export async function getEmailManagerAction(
+  pageToken?: string,
+): Promise<EmailManagerState | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return await getEmailManagerState(ws, pageToken);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load your inbox." };
+  }
+}
+
+/** Triage the given inbox messages (all shown, or the ones the user checked). */
+export async function triageEmailsAction(messageIds: string[]): Promise<TriageResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return triageMessages(ws, messageIds);
+}
+
+/** Fetch one email's full body for the reader pane. */
+export async function getEmailBodyAction(messageId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return getEmailBody(ws, messageId);
+}
+
+/** Save the user's edits to a drafted reply. */
+export async function saveEmailDraftAction(messageId: string, draft: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return saveEmailDraft(ws, messageId, draft);
+}
+
+/** Send the drafted reply in-thread, then mark it sent. */
+export async function sendEmailReplyAction(messageId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return sendEmailReply(ws, messageId);
+}
+
+/** Archive an email — removes it from the inbox. */
+export async function archiveEmailAction(messageId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return archiveEmail(ws, messageId);
+}
+
+/** Move an email to Trash — recoverable in Gmail for 30 days, not a permanent delete. */
+export async function trashEmailAction(messageId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return trashEmail(ws, messageId);
+}
+
+/** Push the recent triage summary into the Executive's memory. */
+export async function sendInboxSummaryToExecutiveAction(): Promise<InboxSummaryResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return summarizeInboxToExecutive(ws);
+}
+
+/** Save the founder's email signature + reply style. */
+export async function saveEmailSettingsAction(settings: EmailSettings) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return saveEmailSettings(ws, settings);
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

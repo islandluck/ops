@@ -109,6 +109,10 @@ export const businessBriefs = pgTable("business_briefs", {
   goals: text("goals").array().notNull().default([]),
   voice_rules: text("voice_rules").array().notNull().default([]),
   restricted_phrases: text("restricted_phrases").array().notNull().default([]),
+  // Email Manager — the founder's outgoing-email identity, injected into every
+  // drafted reply so replies sound like them and sign off correctly.
+  email_signature: text("email_signature").notNull().default(""),
+  email_reply_style: text("email_reply_style").notNull().default(""),
   approval_rules: jsonb("approval_rules").$type<ApprovalRule[]>().notNull().default([]),
   budget_limits: jsonb("budget_limits")
     .$type<{ label: string; amount: number; period: string }[]>()
@@ -274,6 +278,42 @@ export const triagedEmails = pgTable(
     created_at: createdAt,
   },
   (t) => [uniqueIndex("triaged_emails_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
+);
+
+/**
+ * Email Manager — one row per inbox message the Admin agent has triaged. Backs the
+ * Email Manager page (render the agent's read + editable draft without re-triaging)
+ * AND serves as the dedup set so repeat/background runs skip mail already processed.
+ * Cascades with the workspace.
+ */
+export const emailTriage = pgTable(
+  "email_triage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    gmail_message_id: text("gmail_message_id").notNull(),
+    thread_id: text("thread_id").notNull().default(""),
+    // RFC 5322 Message-ID of the source email — used to thread the reply.
+    source_message_id: text("source_message_id").notNull().default(""),
+    from_name: text("from_name").notNull().default(""),
+    from_email: text("from_email").notNull().default(""),
+    subject: text("subject").notNull().default(""),
+    snippet: text("snippet").notNull().default(""),
+    // Triage classification (see lib/ai/triage.ts).
+    category: text("category").notNull().default(""),
+    urgency: text("urgency").notNull().default(""),
+    action_type: text("action_type").notNull().default(""),
+    summary: text("summary").notNull().default(""),
+    // Editable drafted reply; empty when no reply was warranted.
+    draft_reply: text("draft_reply").notNull().default(""),
+    // Lifecycle: triaged | sent | archived | trashed.
+    status: text("status").notNull().default("triaged"),
+    triaged_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [uniqueIndex("email_triage_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
 );
 
 /** Notion refs already triaged — page-version markers + per-item hashes — so

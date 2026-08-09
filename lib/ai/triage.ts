@@ -47,7 +47,11 @@ function stripFences(s: string): string {
     .trim();
 }
 
-export async function triageEmails(emails: GmailMessage[], brief: PlanBrief): Promise<TriagedEmail[]> {
+export async function triageEmails(
+  emails: GmailMessage[],
+  brief: PlanBrief,
+  opts?: { replyStyle?: string },
+): Promise<TriagedEmail[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI triage is not configured (ANTHROPIC_API_KEY missing).");
   if (!emails.length) return [];
@@ -59,8 +63,10 @@ export async function triageEmails(emails: GmailMessage[], brief: PlanBrief): Pr
     `They run ${brief.company_name || "a company"}. ${[brief.business_description, brief.core_offer].filter(Boolean).join(" ")}`.trim(),
     brief.ideal_customer_profile ? `Their customers: ${brief.ideal_customer_profile}` : "",
     brief.voice_rules.length ? `Their brand voice: ${brief.voice_rules.join("; ")}` : "",
+    opts?.replyStyle ? `Their email reply style — follow it when writing suggested_reply: ${opts.replyStyle}` : "",
     "",
     "For EACH email, infer the sender relationship, intent, urgency, and the single best next action, then write a 1–2 sentence summary. Write a suggested_reply ONLY when a reply from the founder is genuinely warranted (typically a Reply action, or a brief holding reply for an urgent Customer/Investor issue) — concise, on-brand, plain text; if it would need facts you don't have, keep it short and non-committal. Otherwise leave suggested_reply as an empty string.",
+    "For suggested_reply, write ONLY the message body in the founder's voice — do NOT add a sign-off or signature (no 'Best,' line, no name); their signature is appended automatically afterward.",
     "ALSO: if the email implies WORK the team should DO beyond just replying — schedule a meeting, prepare/send a document, investigate an issue, follow up, update the CRM, pay or file something — produce task_title (a short imperative action), task_detail (what needs to happen, with context and a suggested first step), and task_department (the team that handles it: growth, admin, content, research, finance). If there's no such work, leave task_title empty. An email can have BOTH a suggested_reply and a task.",
     "",
     "category: Investor, Customer, Internal, Admin, Noise.",

@@ -45,6 +45,8 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     scopes: [
       "https://www.googleapis.com/auth/gmail.send",
       "https://www.googleapis.com/auth/gmail.readonly",
+      // Email Manager archive (drop INBOX label) + delete (move to Trash).
+      "https://www.googleapis.com/auth/gmail.modify",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/spreadsheets",
       "openid",

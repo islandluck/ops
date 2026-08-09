@@ -1425,7 +1425,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await loadServer();
       if (res.ok) {
         const parts: string[] = [];
-        if (res.replyTasks) parts.push(`${res.replyTasks} reply draft${res.replyTasks === 1 ? "" : "s"}`);
+        if (res.replyDrafts) parts.push(`${res.replyDrafts} reply draft${res.replyDrafts === 1 ? "" : "s"}`);
         if (res.actionTasks) parts.push(`${res.actionTasks} task${res.actionTasks === 1 ? "" : "s"}`);
         if (res.remaining) parts.push(`${res.remaining} more to triage`);
         pushToast({

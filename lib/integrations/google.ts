@@ -175,6 +175,104 @@ export async function getMessageDetail(accessToken: string, id: string): Promise
   };
 }
 
+export interface GmailMeta {
+  id: string;
+  threadId: string;
+  from: { name: string; email: string };
+  subject: string;
+  date: string;
+  snippet: string;
+  unread: boolean;
+}
+
+/** One page of inbox message ids + a token for the next page (for 10-at-a-time paging). */
+export async function listInboxPage(
+  accessToken: string,
+  opts?: { max?: number; pageToken?: string; query?: string },
+): Promise<{ items: { id: string; threadId: string }[]; nextPageToken: string | null }> {
+  const q = encodeURIComponent(opts?.query ?? "in:inbox");
+  const max = opts?.max ?? 10;
+  const pt = opts?.pageToken ? `&pageToken=${encodeURIComponent(opts.pageToken)}` : "";
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=${max}${pt}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.status === 403) {
+    throw new Error("Gmail read access isn't granted. Reconnect Google in Integrations to load your inbox.");
+  }
+  const json = (await res.json()) as {
+    messages?: { id: string; threadId: string }[];
+    nextPageToken?: string;
+    error?: { message?: string };
+  };
+  if (!res.ok) throw new Error(`Gmail list failed: ${json.error?.message ?? res.status}`);
+  return {
+    items: (json.messages ?? []).map((m) => ({ id: m.id, threadId: m.threadId })),
+    nextPageToken: json.nextPageToken ?? null,
+  };
+}
+
+/** Light per-message fetch (headers + snippet only) for rendering an inbox row. */
+export async function getMessageMeta(accessToken: string, id: string): Promise<GmailMeta> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const json = (await res.json()) as {
+    id: string;
+    threadId: string;
+    snippet?: string;
+    labelIds?: string[];
+    payload?: { headers?: GmailHeader[] };
+    error?: { message?: string };
+  };
+  if (!res.ok) throw new Error(`Gmail get failed: ${json.error?.message ?? res.status}`);
+  const headers = json.payload?.headers ?? [];
+  return {
+    id: json.id,
+    threadId: json.threadId,
+    from: parseFrom(headerVal(headers, "From")),
+    subject: headerVal(headers, "Subject") || "(no subject)",
+    date: headerVal(headers, "Date"),
+    snippet: json.snippet ?? "",
+    unread: (json.labelIds ?? []).includes("UNREAD"),
+  };
+}
+
+/** Shared 403 message when the gmail.modify scope hasn't been granted yet. */
+const MODIFY_SCOPE_ERROR =
+  "Gmail archive/delete access isn't granted. Reconnect Google in Integrations to enable it.";
+
+/** Archive a message — drop the INBOX label so it leaves the inbox. Needs gmail.modify. */
+export async function archiveMessage(accessToken: string, id: string): Promise<void> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/modify`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ removeLabelIds: ["INBOX"] }),
+    },
+  );
+  if (res.status === 403) throw new Error(MODIFY_SCOPE_ERROR);
+  if (!res.ok) {
+    const json = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(`Gmail archive failed: ${json.error?.message ?? res.status}`);
+  }
+}
+
+/** Move a message to Trash — recoverable in Gmail for 30 days, NOT a permanent delete. Needs gmail.modify. */
+export async function trashMessage(accessToken: string, id: string): Promise<void> {
+  const res = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/trash`,
+    { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.status === 403) throw new Error(MODIFY_SCOPE_ERROR);
+  if (!res.ok) {
+    const json = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(`Gmail trash failed: ${json.error?.message ?? res.status}`);
+  }
+}
+
 /** Create a spreadsheet and write the given rows (starting at A1). Returns its URL. */
 export async function createSpreadsheet(
   accessToken: string,
