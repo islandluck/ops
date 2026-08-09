@@ -267,7 +267,11 @@ export async function runEmailTriage(workspaceId: string): Promise<TriageResult>
   let emails: GmailMessage[];
   let remaining = 0;
   try {
-    const candidates = await listInboxMessages(token, { max: CANDIDATE_MAX, query: "in:inbox is:unread" });
+    // Only sweep mail worth a human reply — Primary + Updates, never Promotions/Social.
+    const candidates = await listInboxMessages(token, {
+      max: CANDIDATE_MAX,
+      query: "in:inbox is:unread (category:primary OR category:updates)",
+    });
     const seenRows = await db
       .select({ mid: emailTriage.gmail_message_id })
       .from(emailTriage)

@@ -1742,16 +1742,18 @@ export async function runNotionTriageAction(): Promise<NotionTriageResult> {
 
 /* ------------------------------ Email Manager ------------------------------ */
 
-/** Load the Email Manager: a live inbox page + the triage overlay + settings. */
+/** Load the Email Manager: a live inbox page (filtered to the chosen Gmail category
+ *  tabs) + the triage overlay + settings. */
 export async function getEmailManagerAction(
   pageToken?: string,
+  categories?: string[],
 ): Promise<EmailManagerState | { error: string }> {
   const user = await getCurrentUser();
   if (!user) return { error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { error: "No workspace." };
   try {
-    return await getEmailManagerState(ws, pageToken);
+    return await getEmailManagerState(ws, pageToken, categories);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your inbox." };
   }

@@ -31,6 +31,23 @@ import type {
  */
 
 const PAGE_SIZE = 10;
+
+/** Gmail category tabs the user can filter by. Default hides Promotions/Social clutter. */
+export const INBOX_CATEGORIES = ["primary", "updates", "promotions", "social"] as const;
+const DEFAULT_CATEGORIES: string[] = ["primary", "updates"];
+const ALLOWED_CATEGORIES = new Set<string>(INBOX_CATEGORIES);
+
+/**
+ * Build the Gmail search query for the chosen category tabs. Filtering here (not
+ * client-side) means the API only returns — and we only fetch metadata for — mail
+ * that matters, so Promotions/Social never hit the screen or the triage AI.
+ */
+function buildInboxQuery(categories?: string[]): string {
+  const chosen = (categories ?? DEFAULT_CATEGORIES).filter((c) => ALLOWED_CATEGORIES.has(c));
+  const cats = chosen.length ? chosen : DEFAULT_CATEGORIES;
+  return `in:inbox (${cats.map((c) => `category:${c}`).join(" OR ")})`;
+}
+
 const CATEGORY_EMOJI: Record<string, string> = {
   Investor: "💼",
   Customer: "🤝",
@@ -101,6 +118,7 @@ async function buildTriageInfo(workspaceId: string): Promise<EmailTriageInfo> {
 export async function getEmailManagerState(
   workspaceId: string,
   pageToken?: string,
+  categories?: string[],
 ): Promise<EmailManagerState> {
   const settings = await getSettings(workspaceId);
   const token = await getValidAccessToken(workspaceId, "Gmail");
@@ -114,7 +132,7 @@ export async function getEmailManagerState(
     };
   }
 
-  const page = await listInboxPage(token, { max: PAGE_SIZE, pageToken, query: "in:inbox" });
+  const page = await listInboxPage(token, { max: PAGE_SIZE, pageToken, query: buildInboxQuery(categories) });
   const metas = (
     await Promise.all(page.items.map((m) => getMessageMeta(token, m.id).catch(() => null)))
   ).filter((m): m is GmailMeta => m !== null);

@@ -49,6 +49,16 @@ const URG_BADGE: Record<string, string> = {
   Low: "bg-zinc-100 text-zinc-500",
 };
 
+// Gmail category tabs — default to Primary + Updates so promo/social clutter never
+// hits the screen or the triage AI, and we only fetch metadata for mail that matters.
+const CATEGORY_CHIPS: { key: string; label: string }[] = [
+  { key: "primary", label: "Primary" },
+  { key: "updates", label: "Updates" },
+  { key: "promotions", label: "Promotions" },
+  { key: "social", label: "Social" },
+];
+const DEFAULT_CATS = ["primary", "updates"];
+
 function fmtDate(raw: string): string {
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return "";
@@ -72,12 +82,13 @@ export default function EmailManagerPage() {
   const [actingId, setActingId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [toExecState, setToExecState] = useState<"idle" | "busy" | "done">("idle");
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATS);
 
   const curToken = pageStack[pageStack.length - 1];
 
-  const load = useCallback(async (token?: string) => {
+  const load = useCallback(async (token?: string, cats?: string[]) => {
     setError("");
-    const res = await getEmailManagerAction(token);
+    const res = await getEmailManagerAction(token, cats ?? DEFAULT_CATS);
     if ("error" in res) {
       setError(res.error);
       setState(null);
@@ -88,14 +99,14 @@ export default function EmailManagerPage() {
   }, []);
 
   useEffect(() => {
-    void load(undefined);
+    void load(undefined, DEFAULT_CATS);
   }, [load]);
 
   const items = state?.items ?? [];
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
   function reload() {
-    return load(curToken);
+    return load(curToken, categories);
   }
 
   function goNext() {
@@ -104,7 +115,7 @@ export default function EmailManagerPage() {
     setSelectedId(null);
     setChecked(new Set());
     setPageStack((s) => [...s, nt]);
-    void load(nt);
+    void load(nt, categories);
   }
   function goBack() {
     if (!pageStack.length) return;
@@ -112,7 +123,19 @@ export default function EmailManagerPage() {
     setChecked(new Set());
     const next = pageStack.slice(0, -1);
     setPageStack(next);
-    void load(next[next.length - 1]);
+    void load(next[next.length - 1], categories);
+  }
+
+  // Toggle a Gmail category tab; changing the filter resets to the first page.
+  function toggleCategory(key: string) {
+    const next = categories.includes(key) ? categories.filter((c) => c !== key) : [...categories, key];
+    if (!next.length) return; // keep at least one tab selected
+    setCategories(next);
+    setSelectedId(null);
+    setChecked(new Set());
+    setPageStack([]);
+    setLoading(true);
+    void load(undefined, next);
   }
 
   function toggleCheck(id: string) {
@@ -227,6 +250,26 @@ export default function EmailManagerPage() {
                     />
                     Select all
                   </label>
+                </div>
+                {/* Gmail category tabs — declutter to what matters */}
+                <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-2">
+                  {CATEGORY_CHIPS.map((c) => {
+                    const on = categories.includes(c.key);
+                    return (
+                      <button
+                        key={c.key}
+                        onClick={() => toggleCategory(c.key)}
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                          on
+                            ? "border-primary/40 bg-primary/10 text-primary"
+                            : "border-border text-muted-foreground hover:bg-muted",
+                        )}
+                      >
+                        {c.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {items.length === 0 ? (
