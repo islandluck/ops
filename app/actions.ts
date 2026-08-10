@@ -1929,9 +1929,17 @@ export async function signInAction(
   email: string,
   password: string,
 ): Promise<{ error?: string }> {
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) return { error: error.message };
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: error.message };
+  } catch (e) {
+    // The auth REQUEST itself threw (not a wrong-password response) — Supabase is
+    // unreachable/misconfigured (paused project, bad env, network). Log the real
+    // cause for the server logs and show the user a clear, non-generic message.
+    console.error("[signInAction] auth request failed:", e instanceof Error ? e.message : e);
+    return { error: "We couldn't reach the sign-in service. Please try again in a moment." };
+  }
   redirect("/approvals");
 }
 
@@ -1950,16 +1958,23 @@ export async function signUpAction(
 ): Promise<{ error?: string; needsConfirmation?: boolean }> {
   const supabase = await createSupabaseServerClient();
   const origin = await requestOrigin();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { full_name: name },
-      // Confirmation link returns here to establish the session, then → onboarding.
-      emailRedirectTo: `${origin}/auth/callback?next=/onboarding`,
-    },
-  });
-  if (error) return { error: error.message };
+  let data: Awaited<ReturnType<typeof supabase.auth.signUp>>["data"];
+  try {
+    const res = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: { full_name: name },
+        // Confirmation link returns here to establish the session, then → onboarding.
+        emailRedirectTo: `${origin}/auth/callback?next=/onboarding`,
+      },
+    });
+    if (res.error) return { error: res.error.message };
+    data = res.data;
+  } catch (e) {
+    console.error("[signUpAction] signUp request failed:", e instanceof Error ? e.message : e);
+    return { error: "We couldn't reach the sign-up service. Please try again in a moment." };
+  }
 
   // Session present → email confirmation is off. Provision the profile +
   // workspace now (so it always exists before onboarding), then go to setup.
@@ -2006,8 +2021,10 @@ export async function requestPasswordResetAction(email: string): Promise<{ ok: t
       await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: `${origin}/auth/callback?next=/reset-password`,
       });
-    } catch {
-      /* swallow — don't leak whether the account exists */
+    } catch (e) {
+      // Swallow for the USER (never leak whether an account exists), but LOG the
+      // real cause so a genuine outage (Supabase unreachable) is visible in logs.
+      console.error("[requestPasswordResetAction] failed:", e instanceof Error ? e.message : e);
     }
   }
   return { ok: true };
@@ -2016,9 +2033,14 @@ export async function requestPasswordResetAction(email: string): Promise<{ ok: t
 /** Set a new password for the recovery-session user, then send them into the app. */
 export async function updatePasswordAction(password: string): Promise<{ error?: string }> {
   if (password.length < 6) return { error: "Password must be at least 6 characters." };
-  const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) return { error: error.message };
+  try {
+    const supabase = await createSupabaseServerClient();
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) return { error: error.message };
+  } catch (e) {
+    console.error("[updatePasswordAction] failed:", e instanceof Error ? e.message : e);
+    return { error: "We couldn't reach the account service. Please try again in a moment." };
+  }
   redirect("/approvals");
 }
 
