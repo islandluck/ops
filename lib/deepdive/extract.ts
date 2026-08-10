@@ -1,7 +1,10 @@
 import "server-only";
 
-import { PDFParse } from "pdf-parse";
-import mammoth from "mammoth";
+// NOTE: pdf-parse (→ pdfjs-dist) and mammoth are imported LAZILY inside
+// extractDocText, never at module top level. pdfjs-dist references browser-only
+// globals (DOMMatrix) at load and throws in the Node server runtime — a static
+// import here would poison every server module that transitively imports this
+// file (including the login page's server actions), 500-ing all of them.
 
 /** Upper bound on an uploaded document (before extraction). */
 export const MAX_DOC_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -44,6 +47,7 @@ export async function extractDocText(filename: string, mime: string, bytes: Buff
   let text = "";
 
   if (mime === "application/pdf" || ext === "pdf") {
+    const { PDFParse } = await import("pdf-parse");
     const parser = new PDFParse({ data: bytes });
     try {
       const res = await parser.getText();
@@ -55,6 +59,7 @@ export async function extractDocText(filename: string, mime: string, bytes: Buff
     mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
     ext === "docx"
   ) {
+    const mammoth = (await import("mammoth")).default;
     const res = await mammoth.extractRawText({ buffer: bytes });
     text = res.value ?? "";
   } else {
