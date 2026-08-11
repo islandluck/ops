@@ -97,6 +97,11 @@ import {
   trashEmail,
 } from "@/lib/agents/email-manager";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
+import {
+  getCommandCenterDoc,
+  saveCommandCenterDoc,
+  sendGoalsToExecutive,
+} from "@/lib/agents/command-center";
 import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
 import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
@@ -215,6 +220,7 @@ import type {
   EmailListItem,
   EmailManagerState,
   EmailSettings,
+  CommandCenterDoc,
 } from "@/lib/types";
 
 function displayName(user: User): string {
@@ -1898,6 +1904,39 @@ export async function getAiUsageReportAction(days?: number): Promise<AiUsageRepo
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load the usage report." };
   }
+}
+
+/* ----------------------------- Command Center ------------------------------ */
+
+/** Load the user's Command Center goals doc (seeds an empty one if none yet). */
+export async function getCommandCenterAction(): Promise<CommandCenterDoc | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return await getCommandCenterDoc(ws);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load your Command Center." };
+  }
+}
+
+/** Persist the whole Command Center doc (client-authoritative autosave). */
+export async function saveCommandCenterAction(doc: CommandCenterDoc) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return saveCommandCenterDoc(ws, doc);
+}
+
+/** Push the current goals into the Executive's memory, on command. */
+export async function sendGoalsToExecutiveAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return sendGoalsToExecutive(ws);
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

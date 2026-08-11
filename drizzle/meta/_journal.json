@@ -225,6 +225,13 @@
       "when": 1786419490395,
       "tag": "0031_charming_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786469701312,
+      "tag": "0032_serious_greymalkin",
+      "breakpoints": true
     }
   ]
 }

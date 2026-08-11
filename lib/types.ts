@@ -717,6 +717,39 @@ export interface EmailBody {
   body: string;
 }
 
+/* ------------------------------ Command Center ----------------------------- */
+
+/** One goal bullet. `done` renders strikethrough; `indent` (0|1) gives one nesting level. */
+export interface GoalItem {
+  id: string;
+  text: string;
+  done: boolean;
+  indent: 0 | 1;
+}
+
+/** A time period row in the grid — its four goal columns. */
+export interface GoalPeriod {
+  id: string;
+  label: string;
+  monthly: GoalItem[];
+  weekly: GoalItem[];
+  daily: GoalItem[];
+  parking: GoalItem[];
+}
+
+/** The long-horizon goal boxes below the grid. */
+export interface CommandCenterHorizons {
+  year: GoalItem[];
+  future: GoalItem[];
+  moonshot: GoalItem[];
+}
+
+/** The whole user-authored Command Center document (one per workspace). */
+export interface CommandCenterDoc {
+  periods: GoalPeriod[];
+  horizons: CommandCenterHorizons;
+}
+
 /** A durable thing the Executive Agent knows about the business. */
 export interface ExecMemory {
   id: string;

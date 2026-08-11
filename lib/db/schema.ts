@@ -24,6 +24,7 @@ import type {
   AssetType,
   Category,
   BriefKind,
+  CommandCenterDoc,
   ChannelKind,
   ChannelStatus,
   CompanyContextPack,
@@ -340,6 +341,24 @@ export const aiUsage = pgTable(
     created_at: createdAt,
   },
   (t) => [index("ai_usage_ws_created_idx").on(t.workspace_id, t.created_at)],
+);
+
+/**
+ * Command Center — the user's own goals workspace (monthly/weekly/daily/parking grid
+ * + year/future/moonshot horizons). One free-form JSON doc per workspace; the user
+ * authors it, agents never auto-populate it. Cascades with the workspace.
+ */
+export const commandCenter = pgTable(
+  "command_center",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    doc: jsonb("doc").$type<CommandCenterDoc>().notNull(),
+    updated_at: updatedAt,
+  },
+  (t) => [uniqueIndex("command_center_ws_uniq").on(t.workspace_id)],
 );
 
 /** Notion refs already triaged — page-version markers + per-item hashes — so

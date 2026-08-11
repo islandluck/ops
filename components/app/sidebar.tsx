@@ -14,6 +14,7 @@ import {
   FolderOpen,
   Globe,
   LayoutDashboard,
+  ListChecks,
   type LucideIcon,
   Mail,
   Megaphone,
@@ -44,6 +45,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
     items: [
       { href: "/approvals", label: "Approval Center", icon: SquareKanban },
       { href: "/executive", label: "Executive", icon: Compass },
+      { href: "/command-center", label: "Command Center", icon: ListChecks },
       { href: "/email", label: "Email Manager", icon: Mail },
       { href: "/notes", label: "Notes", icon: NotebookPen },
     ],
