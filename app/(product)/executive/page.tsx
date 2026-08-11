@@ -131,6 +131,9 @@ export default function ExecutivePage() {
   const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Synchronous in-flight lock — immune to the stale `sending` closure, so a rapid
+  // second click (before React re-renders) can't fire a duplicate request.
+  const sendingRef = useRef(false);
 
   const attachFile = useCallback(async (file: File | undefined | null) => {
     setAttachErr("");
@@ -250,25 +253,30 @@ export default function ExecutivePage() {
   const send = useCallback(
     async (text: string) => {
       const clean = text.trim();
-      if (!clean || sending) return;
+      if (!clean || sendingRef.current) return;
+      sendingRef.current = true;
       setInput("");
       setMessages((m) => [
         ...m,
         { id: `tmp-${m.length}`, role: "user", content: clean, actions: [], created_at: "" },
       ]);
-      setSending(true);
-      const res = await sendExecutiveMessageAction(clean);
-      setSending(false);
-      if (res.ok) {
-        await loadBundle(); // authoritative messages + refreshed KPIs/goals/memory
-      } else {
-        setMessages((m) => [
-          ...m,
-          { id: `err-${m.length}`, role: "assistant", content: res.error ?? "I couldn't respond — try again.", actions: [], created_at: "" },
-        ]);
+      setSending(true); // hides the starter chips + shows "thinking" immediately
+      try {
+        const res = await sendExecutiveMessageAction(clean);
+        if (res.ok) {
+          await loadBundle(); // authoritative messages + refreshed KPIs/goals/memory
+        } else {
+          setMessages((m) => [
+            ...m,
+            { id: `err-${m.length}`, role: "assistant", content: res.error ?? "I couldn't respond — try again.", actions: [], created_at: "" },
+          ]);
+        }
+      } finally {
+        setSending(false);
+        sendingRef.current = false;
       }
     },
-    [sending, loadBundle],
+    [loadBundle],
   );
 
   const submit = useCallback(() => {
@@ -351,7 +359,7 @@ export default function ExecutivePage() {
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
-          ) : messages.length === 0 ? (
+          ) : messages.length === 0 && !sending ? (
             <EmptyState onPick={(t) => void send(t)} />
           ) : (
             <div className="mx-auto max-w-2xl space-y-4">
