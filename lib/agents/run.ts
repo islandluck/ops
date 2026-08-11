@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import { runWithUsage } from "@/lib/ai/usage";
 import { and, asc, eq, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
@@ -40,6 +41,13 @@ export interface RunAgentResult {
 
 /** Have one agent prepare a fresh task (and ship it if the agent is on auto). */
 export async function runAgentForWorkspace(
+  workspaceId: string,
+  agentId: string,
+  actor: { name: string; email: string },
+): Promise<RunAgentResult> {
+  return runWithUsage(workspaceId, "agent-task", () => _runAgentForWorkspace(workspaceId, agentId, actor));
+}
+async function _runAgentForWorkspace(
   workspaceId: string,
   agentId: string,
   actor: { name: string; email: string },
@@ -215,6 +223,12 @@ export interface RunTaskResult {
  * "done by an agent" before you review it.
  */
 export async function runTaskWithAgent(
+  workspaceId: string,
+  taskId: string,
+): Promise<RunTaskResult> {
+  return runWithUsage(workspaceId, "agent-draft", () => _runTaskWithAgent(workspaceId, taskId));
+}
+async function _runTaskWithAgent(
   workspaceId: string,
   taskId: string,
 ): Promise<RunTaskResult> {

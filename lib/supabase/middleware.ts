@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, hasSupabaseClientEnv } from "@/lib/config";
 
 const PROTECTED_PREFIXES = [
+  "/admin",
   "/approvals",
   "/dashboard",
   "/agents",

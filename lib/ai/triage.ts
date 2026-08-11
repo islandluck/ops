@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { GmailMessage } from "@/lib/integrations/google";
 import type { PlanBrief } from "@/lib/ai/plan";
 import type { Category } from "@/lib/types";
@@ -56,7 +57,7 @@ export async function triageEmails(
   if (!apiKey) throw new Error("AI triage is not configured (ANTHROPIC_API_KEY missing).");
   if (!emails.length) return [];
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You are an email triage assistant for a busy founder.",

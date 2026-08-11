@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type {
   CompanyContextPack,
   ContextItem,
@@ -46,7 +47,7 @@ function usageFrom(u: Anthropic.Message["usage"] | undefined, kind: "map" | "syn
 function client(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  return new Anthropic({ apiKey, maxRetries: 2 });
+  return getAnthropic();
 }
 
 function stripFences(s: string): string {

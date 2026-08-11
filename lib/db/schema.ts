@@ -7,6 +7,7 @@
  */
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -317,6 +318,28 @@ export const emailTriage = pgTable(
     updated_at: updatedAt,
   },
   (t) => [uniqueIndex("email_triage_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
+);
+
+/**
+ * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
+ * usage returned by every response, attributed to a workspace (null = a call made
+ * outside any workspace context). Powers the operator usage report (which workspaces
+ * cost the most in AI). workspace_id is nullable so nothing is ever dropped; cascades
+ * when a workspace is deleted.
+ */
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id").references(() => workspaces.id, { onDelete: "cascade" }),
+    // What the call was for (e.g. "email-triage", "agent-task", "executive-chat").
+    operation: text("operation").notNull().default(""),
+    model: text("model").notNull().default(""),
+    input_tokens: integer("input_tokens").notNull().default(0),
+    output_tokens: integer("output_tokens").notNull().default(0),
+    created_at: createdAt,
+  },
+  (t) => [index("ai_usage_ws_created_idx").on(t.workspace_id, t.created_at)],
 );
 
 /** Notion refs already triaged — page-version markers + per-item hashes — so

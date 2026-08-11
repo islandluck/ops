@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type {
   BriefKind,
   BriefSuggestion,
@@ -45,7 +46,7 @@ export async function executiveReply(opts: {
 }): Promise<ExecReplyResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const toolDefs = opts.tools.map((t) => t.definition);
   const toolByName = new Map(opts.tools.map((t) => [t.definition.name, t]));
@@ -120,7 +121,7 @@ export async function generateBrief(
 ): Promise<ExecBriefContent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
   const isWeekly = kind === "weekly";
 
   const system = [
@@ -285,7 +286,7 @@ export async function writeInvestorUpdate(
 ): Promise<InvestorUpdateContent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = stakeholderUpdatePrompt(audience, companyName, period);
   const noun = audience === "team" ? "team update" : audience === "advisor" ? "advisor update" : "investor update";

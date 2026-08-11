@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { Agent, BusinessBrief } from "@/lib/types";
 
 /** Have an agent propose a concrete piece of work (used by "Run agent" + cron). */
@@ -28,7 +29,7 @@ export async function generateAgentTask(
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI drafting is not configured (ANTHROPIC_API_KEY missing).");
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
   const system = [
     agent.instructions?.trim() || `You are the ${agent.name}.`,
     `You work for ${brief.company_name}. ${brief.business_description} ${brief.core_offer}`.trim(),

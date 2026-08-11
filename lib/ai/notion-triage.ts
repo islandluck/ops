@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { PlanBrief } from "@/lib/ai/plan";
 import type { Category } from "@/lib/types";
 
@@ -40,7 +41,7 @@ export async function extractNotionActions(
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const content = page.text.trim();
   if (!content) return [];
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You extract the OWNER'S action items from a Notion page — typically meeting notes (e.g. from a Zoom call captured by Notion AI). The owner is a busy founder.",

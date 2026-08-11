@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { PlanBrief } from "@/lib/ai/plan";
 import type { ResearchResult } from "@/lib/ai/research";
 
@@ -33,7 +34,7 @@ export async function generateSocialBatch(
 ): Promise<SocialPiece[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     persona?.trim() || `You are the social media manager for ${brief.company_name || "the company"}.`,

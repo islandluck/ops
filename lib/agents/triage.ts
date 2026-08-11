@@ -15,6 +15,7 @@ import {
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { getMessageDetail, listInboxMessages, type GmailMessage } from "@/lib/integrations/google";
 import { triageEmails } from "@/lib/ai/triage";
+import { runWithUsage } from "@/lib/ai/usage";
 import { getPlanningContext } from "@/lib/db/queries";
 
 /**
@@ -85,7 +86,13 @@ function withSignature(reply: string, signature: string): string {
  * on-demand page triage and the background cron sweep. Assumes the caller already
  * filtered out messages that were triaged before (dedup).
  */
-async function triageAndStore(
+function triageAndStore(
+  workspaceId: string,
+  emails: GmailMessage[],
+): Promise<{ replyDrafts: number; actionTasks: number }> {
+  return runWithUsage(workspaceId, "email-triage", () => _triageAndStore(workspaceId, emails));
+}
+async function _triageAndStore(
   workspaceId: string,
   emails: GmailMessage[],
 ): Promise<{ replyDrafts: number; actionTasks: number }> {

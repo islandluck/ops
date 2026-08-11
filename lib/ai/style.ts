@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 
 /**
  * Writing-voice learning + bulk tweet cleanup. Distills a reusable style guide
@@ -22,7 +23,7 @@ export async function analyzeTweetStyle(tweets: string[]): Promise<string> {
     .map((t) => `- ${t.replace(/\s+/g, " ").trim()}`)
     .join("\n")
     .slice(0, 8000);
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You are a writing-voice analyst. Study the person's real tweets and produce a concise, reusable STYLE GUIDE another writer can follow to sound exactly like them.",
@@ -54,7 +55,7 @@ export async function cleanUpTweets(
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   if (!raw.length) return [];
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You polish a person's rough tweet drafts into ready-to-post tweets.",
@@ -112,7 +113,7 @@ export async function growthBoostTweet(
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const original = tweet.trim();
   if (!original) throw new Error("Nothing to boost.");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You are a world-class growth marketer and viral copywriter for X/Twitter.",
@@ -179,7 +180,7 @@ export async function suggestReplies(
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const original = tweet.text.trim();
   if (!original) throw new Error("No tweet to reply to.");
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You are a sharp X/Twitter growth strategist writing REPLIES on behalf of the account owner.",

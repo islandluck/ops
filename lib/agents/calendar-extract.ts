@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 
 /**
  * Turn a natural-language scheduling request ("recurring Monday meeting with the
@@ -58,7 +59,7 @@ export async function extractCalendarEvent(
   ].join("\n");
 
   try {
-    const client = new Anthropic({ apiKey, maxRetries: 1 });
+    const client = getAnthropic({ maxRetries: 1 });
     const msg = await client.messages.create({
       model: MODEL,
       max_tokens: 500,

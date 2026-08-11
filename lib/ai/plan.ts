@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import { fitToX } from "@/lib/social/x-post";
 import type { Category, PlannedTask, RiskLevel } from "@/lib/types";
 
@@ -44,7 +45,7 @@ export async function planTask(
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI planning is not configured (ANTHROPIC_API_KEY missing).");
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
   const b = ctx.brief;
   const toolLines = ctx.integrations.length
     ? ctx.integrations.map((i) => `- ${i.name}${i.connected ? " (connected)" : " (NOT connected)"}`).join("\n")

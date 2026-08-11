@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 
 /**
  * Reply-radar scoring — decide which of a watched account's recent tweets are
@@ -27,7 +28,7 @@ export async function scoreReplyOpportunities(
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   if (!tweets.length) return [];
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const system = [
     "You are an X/Twitter growth strategist deciding which tweets are worth REPLYING to, so the account owner gets seen by the RIGHT audience and grows.",

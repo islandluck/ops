@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { runWithUsage } from "@/lib/ai/usage";
 import { db } from "@/lib/db";
 import {
   activityEvents,
@@ -321,6 +322,12 @@ export async function sendExecutiveMessage(
   workspaceId: string,
   text: string,
 ): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
+  return runWithUsage(workspaceId, "executive-chat", () => _sendExecutiveMessage(workspaceId, text));
+}
+async function _sendExecutiveMessage(
+  workspaceId: string,
+  text: string,
+): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
   const clean = text.trim();
   if (!clean) return { ok: false, error: "Type a message first." };
 
@@ -510,6 +517,12 @@ async function gatherBriefDossier(
 
 /** Generate + store a fresh daily brief. */
 export async function generateDailyBrief(
+  workspaceId: string,
+  kind: BriefKind = "daily",
+): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {
+  return runWithUsage(workspaceId, "executive-brief", () => _generateDailyBrief(workspaceId, kind));
+}
+async function _generateDailyBrief(
   workspaceId: string,
   kind: BriefKind = "daily",
 ): Promise<{ ok: boolean; brief?: ExecBrief; error?: string }> {

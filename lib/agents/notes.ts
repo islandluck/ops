@@ -1,7 +1,9 @@
 import "server-only";
+import { runWithUsage } from "@/lib/ai/usage";
 
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { agents, tasks } from "@/lib/db/schema";
@@ -33,6 +35,9 @@ function firstJson<T>(text: string): T | null {
 
 /** Ask the Executive what to do with a note. Returns a proposal to approve. */
 export async function analyzeNote(workspaceId: string, note: Note): Promise<NoteProposal> {
+  return runWithUsage(workspaceId, "notes", () => _analyzeNote(workspaceId, note));
+}
+async function _analyzeNote(workspaceId: string, note: Note): Promise<NoteProposal> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const body = (note.content || note.title).trim();
@@ -64,7 +69,7 @@ export async function analyzeNote(workspaceId: string, note: Note): Promise<Note
     .filter(Boolean)
     .join("\n");
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
   let text = "";
   try {
     const message = await client.messages.create({

@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { PageContent, PageType } from "@/lib/types";
 
 /**
@@ -40,7 +41,7 @@ export async function generatePageContent(input: {
   if (!apiKey) throw new Error("AI page generation is not configured (ANTHROPIC_API_KEY missing).");
 
   const { brief, offer, pageType, productName, priceLabel } = input;
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const kind =
     pageType === "product"

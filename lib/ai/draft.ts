@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import { fitToX } from "@/lib/social/x-post";
 import type { Category, DraftRequest } from "@/lib/types";
 
@@ -84,7 +85,7 @@ export async function draftWithClaude(req: DraftRequest): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI drafting is not configured (ANTHROPIC_API_KEY missing).");
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   try {
     const message = await client.messages.create({

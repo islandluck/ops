@@ -1,4 +1,5 @@
 import "server-only";
+import { runWithUsage } from "@/lib/ai/usage";
 
 import { createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -34,6 +35,12 @@ export interface NotionTriageResult {
 }
 
 export async function runNotionTriage(
+  workspaceId: string,
+  actor: { name: string },
+): Promise<NotionTriageResult> {
+  return runWithUsage(workspaceId, "notion-triage", () => _runNotionTriage(workspaceId, actor));
+}
+async function _runNotionTriage(
   workspaceId: string,
   actor: { name: string },
 ): Promise<NotionTriageResult> {

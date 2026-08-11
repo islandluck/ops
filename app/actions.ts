@@ -96,6 +96,7 @@ import {
   sendEmailReply,
   trashEmail,
 } from "@/lib/agents/email-manager";
+import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
 import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
 import {
@@ -1883,6 +1884,20 @@ export async function learnEmailStyleAction() {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return learnEmailStyleFromSent(ws);
+}
+
+/* --------------------------- Operator (admin) ----------------------------- */
+
+/** Cross-tenant AI usage ranking — admin-email gated (ADMIN_EMAILS). */
+export async function getAiUsageReportAction(days?: number): Promise<AiUsageReport | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  if (!isAdminEmail(user.email)) return { error: "Not authorized." };
+  try {
+    return await getAiUsageReport(days);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load the usage report." };
+  }
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */

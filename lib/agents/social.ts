@@ -1,4 +1,5 @@
 import "server-only";
+import { runWithUsage } from "@/lib/ai/usage";
 
 import { randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
@@ -32,6 +33,12 @@ const CONFIG = { x: 3, blog: 1 };
 const AUTOPILOT_TARGET = 3;
 
 export async function runSocialMediaAgent(
+  workspaceId: string,
+  agentId: string | null,
+): Promise<SocialRunResult> {
+  return runWithUsage(workspaceId, "social", () => _runSocialMediaAgent(workspaceId, agentId));
+}
+async function _runSocialMediaAgent(
   workspaceId: string,
   agentId: string | null,
 ): Promise<SocialRunResult> {

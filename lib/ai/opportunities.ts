@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { ScanUsage } from "@/lib/types";
 import { fetchGrantDetail, searchGrantsGov, type GrantDetail, type GrantHit } from "@/lib/integrations/grantsgov";
 import { tavilyConfigured, tavilySearch, type TavilyResult } from "@/lib/integrations/tavily";
@@ -125,7 +126,7 @@ function meter(acc: ScanUsage, u: Anthropic.Usage | undefined): void {
 function makeClient(): Anthropic {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
-  return new Anthropic({ apiKey, maxRetries: 2, timeout: RANK_TIMEOUT_MS });
+  return getAnthropic({ timeout: RANK_TIMEOUT_MS });
 }
 
 const STOP = new Set([

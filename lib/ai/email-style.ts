@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 
 /**
  * Learn how the founder writes email — infer their signature block + reply style
@@ -38,7 +39,7 @@ export async function learnEmailStyle(sentBodies: string[]): Promise<LearnedStyl
     .slice(0, 12);
   if (!samples.length) throw new Error("No sent emails long enough to learn from yet.");
 
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
   const system = [
     "You analyze a founder's SENT emails and infer how they write, so an assistant can draft replies in their voice.",
     'Return ONLY JSON: {"signature": string, "reply_style": string} — no markdown, no code fences.',

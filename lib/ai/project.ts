@@ -1,6 +1,7 @@
 import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
+import { getAnthropic } from "@/lib/ai/client";
 import type { Category, ProjectPhase, ProjectPlan, ProjectStep } from "@/lib/types";
 
 /**
@@ -45,7 +46,7 @@ export async function planProjectWithClaude(input: {
   if (!apiKey) throw new Error("AI planning is not configured (ANTHROPIC_API_KEY missing).");
 
   const { goal, brief, departments, ownerKind } = input;
-  const client = new Anthropic({ apiKey, maxRetries: 2 });
+  const client = getAnthropic();
 
   const role =
     ownerKind === "executive"
