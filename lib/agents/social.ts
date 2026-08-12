@@ -32,6 +32,13 @@ const CONFIG = { x: 3, blog: 1 };
  *  each run only tops the pipeline back up to this target. */
 const AUTOPILOT_TARGET = 3;
 
+/** Approval mode is bounded the SAME way: never let more than this many
+ *  un-reviewed drafts from this agent pile up. A background run tops the review
+ *  queue back up to this ceiling and then no-ops — so a frequent cron (or a
+ *  founder who's fallen behind on approvals) can never flood the board with
+ *  thousands of tasks. It resumes on its own once they clear the backlog. */
+const APPROVAL_QUEUE_CAP = 6;
+
 export async function runSocialMediaAgent(
   workspaceId: string,
   agentId: string | null,
@@ -88,6 +95,32 @@ async function _runSocialMediaAgent(
       return { ok: true, drafted: 0 };
     }
     genConfig = { x: slots.length, blog: 0 };
+  } else {
+    // Approval mode: bound the REVIEW queue exactly like autopilot bounds the
+    // publish pipeline. Count this agent's un-reviewed drafts; if the backlog is
+    // already at the ceiling, skip the run entirely (no LLM call, no new tasks)
+    // so a frequent background cron can't run away. Otherwise only generate
+    // enough to top the queue back up to the ceiling.
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.workspace_id, workspaceId),
+          agent?.id ? eq(tasks.agent_id, agent.id) : eq(tasks.category, "content"),
+          eq(tasks.requires_approval, true),
+          eq(tasks.approval_status, "pending"),
+          eq(tasks.archived, false),
+        ),
+      );
+    const room = APPROVAL_QUEUE_CAP - (n ?? 0);
+    if (room <= 0) {
+      if (agent) {
+        await db.update(agents).set({ last_run_at: now, status: "waiting" }).where(eq(agents.id, agent.id));
+      }
+      return { ok: true, drafted: 0 };
+    }
+    genConfig = { x: Math.min(CONFIG.x, room), blog: CONFIG.blog };
   }
 
   // Live research (falls back to brief-grounded when TAVILY_API_KEY is absent).

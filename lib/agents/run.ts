@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { runWithUsage } from "@/lib/ai/usage";
-import { and, asc, eq, lt } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   activityEvents,
@@ -39,18 +39,26 @@ export interface RunAgentResult {
   error?: string;
 }
 
+/** A background agent must never pile up more than this many un-reviewed drafts.
+ *  A cron run tops the review queue up to the ceiling, then no-ops — so a
+ *  frequent scheduler (or a founder behind on approvals) can't run away. Manual
+ *  "Run now" clicks are never capped (the person explicitly asked for one). */
+const BACKGROUND_DRAFT_CAP = 12;
+
 /** Have one agent prepare a fresh task (and ship it if the agent is on auto). */
 export async function runAgentForWorkspace(
   workspaceId: string,
   agentId: string,
   actor: { name: string; email: string },
+  opts: { background?: boolean } = {},
 ): Promise<RunAgentResult> {
-  return runWithUsage(workspaceId, "agent-task", () => _runAgentForWorkspace(workspaceId, agentId, actor));
+  return runWithUsage(workspaceId, "agent-task", () => _runAgentForWorkspace(workspaceId, agentId, actor, opts));
 }
 async function _runAgentForWorkspace(
   workspaceId: string,
   agentId: string,
   actor: { name: string; email: string },
+  opts: { background?: boolean } = {},
 ): Promise<RunAgentResult> {
   const [a] = await db
     .select()
@@ -77,6 +85,27 @@ async function _runAgentForWorkspace(
     .where(eq(businessBriefs.workspace_id, workspaceId))
     .limit(1);
   if (!briefRow) return { ok: false, error: "No business brief." };
+
+  // Anti-runaway: a background cron never lets un-reviewed drafts pile past the
+  // ceiling. Manual runs skip this — the person asked for a task on purpose.
+  if (opts.background) {
+    const [{ n }] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.workspace_id, workspaceId),
+          eq(tasks.agent_id, a.id),
+          eq(tasks.requires_approval, true),
+          eq(tasks.approval_status, "pending"),
+          eq(tasks.archived, false),
+        ),
+      );
+    if ((n ?? 0) >= BACKGROUND_DRAFT_CAP) {
+      await db.update(agents).set({ last_run_at: new Date(), status: "waiting" }).where(eq(agents.id, a.id));
+      return { ok: true, taskTitle: "Review queue full — skipped" };
+    }
+  }
 
   let gen;
   try {
@@ -185,7 +214,7 @@ export async function runBackgroundAgents(limit = 25): Promise<{ ran: number; pu
         await runEmailTriage(a.workspace_id);
         await runNotionTriage(a.workspace_id, actor).catch(() => {});
       } else {
-        await runAgentForWorkspace(a.workspace_id, a.id, actor);
+        await runAgentForWorkspace(a.workspace_id, a.id, actor, { background: true });
       }
       ran += 1;
     } catch {

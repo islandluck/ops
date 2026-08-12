@@ -9,6 +9,13 @@ const nextConfig = {
   // server runtime. Externalized, they're require()'d from node_modules at runtime
   // (only when Deep Dive actually parses a document).
   serverExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  // The board's whole-workspace bundle save posts every task in one server
+  // action. Next's default 1MB body limit silently rejected it once a workspace
+  // grew large — so settings edits (like turning a background agent OFF) never
+  // persisted. Raise the ceiling so a busy workspace saves reliably. The real
+  // anti-runaway fix is the per-agent generation caps + targeted writes; this is
+  // defense-in-depth for everything else that still rides the bundle save.
+  experimental: { serverActions: { bodySizeLimit: "8mb" } },
 };
 
 export default nextConfig;

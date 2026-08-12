@@ -23,6 +23,8 @@ import {
   getXStyleProfile,
   insertMedia,
   listMediaForTask,
+  bulkDeleteTasksForUser,
+  bulkSetTasksArchivedForUser,
   createNoteForUser,
   deleteNoteForUser,
   deleteTaskForUser,
@@ -38,6 +40,7 @@ import {
   removeXTarget,
   resetBundleForUser,
   saveBundleForUser,
+  setAgentBackgroundForUser,
   setDocumentNotionUrl,
   setOpportunityReplies,
   setTaskArchivedForUser,
@@ -403,6 +406,56 @@ export async function setTaskArchivedAction(id: string, archived: boolean): Prom
     return { ok: true };
   } catch {
     return { ok: false };
+  }
+}
+
+/**
+ * The reliable OFF switch for a background agent — a single targeted UPDATE that
+ * bypasses the whole-workspace bundle save (which fails once a runaway agent has
+ * produced thousands of tasks). Lets the founder always stop an agent.
+ */
+export async function setAgentBackgroundAction(agentId: string, enabled: boolean): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  try {
+    await setAgentBackgroundForUser(ws, agentId, enabled);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Bulk-delete tasks by id (targeted + chunked). Clears a runaway backlog without
+ *  the doomed whole-bundle save. Returns how many were actually removed. */
+export async function bulkDeleteTasksAction(ids: string[]): Promise<{ ok: boolean; count: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, count: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, count: 0 };
+  try {
+    const count = await bulkDeleteTasksForUser(ws, ids);
+    return { ok: true, count };
+  } catch {
+    return { ok: false, count: 0 };
+  }
+}
+
+/** Bulk archive/unarchive tasks by id (targeted + chunked). Returns the count. */
+export async function bulkArchiveTasksAction(
+  ids: string[],
+  archived = true,
+): Promise<{ ok: boolean; count: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, count: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, count: 0 };
+  try {
+    const count = await bulkSetTasksArchivedForUser(ws, ids, archived);
+    return { ok: true, count };
+  } catch {
+    return { ok: false, count: 0 };
   }
 }
 

@@ -4,11 +4,13 @@ import { useState } from "react";
 import {
   Archive,
   ArrowUpDown,
+  CheckSquare,
   LayoutGrid,
   ListFilter,
   Plus,
   Rows3,
   Search,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,7 +26,7 @@ import {
   RISK_META,
   SORT_OPTIONS,
 } from "@/lib/constants";
-import { countReady } from "@/lib/filters";
+import { countReady, visibleTasks } from "@/lib/filters";
 import { cn } from "@/lib/cn";
 import type { Category, RiskLevel } from "@/lib/types";
 
@@ -36,10 +38,17 @@ const DUE_OPTIONS = [
 ] as const;
 
 export function TopBar() {
-  const { state, filters, setFilters, resetFilters } = useStore();
+  const { state, filters, setFilters, resetFilters, bulkArchiveTasks, bulkDeleteTasks } = useStore();
   const [createOpen, setCreateOpen] = useState(false);
 
   const ready = state ? countReady(state.tasks) : 0;
+
+  // The tasks matching the CURRENT filters — the target set for a bulk action.
+  // "Clear exactly what you see": filter to an agent (or status/category), then
+  // archive or delete the whole match in one click. This is how you dig out from
+  // a runaway backlog of thousands.
+  const bulkTargets = state ? visibleTasks(state.tasks, filters, Date.now()) : [];
+  const bulkIds = bulkTargets.map((t) => t.id);
 
   const activeCount =
     (filters.categories.length ? 1 : 0) +
@@ -254,6 +263,35 @@ export function TopBar() {
           className="hidden sm:inline-flex"
         />
 
+        {/* Bulk actions on the current filter selection */}
+        <Popover
+          align="end"
+          className="inline-flex"
+          trigger={
+            <span className="inline-flex h-9 items-center gap-2 rounded-lg border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
+              <CheckSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Bulk</span>
+            </span>
+          }
+          panelClassName="w-[268px]"
+        >
+          {(close) => (
+            <BulkPanel
+              ids={bulkIds}
+              showArchived={filters.showArchived}
+              scoped={hasChips}
+              onArchive={() => {
+                bulkArchiveTasks(bulkIds);
+                close();
+              }}
+              onDelete={() => {
+                bulkDeleteTasks(bulkIds);
+                close();
+              }}
+            />
+          )}
+        </Popover>
+
         {/* Archived toggle */}
         <button
           onClick={() => setFilters({ showArchived: !filters.showArchived })}
@@ -322,6 +360,77 @@ export function TopBar() {
       )}
 
       <CreateTaskDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+    </div>
+  );
+}
+
+/** The bulk-actions panel. Self-contained so its two-step delete confirmation
+ *  resets every time the popover reopens (the popover unmounts it on close). */
+function BulkPanel({
+  ids,
+  showArchived,
+  scoped,
+  onArchive,
+  onDelete,
+}: {
+  ids: string[];
+  showArchived: boolean;
+  scoped: boolean;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  const [confirm, setConfirm] = useState(false);
+  const n = ids.length;
+  const none = n === 0;
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-[13px] font-semibold">
+          {n} task{n === 1 ? "" : "s"} match{n === 1 ? "es" : ""} your filters
+        </p>
+        <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">
+          {scoped
+            ? "Actions apply to everything in the current filter."
+            : "Tip: filter by agent or status first to target a specific set — e.g. one agent's drafts."}
+        </p>
+      </div>
+
+      <div className="space-y-1">
+        {!showArchived && (
+          <button
+            disabled={none}
+            onClick={onArchive}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Archive className="h-4 w-4" />
+            Archive {n}
+          </button>
+        )}
+
+        {confirm ? (
+          <button
+            disabled={none}
+            onClick={onDelete}
+            className="flex w-full items-center gap-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-[13px] font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Trash2 className="h-4 w-4" />
+            Yes — delete {n} permanently
+          </button>
+        ) : (
+          <button
+            disabled={none}
+            onClick={() => setConfirm(true)}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete {n}…
+          </button>
+        )}
+        {confirm && (
+          <p className="px-2.5 text-[11px] text-muted-foreground">This can’t be undone.</p>
+        )}
+      </div>
     </div>
   );
 }

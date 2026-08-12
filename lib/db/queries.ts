@@ -854,6 +854,66 @@ export async function setTaskArchivedForUser(wsId: string, taskId: string, archi
     .where(and(eq(tasks.workspace_id, wsId), eq(tasks.id, taskId)));
 }
 
+/**
+ * Flip an agent's background flag with a single targeted UPDATE — the reliable
+ * OFF switch. This deliberately BYPASSES the whole-workspace bundle save (which
+ * exceeds the server-action body limit, and silently fails, once a runaway agent
+ * has produced thousands of tasks). A one-row write always lands, so the founder
+ * can always stop a background agent no matter how big the backlog has grown.
+ */
+export async function setAgentBackgroundForUser(wsId: string, agentId: string, enabled: boolean): Promise<void> {
+  await db
+    .update(agents)
+    .set({ background_enabled: enabled })
+    .where(and(eq(agents.workspace_id, wsId), eq(agents.id, agentId)));
+}
+
+/** Split a list into fixed-size chunks (keeps bulk SQL statements bounded). */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Bulk-delete tasks by id (workspace-scoped, chunked). Child rows (assets,
+ * decisions, runs) cascade on the FK. Targeted + chunked so it clears a runaway
+ * backlog of thousands without the doomed whole-bundle save. Returns the number
+ * of task rows actually removed.
+ */
+export async function bulkDeleteTasksForUser(wsId: string, ids: string[]): Promise<number> {
+  if (!ids.length) return 0;
+  let removed = 0;
+  for (const part of chunk(ids, 400)) {
+    const rows = await db
+      .delete(tasks)
+      .where(and(eq(tasks.workspace_id, wsId), inArray(tasks.id, part)))
+      .returning({ id: tasks.id });
+    removed += rows.length;
+  }
+  return removed;
+}
+
+/** Bulk archive/unarchive tasks by id (workspace-scoped, chunked). Returns count. */
+export async function bulkSetTasksArchivedForUser(
+  wsId: string,
+  ids: string[],
+  archived: boolean,
+): Promise<number> {
+  if (!ids.length) return 0;
+  let changed = 0;
+  const now = new Date();
+  for (const part of chunk(ids, 400)) {
+    const rows = await db
+      .update(tasks)
+      .set({ archived, updated_at: now })
+      .where(and(eq(tasks.workspace_id, wsId), inArray(tasks.id, part)))
+      .returning({ id: tasks.id });
+    changed += rows.length;
+  }
+  return changed;
+}
+
 /* --------------------------------- notes -------------------------------- */
 
 function toNote(r: typeof notes.$inferSelect): Note {

@@ -15,6 +15,8 @@ import { createSeedState } from "./seed";
 import { makeId } from "./format";
 import { hasSupabaseClientEnv } from "./config";
 import {
+  bulkArchiveTasksAction,
+  bulkDeleteTasksAction,
   connectStripeAction,
   createTaskAction,
   deleteTaskAction,
@@ -29,6 +31,7 @@ import {
   runTaskAction,
   approveScheduledPostAction,
   scheduleTaskAction,
+  setAgentBackgroundAction,
   setTaskArchivedAction,
   unscheduleTaskAction,
   saveWorkspace,
@@ -162,6 +165,10 @@ interface StoreContext {
   unarchiveTask: (id: string) => void;
   /** Bulk-archive every done task (clear the Done column). */
   archiveDone: () => void;
+  /** Bulk-archive an explicit set of tasks (e.g. everything in the current filter). */
+  bulkArchiveTasks: (ids: string[]) => void;
+  /** Bulk-delete an explicit set of tasks (clear a runaway backlog for good). */
+  bulkDeleteTasks: (ids: string[]) => void;
   snooze: (id: string) => void;
   /** Approve now, but auto-execute at `whenISO`. `label` is the time shown in
    *  the user's timezone (for toasts + the activity log). */
@@ -917,11 +924,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ...prev,
       tasks: prev.tasks.map((t) => (t.status === "done" && !t.archived ? { ...t, archived: true } : t)),
     }));
+    // Persist the archive immediately with a targeted bulk write — the debounced
+    // bundle save can't be trusted at scale (this is exactly the runaway case).
+    if (serverMode && n) {
+      const ids = (snap?.tasks ?? []).filter((t) => t.status === "done" && !t.archived).map((t) => t.id);
+      void bulkArchiveTasksAction(ids, true);
+    }
     pushToast({
       tone: n ? "success" : "info",
       title: n ? `Archived ${n} done task${n === 1 ? "" : "s"}` : "No done tasks to archive",
     });
-  }, [patchState, pushToast]);
+  }, [patchState, pushToast, serverMode]);
+
+  // Bulk-archive an explicit set of tasks (the board's "archive everything that
+  // matches the current filter"). Optimistic + a targeted, chunked server write
+  // that survives thousands of rows — the whole point of the runaway fix.
+  const bulkArchiveTasks = useCallback(
+    (ids: string[]) => {
+      if (!ids.length) return;
+      const set = new Set(ids);
+      patchState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((t) => (set.has(t.id) ? { ...t, archived: true } : t)),
+      }));
+      setSelectedTaskId((cur) => (cur && set.has(cur) ? null : cur));
+      if (serverMode)
+        void bulkArchiveTasksAction(ids, true).then((r) => {
+          if (!r.ok) pushToast({ tone: "error", title: "Couldn't archive some tasks" });
+        });
+      pushToast({ tone: "success", title: `Archived ${ids.length} task${ids.length === 1 ? "" : "s"}` });
+    },
+    [patchState, pushToast, serverMode],
+  );
+
+  // Bulk-delete an explicit set of tasks (clears a runaway backlog for good).
+  const bulkDeleteTasks = useCallback(
+    (ids: string[]) => {
+      if (!ids.length) return;
+      const set = new Set(ids);
+      patchState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => !set.has(t.id)),
+        decisions: prev.decisions.filter((d) => !set.has(d.task_id)),
+        runs: prev.runs.filter((r) => !set.has(r.task_id)),
+      }));
+      setSelectedTaskId((cur) => (cur && set.has(cur) ? null : cur));
+      if (serverMode)
+        void bulkDeleteTasksAction(ids).then((r) => {
+          if (!r.ok) pushToast({ tone: "error", title: "Couldn't delete some tasks" });
+        });
+      pushToast({ tone: "info", title: `Deleted ${ids.length} task${ids.length === 1 ? "" : "s"}` });
+    },
+    [patchState, pushToast, serverMode],
+  );
 
   const snooze = useCallback(
     (id: string) => {
@@ -1336,8 +1391,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         ...prev,
         agents: prev.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)),
       }));
+      // The background flag is the safety-critical one: persist it with a
+      // targeted one-row write that CAN'T fail on the body-size limit the way
+      // the whole-workspace bundle save does once a runaway agent has produced
+      // thousands of tasks. This is why the OFF switch always works.
+      if (serverMode && typeof patch.background_enabled === "boolean") {
+        void setAgentBackgroundAction(id, patch.background_enabled).then((r) => {
+          if (!r.ok) pushToast({ tone: "error", title: "Couldn't update the agent" });
+        });
+      }
     },
-    [patchState],
+    [patchState, serverMode, pushToast],
   );
 
   const deleteAgent = useCallback(
@@ -1644,6 +1708,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       archiveTask,
       unarchiveTask,
       archiveDone,
+      bulkArchiveTasks,
+      bulkDeleteTasks,
       snooze,
       scheduleTask,
       unscheduleTask,
@@ -1672,7 +1738,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [
       hydrated, state, loadError, loadServer, busyTaskId, selectedTaskId, filters, toasts, setFilters, resetFilters,
       applySavedView, dismissToast, approve, requestChanges, draftTask, workTask, reject,
-      deleteTask, archiveTask, unarchiveTask, archiveDone, snooze,
+      deleteTask, archiveTask, unarchiveTask, archiveDone, bulkArchiveTasks, bulkDeleteTasks, snooze,
       scheduleTask, unscheduleTask, reassign,
       moveTask, createTask, retry, connectIntegration, disconnectIntegration,
       setIntegrationMode, setAgentMode, createAgent, updateAgent, deleteAgent, runAgent, runTriage, runNotionTriage, sendToNotion, updateBrief, login, logout, enterDemo,

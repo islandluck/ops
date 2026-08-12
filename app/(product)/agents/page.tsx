@@ -8,6 +8,7 @@ import {
   FolderKanban,
   Inbox,
   NotebookText,
+  Pause,
   Play,
   Plus,
   Sparkles,
@@ -57,7 +58,7 @@ function Avatar({ agent, size = "md" }: { agent: { emoji: string; accent: string
 }
 
 export default function AgentsPage() {
-  const { state, runAgent, runTriage, runNotionTriage } = useStore();
+  const { state, runAgent, runTriage, runNotionTriage, updateAgent } = useStore();
   const [editing, setEditing] = useState<string | "new" | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [triaging, setTriaging] = useState(false);
@@ -133,7 +134,17 @@ export default function AgentsPage() {
                     : AUTONOMY_LABEL[a.permissions_mode]}
                 </Badge>
                 {a.background_enabled && (
-                  <Badge className="border-transparent bg-sky-50 text-sky-700">Background on</Badge>
+                  <button
+                    onClick={() => updateAgent(a.id, { background_enabled: false })}
+                    title="This agent runs on a schedule. Click to stop it running in the background."
+                    className="group/bg inline-flex items-center gap-1 rounded-full border border-transparent bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-700"
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-sky-500 group-hover/bg:bg-red-500" />
+                    <span className="group-hover/bg:hidden">Background on</span>
+                    <span className="hidden items-center gap-1 group-hover/bg:inline-flex">
+                      <Pause className="h-3 w-3" /> Stop
+                    </span>
+                  </button>
                 )}
                 <Badge className="border-transparent bg-muted text-muted-foreground">
                   <Folder className="h-3 w-3" /> {a.folder || "General"}
