@@ -6,6 +6,183 @@ commit hashes), the decisions behind it, and any follow-ups.
 
 ---
 
+## 2026-08-12
+
+Focus: **incident response** — root-caused and stopped a runaway background
+agent that flooded two live accounts with thousands of approval tasks, and
+shipped the bulk tools to dig out. Also finished **Command Center Phase 2**.
+
+### Shipped
+
+#### Runaway Social Media Agent — root-caused and fixed
+- `783876f` A three-part runaway on live accounts ("Billion Dollar Algorithms",
+  "Britney"): a background Social Media Agent produced thousands of approval
+  tasks and could not be turned off.
+  - **Cause 1 — no generation cap.** In approval mode the agent emitted
+    `x:3 + blog:1 = 4` tasks *every* cron tick; only the *autopilot* branch was
+    bounded (`AUTOPILOT_TARGET`). An hourly cron therefore added 4 tasks/hour
+    forever.
+  - **Cause 2 — the OFF switch rode the doomed bundle save.** Toggling "Work in
+    the background" off only persisted via the whole-workspace bundle save,
+    which serializes every task in one server action. Past Next's **1 MB**
+    server-action body limit (thousands of tasks) the save threw, so the toggle
+    never reached the DB and the cron kept feeding itself.
+  - **Cause 3 — no bulk clear.** Delete/archive were per-card only.
+  - **Fixes:** per-agent generation caps that top a bounded queue up then no-op
+    (social `APPROVAL_QUEUE_CAP = 6`; generic `BACKGROUND_DRAFT_CAP = 12`;
+    **background-only** — manual "Run now" is never capped); `setAgentBackgroundAction`,
+    a targeted one-row UPDATE that bypasses the bundle save, wired into
+    `store.updateAgent` and a one-click **Stop** on the agent card's
+    "Background on" badge; chunked, workspace-scoped **bulk delete/archive**
+    (FK-cascade) with a board **Bulk** menu that acts on the current filter set;
+    raised `serverActions.bodySizeLimit` to **8 MB** as defense-in-depth.
+
+#### Command Center — Phase 2 (Executive suggests goals + Deep Dive)
+- `853474d` **Suggest goals** — the Executive proposes 6–10 short,
+  business-specific goal bullets grounded in the brief, active projects, and the
+  founder's *current* goals (so it complements, not duplicates). A review panel
+  accepts/dismisses each; accepted ones drop into the first period's columns or
+  the horizons. Metered under the `goal-suggestions` operation. **Send to Deep
+  Dive** feeds the rendered goals into the Deep Dive pipeline so company
+  knowledge absorbs what the founder is aiming for.
+
+### Key decisions & lessons
+- **The whole-workspace bundle save is a scaling liability.** Any state edited
+  through the client store rides one server action that serializes every task;
+  past ~1 MB it throws and the edit *silently* fails to persist. Safety-critical
+  or scale-sensitive writes (settings, toggles, bulk ops) must be **targeted
+  one-row/one-set server actions**, never the bundle save.
+- **Bound the pipeline, not the cron.** A frequent scheduler is only safe if
+  each run tops a *bounded* queue up to a ceiling and then no-ops. Now applied to
+  both autopilot (the publish pipeline) and approval mode (the review queue).
+
+### Known issues / follow-ups
+- These fixes reach the two affected accounts on the next Vercel deploy (the
+  `bodySizeLimit` change needs a fresh build). Recovery per account: **Stop** the
+  agent, then **Bulk → Delete/Archive** filtered to that agent.
+- Optional follow-up: a per-workspace "Pause all background agents" master switch.
+
+---
+
+## 2026-08-11
+
+Focus: the **Command Center** goals workspace (first draft), a global **model
+cost lever**, and an Executive-chat polish.
+
+### Shipped
+
+#### Command Center — a user-authored goals workspace
+- `8f6fec9` `/command-center`: the founder's own goals across every timeline —
+  per-period **Monthly / Weekly / Daily / Parking** columns plus **Year / Future
+  / Moonshot** horizons. A reusable `BulletList` editor (checkbox → strikethrough,
+  one indent level, Enter = new / Tab = indent / Backspace-empty = delete),
+  client-authoritative debounced autosave, and **Update Executive** which pushes
+  the goals into Executive memory as one replaceable, pinned entry. New
+  `command_center` table (one JSON doc per workspace). Agents never write this
+  doc — it's the human's space.
+
+#### Model cost lever
+- `9a28730` Documented `ANTHROPIC_MODEL` as the global cost lever: flip one env
+  var to run every agent on a cheaper model (e.g. Haiku 4.5) with no code change.
+  The model resolves `process.env.ANTHROPIC_MODEL || "claude-opus-4-8"` across
+  the agent code.
+
+#### Executive chat — loading-state fix
+- `e108a8b` The starter-question buttons had a glitchy loading state (a stale
+  `sending` closure + a render gate tied to message count); Haiku's speed exposed
+  it. Added a synchronous `sendingRef` lock + a correct render gate so a fast
+  response can't leave the buttons clickable or double-fire.
+
+---
+
+## 2026-08-10
+
+Focus: a **production auth incident** (login + password reset 500s) and
+**per-workspace AI usage metering**.
+
+### Shipped
+
+#### Production auth 500 — root-caused (DOMMatrix)
+- `25496e7` Login and password reset returned a generic "something went wrong"
+  in production. Cause: `lib/deepdive/extract.ts` *statically* imported
+  `pdf-parse` (→ `pdfjs-dist`, which references the browser global `DOMMatrix`),
+  poisoning the shared server module graph that the auth actions live in — so the
+  auth path threw `ReferenceError: DOMMatrix is not defined` at module load.
+  Fix: **lazy-import** `pdf-parse`/`mammoth` inside `extractDocText`, plus
+  `serverExternalPackages: ["pdf-parse","pdfjs-dist","@napi-rs/canvas"]` in
+  `next.config.mjs`. Verified 0 `DOMMatrix` references in `.next/server`.
+- `7a634b1` Auth actions now surface + log the real failure cause instead of a
+  generic message.
+
+#### AI usage metering
+- `684129b` Per-workspace Claude token tracking to see which customers drive AI
+  cost. An `ai_usage` table + a `getAnthropic()` metered singleton whose custom
+  `fetch` records each `/v1/messages` `usage` payload, attributed via
+  AsyncLocalStorage (`runWithUsage(workspaceId, operation, fn)`). A gated
+  operator report at `/admin/usage` (allow-listed via `ADMIN_EMAILS`) ranks
+  workspaces by tokens + calls. Implemented with ~18 `new Anthropic()` →
+  `getAnthropic()` swaps and thin attribution wrappers — no call-site churn.
+
+---
+
+## 2026-08-09
+
+Focus: the **Email Manager** — a full, human-in-the-loop inbox operation — plus
+a sidebar cleanup.
+
+### Shipped
+
+#### Email Manager (Phases 1–3)
+- `174851d` **Phase 1** — the Admin agent reads and triages the inbox into
+  **editable draft replies** (with the user's signature + learned style), then
+  the user can **send / archive / trash**, always human-in-the-loop. New
+  `email_triage` table; needs the Gmail `gmail.modify` scope (reconnect).
+- `67b61ba` Filter the inbox to Gmail's **Primary + Updates** categories (skip
+  Promotions/Social) to cut API calls and declutter.
+- `5bb3095` **Phase 2** — an auto-triage **cadence** (cron sweep + settings), a
+  **"Check now"** button, and **bulk-send** of drafted replies.
+- `d883083` Surface triage results as a **Drafts review queue** (the "I triaged
+  44 emails but where are they?" fix).
+- `3922481` **Phase 3** — **batch archive** suggestions + **learn reply style
+  from sent mail**.
+
+#### Sidebar cleanup
+- `bb77acb` Group the primary nav into labeled sections.
+- `2be1a0b` Show the real workspace initial (not a hardcoded "N").
+
+---
+
+## 2026-08-06 (continued)
+
+Focus: execution honesty and reach, the **Reply Assistant**, real calendar
+events, and **Reset Account**. (The 2026-08-04 entry below already covers this
+day's earlier Notes work.)
+
+### Shipped
+
+#### Execution — honest, and acting on what a task needs
+- `14fe78f` A task now acts on the systems its intent implies **∩ the connected
+  integrations** (not an agent's whole allowlist), with an honest run status when
+  there's no connected system to act on, and the integration allowlists broadened.
+
+#### Reply Assistant
+- `61064ce` Draft a reply and open X's composer **pre-filled** for a one-click
+  manual post (X blocks programmatic replies to non-mentions, so the human posts).
+
+#### Calendar — write the real event
+- `eac8e71` `createCalendarEvent` now writes the **real** event from the task —
+  day, start time, duration, timezone, and recurrence — rather than an all-day
+  placeholder.
+
+#### Reset Account
+- `a806397` A full workspace **wipe + re-onboard**, behind a 3-gate
+  type-to-confirm Danger Zone.
+- `7e577d8` Start fresh workspaces with agents **idle and background off**, so a
+  reset board stays empty (fixes the Social Media Agent re-populating the board
+  after a reset via cron).
+
+---
+
 ## 2026-08-04
 
 Focus: made the **Projects** lifecycle reliable and fast, shipped the full
