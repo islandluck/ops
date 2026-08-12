@@ -3,8 +3,12 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityEvents, commandCenter, executiveMemory } from "@/lib/db/schema";
-import type { CommandCenterDoc, GoalItem } from "@/lib/types";
+import { activityEvents, commandCenter, executiveMemory, projects } from "@/lib/db/schema";
+import { getPlanningContext } from "@/lib/db/queries";
+import { runWithUsage } from "@/lib/ai/usage";
+import { proposeGoals } from "@/lib/ai/goals";
+import { startDeepDive } from "@/lib/agents/deepdive";
+import type { CommandCenterDoc, GoalItem, GoalSuggestion } from "@/lib/types";
 
 /**
  * Command Center — the user's own goals workspace. Get/save the free-form doc, and
@@ -116,4 +120,52 @@ export async function sendGoalsToExecutive(workspaceId: string): Promise<SendGoa
     created_at: now,
   });
   return { ok: true };
+}
+
+/* --------------------------- Executive suggestions ------------------------- */
+
+/** Ask the Executive to propose goals grounded in the brief, active projects, and the
+ *  founder's current goals (so it complements, not duplicates). The user accepts what they want. */
+export async function suggestGoals(
+  workspaceId: string,
+): Promise<{ ok: true; suggestions: GoalSuggestion[] } | { ok: false; error: string }> {
+  return runWithUsage(workspaceId, "goal-suggestions", async () => {
+    try {
+      const { brief } = await getPlanningContext(workspaceId);
+      const projectRows = await db
+        .select({ title: projects.title, kind: projects.kind })
+        .from(projects)
+        .where(and(eq(projects.workspace_id, workspaceId), eq(projects.status, "active")))
+        .limit(20);
+      const doc = await getCommandCenterDoc(workspaceId);
+      const suggestions = await proposeGoals({
+        company: brief.company_name ?? "",
+        context: [brief.business_description, brief.core_offer, brief.company_context]
+          .filter(Boolean)
+          .join(" ")
+          .slice(0, 1500),
+        projects: projectRows.map((p) => `${p.title} (${p.kind})`).join("; ").slice(0, 800),
+        currentGoals: renderGoalsMarkdown(doc).slice(0, 2000),
+      });
+      return { ok: true as const, suggestions };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't suggest goals." };
+    }
+  });
+}
+
+/* ------------------------------ Deep Dive artifact ------------------------- */
+
+/** Feed the current goals into the Deep Dive pipeline as a text source, so company
+ *  knowledge absorbs what the founder is aiming for. */
+export async function sendGoalsToDeepDive(
+  workspaceId: string,
+): Promise<{ ok: boolean; error?: string; id?: string }> {
+  const doc = await getCommandCenterDoc(workspaceId);
+  const md = renderGoalsMarkdown(doc);
+  if (!md) return { ok: false, error: "Add some goals first, then send them to Deep Dive." };
+  const res = await startDeepDive(workspaceId, "Company Goals — Command Center", [
+    { kind: "text", title: "Command Center goals", text: md },
+  ]);
+  return { ok: res.ok, error: res.error, id: res.deepDive?.id };
 }

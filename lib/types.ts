@@ -750,6 +750,15 @@ export interface CommandCenterDoc {
   horizons: CommandCenterHorizons;
 }
 
+/** Where a suggested goal lands: a grid column (of the current period) or a horizon. */
+export type GoalTarget = "monthly" | "weekly" | "daily" | "parking" | "year" | "future" | "moonshot";
+
+/** An Executive-proposed goal the user can accept into the Command Center. */
+export interface GoalSuggestion {
+  target: GoalTarget;
+  text: string;
+}
+
 /** A durable thing the Executive Agent knows about the business. */
 export interface ExecMemory {
   id: string;

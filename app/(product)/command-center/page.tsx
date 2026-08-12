@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, IndentIncrease, Loader2, Plus, Send, Trash2, X } from "lucide-react";
+import { Check, IndentIncrease, Loader2, Plus, Send, Sparkles, Telescope, Trash2, X } from "lucide-react";
+import Link from "next/link";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,9 +10,18 @@ import { cn } from "@/lib/cn";
 import {
   getCommandCenterAction,
   saveCommandCenterAction,
+  sendGoalsToDeepDiveAction,
   sendGoalsToExecutiveAction,
+  suggestGoalsAction,
 } from "@/app/actions";
-import type { CommandCenterDoc, CommandCenterHorizons, GoalItem, GoalPeriod } from "@/lib/types";
+import type {
+  CommandCenterDoc,
+  CommandCenterHorizons,
+  GoalItem,
+  GoalPeriod,
+  GoalSuggestion,
+  GoalTarget,
+} from "@/lib/types";
 
 type ColKey = "monthly" | "weekly" | "daily" | "parking";
 const COLUMNS: { key: ColKey; label: string }[] = [
@@ -26,6 +36,25 @@ const HORIZONS: { key: keyof CommandCenterHorizons; label: string; hint: string;
   { key: "future", label: "Future Goals", hint: "2–3 years out", border: "border-indigo-200", text: "text-indigo-700" },
   { key: "moonshot", label: "Moonshot Goals", hint: "the dream", border: "border-violet-200", text: "text-violet-700" },
 ];
+
+const TARGET_LABEL: Record<GoalTarget, string> = {
+  monthly: "Monthly",
+  weekly: "Weekly",
+  daily: "Daily",
+  parking: "Parking",
+  year: "Year",
+  future: "Future",
+  moonshot: "Moonshot",
+};
+const TARGET_BADGE: Record<GoalTarget, string> = {
+  monthly: "bg-sky-100 text-sky-700",
+  weekly: "bg-emerald-100 text-emerald-700",
+  daily: "bg-amber-100 text-amber-700",
+  parking: "bg-slate-100 text-slate-600",
+  year: "bg-sky-100 text-sky-700",
+  future: "bg-indigo-100 text-indigo-700",
+  moonshot: "bg-violet-100 text-violet-700",
+};
 
 const uid = () => (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `id-${Math.random()}`);
 const newPeriod = (): GoalPeriod => ({ id: uid(), label: "New period", monthly: [], weekly: [], daily: [], parking: [] });
@@ -42,6 +71,10 @@ export default function CommandCenterPage() {
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [sendState, setSendState] = useState<"idle" | "busy" | "done">("idle");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState<GoalSuggestion[] | null>(null);
+  const [accepted, setAccepted] = useState<Set<number>>(new Set());
+  const [deepDiveState, setDeepDiveState] = useState<"idle" | "busy" | "done">("idle");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -81,17 +114,96 @@ export default function CommandCenterPage() {
   const setHorizon = (key: keyof CommandCenterHorizons, items: GoalItem[]) =>
     mutate((d) => ({ ...d, horizons: { ...d.horizons, [key]: items } }));
 
+  // Flush the debounced save so on-command actions read the latest goals.
+  async function flushSave() {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (docRef.current) {
+      await saveCommandCenterAction(docRef.current);
+      setSaveState("saved");
+    }
+  }
+
   async function sendToExec() {
     if (sendState === "busy") return;
     setSendState("busy");
     setError("");
-    // Flush the pending save so the Executive reads the latest goals.
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    if (docRef.current) await saveCommandCenterAction(docRef.current);
-    setSaveState("saved");
+    await flushSave();
     const r = await sendGoalsToExecutiveAction();
     setSendState(r.ok ? "done" : "idle");
     if (!r.ok) setError(r.error ?? "Couldn't send to the Executive.");
+  }
+
+  async function suggest() {
+    if (suggesting) return;
+    setSuggesting(true);
+    setError("");
+    setSuggestions(null);
+    await flushSave(); // so suggestions consider the latest goals + avoid duplicates
+    const r = await suggestGoalsAction();
+    setSuggesting(false);
+    if (!r.ok) {
+      setError(r.error ?? "Couldn't get suggestions.");
+      return;
+    }
+    if (!r.suggestions.length) {
+      setError("No new goals to suggest right now — you're well set.");
+      return;
+    }
+    setSuggestions(r.suggestions);
+    setAccepted(new Set(r.suggestions.map((_, i) => i)));
+  }
+
+  function toggleAccept(i: number) {
+    setAccepted((prev) => {
+      const n = new Set(prev);
+      if (n.has(i)) n.delete(i);
+      else n.add(i);
+      return n;
+    });
+  }
+
+  function addSuggestions() {
+    if (!suggestions) return;
+    const chosen = suggestions.filter((_, i) => accepted.has(i));
+    if (!chosen.length) {
+      setSuggestions(null);
+      return;
+    }
+    mutate((d) => {
+      const periods = d.periods.length ? d.periods : [newPeriod()];
+      const first: GoalPeriod = {
+        ...periods[0],
+        monthly: [...periods[0].monthly],
+        weekly: [...periods[0].weekly],
+        daily: [...periods[0].daily],
+        parking: [...periods[0].parking],
+      };
+      const horizons: CommandCenterHorizons = {
+        year: [...d.horizons.year],
+        future: [...d.horizons.future],
+        moonshot: [...d.horizons.moonshot],
+      };
+      for (const s of chosen) {
+        const item: GoalItem = { id: uid(), text: s.text, done: false, indent: 0 };
+        if (s.target === "monthly" || s.target === "weekly" || s.target === "daily" || s.target === "parking") {
+          first[s.target].push(item);
+        } else {
+          horizons[s.target].push(item);
+        }
+      }
+      return { ...d, periods: [first, ...periods.slice(1)], horizons };
+    });
+    setSuggestions(null);
+  }
+
+  async function sendToDeepDive() {
+    if (deepDiveState === "busy") return;
+    setDeepDiveState("busy");
+    setError("");
+    await flushSave();
+    const r = await sendGoalsToDeepDiveAction();
+    setDeepDiveState(r.ok ? "done" : "idle");
+    if (!r.ok) setError(r.error ?? "Couldn't send to Deep Dive.");
   }
 
   return (
@@ -100,10 +212,29 @@ export default function CommandCenterPage() {
         title="Command Center"
         description="Your goals across every timeline — monthly, weekly, daily, and the big horizons. This space is yours to write; the Executive reads it on command."
         actions={
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center justify-end gap-2.5">
             <span className="text-[11px] text-muted-foreground">
               {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : ""}
             </span>
+            <Button size="sm" variant="outline" disabled={suggesting || !doc} onClick={suggest}>
+              {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {suggesting ? "Thinking…" : "Suggest goals"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={deepDiveState === "busy" || !doc}
+              onClick={sendToDeepDive}
+            >
+              {deepDiveState === "busy" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : deepDiveState === "done" ? (
+                <Check className="h-4 w-4" />
+              ) : (
+                <Telescope className="h-4 w-4" />
+              )}
+              {deepDiveState === "done" ? "Sent to Deep Dive" : "Send to Deep Dive"}
+            </Button>
             <Button
               size="sm"
               variant={sendState === "done" ? "outline" : undefined}
@@ -135,6 +266,74 @@ export default function CommandCenterPage() {
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-700">
                 {error}
               </div>
+            )}
+
+            {deepDiveState === "done" && (
+              <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-[12.5px] text-violet-800">
+                <Telescope className="h-4 w-4 shrink-0" />
+                <span>
+                  Your goals are being absorbed into company knowledge.{" "}
+                  <Link href="/deep-dive" className="font-semibold underline underline-offset-2">
+                    Open Deep Dive
+                  </Link>{" "}
+                  to watch it process.
+                </span>
+              </div>
+            )}
+
+            {suggestions && (
+              <Card className="border-primary/30 bg-primary/[0.03] p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  <p className="text-[13px] font-semibold">
+                    The Executive suggests {suggestions.length} goal{suggestions.length === 1 ? "" : "s"}
+                  </p>
+                  <span className="text-[11.5px] text-muted-foreground">— uncheck any you don't want</span>
+                </div>
+                <div className="space-y-1">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      onClick={() => toggleAccept(i)}
+                      className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-muted/50"
+                    >
+                      <span
+                        className={cn(
+                          "mt-[1px] flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
+                          accepted.has(i) ? "border-primary bg-primary text-white" : "border-border",
+                        )}
+                      >
+                        {accepted.has(i) ? <Check className="h-3 w-3" /> : null}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 rounded px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide",
+                          TARGET_BADGE[s.target],
+                        )}
+                      >
+                        {TARGET_LABEL[s.target]}
+                      </span>
+                      <span
+                        className={cn(
+                          "flex-1 text-[13px] leading-snug",
+                          !accepted.has(i) && "text-muted-foreground line-through",
+                        )}
+                      >
+                        {s.text}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Button size="sm" disabled={accepted.size === 0} onClick={addSuggestions}>
+                    <Plus className="h-4 w-4" />
+                    Add {accepted.size} to my goals
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setSuggestions(null)}>
+                    Dismiss
+                  </Button>
+                </div>
+              </Card>
             )}
 
             {/* Period grid */}

@@ -100,7 +100,9 @@ import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/rep
 import {
   getCommandCenterDoc,
   saveCommandCenterDoc,
+  sendGoalsToDeepDive,
   sendGoalsToExecutive,
+  suggestGoals,
 } from "@/lib/agents/command-center";
 import { runNotionTriage, type NotionTriageResult } from "@/lib/agents/notion-triage";
 import { approveScheduledPost, scheduleTask, unscheduleTask } from "@/lib/agents/schedule";
@@ -1937,6 +1939,24 @@ export async function sendGoalsToExecutiveAction() {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return sendGoalsToExecutive(ws);
+}
+
+/** Ask the Executive to propose goals from the business context (user accepts what they want). */
+export async function suggestGoalsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return suggestGoals(ws);
+}
+
+/** Send the current goals into the Deep Dive pipeline as a source (updates company knowledge). */
+export async function sendGoalsToDeepDiveAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return sendGoalsToDeepDive(ws);
 }
 
 /** Export a document to Notion (creates a page under a shared Notion page). */
