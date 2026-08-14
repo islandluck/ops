@@ -71,3 +71,56 @@ export async function composeOutbound(input: {
     body: str(parsed.body),
   };
 }
+
+/**
+ * Refine an already-drafted email per a short instruction ("make it warmer",
+ * "shorter", "more formal", or free text). Operates on the message WITHOUT the
+ * signature (the engine strips it first and re-appends it), so the signature is
+ * never mangled. Never invents facts.
+ */
+export async function refineOutbound(input: {
+  subject: string;
+  message: string;
+  instruction: string;
+  company: string;
+  replyStyle: string;
+}): Promise<{ subject: string; body: string }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Email drafting isn't configured (ANTHROPIC_API_KEY missing).");
+
+  const client = getAnthropic();
+  const system = [
+    `You are editing an outbound email for ${input.company || "the company"} in the founder's voice.`,
+    input.replyStyle ? `Baseline tone and style: ${input.replyStyle}` : "",
+    "Apply the requested change while preserving the email's intent and any concrete facts. Keep it truthful — never invent facts, meetings, dates, numbers, links, or names.",
+    "Do NOT add a signature, the sender's name, title, or contact details — those are appended automatically.",
+    'Respond with ONLY JSON, no markdown fences: {"subject": string, "body": string}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const user = `Requested change: ${input.instruction}\n\nCurrent subject: ${input.subject}\n\nCurrent email:\n${input.message}`;
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1200,
+    system,
+    messages: [{ role: "user", content: user.slice(0, 6000) }],
+  });
+
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("The model didn't return a usable draft.");
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    throw new Error("Couldn't parse the refined email.");
+  }
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return {
+    subject: str(parsed.subject).slice(0, 300) || input.subject,
+    body: str(parsed.body) || input.message,
+  };
+}

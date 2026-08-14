@@ -722,6 +722,15 @@ export interface EmailBody {
 export type RecipientSource = "explicit" | "hubspot" | "gmail" | "manual" | "none";
 export type OutboundDraftStatus = "draft" | "sending" | "sent" | "failed";
 
+/** A possible recipient the resolver found — the user can pick among these when a
+ *  name matches more than one contact. */
+export interface RecipientCandidate {
+  email: string;
+  name: string;
+  source: RecipientSource;
+  context?: string;
+}
+
 /** An AI-drafted outbound email awaiting the founder's review + one-click send. */
 export interface OutboundDraft {
   id: string;
@@ -729,6 +738,7 @@ export interface OutboundDraft {
   recipient_name: string;
   to_email: string;
   recipient_source: RecipientSource;
+  candidates: RecipientCandidate[];
   subject: string;
   body: string;
   status: OutboundDraftStatus;

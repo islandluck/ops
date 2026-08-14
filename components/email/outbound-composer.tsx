@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, Loader2, Send, Sparkles, Trash2, X } from "lucide-react";
+import { ChevronDown, Loader2, RotateCcw, Send, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
@@ -10,10 +10,12 @@ import {
   composeOutboundDraftsAction,
   discardOutboundDraftAction,
   listOutboundDraftsAction,
+  refineOutboundDraftAction,
+  regenerateOutboundDraftAction,
   sendOutboundDraftAction,
   updateOutboundDraftAction,
 } from "@/app/actions";
-import type { OutboundDraft, RecipientSource } from "@/lib/types";
+import type { OutboundDraft, RecipientCandidate, RecipientSource } from "@/lib/types";
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
@@ -32,6 +34,13 @@ const SOURCE_STYLE: Record<RecipientSource, string> = {
   none: "bg-amber-100 text-amber-800",
 };
 
+const REFINEMENTS: { label: string; instruction: string }[] = [
+  { label: "Warmer", instruction: "Make it warmer and more personable." },
+  { label: "Shorter", instruction: "Make it shorter and more concise." },
+  { label: "More formal", instruction: "Make it more formal and professional." },
+  { label: "More direct", instruction: "Make it more direct and to the point." },
+];
+
 const PLACEHOLDER = `Send Jane at Acme a follow-up about our meeting
 Email the Gates Foundation to gauge interest in our grant
 Email Marcus to ask for an intro to his design lead`;
@@ -44,6 +53,7 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [refiningId, setRefiningId] = useState<string | null>(null);
   const [bulkSending, setBulkSending] = useState(false);
 
   useEffect(() => {
@@ -80,10 +90,35 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   }
 
-  // Persist an edited field on blur (also marks the recipient "manual" when the address changes).
   async function persist(id: string, patch: { to_email?: string; subject?: string; body?: string }) {
     await updateOutboundDraftAction(id, patch);
     if (patch.to_email !== undefined) patchLocal(id, { recipient_source: "manual" });
+  }
+
+  // Pick one of the resolved candidates — keep its true source (from HubSpot / Gmail).
+  function pickRecipient(id: string, cand: RecipientCandidate) {
+    patchLocal(id, { to_email: cand.email, recipient_source: cand.source });
+    void updateOutboundDraftAction(id, { to_email: cand.email });
+  }
+
+  async function refine(id: string, instruction: string) {
+    if (refiningId) return;
+    setRefiningId(id);
+    setError("");
+    const r = await refineOutboundDraftAction(id, instruction);
+    setRefiningId(null);
+    if (r.ok) patchLocal(id, { subject: r.draft.subject, body: r.draft.body, status: "draft", error: "" });
+    else setError(r.error ?? "Couldn't refine.");
+  }
+
+  async function regenerate(id: string) {
+    if (refiningId) return;
+    setRefiningId(id);
+    setError("");
+    const r = await regenerateOutboundDraftAction(id);
+    setRefiningId(null);
+    if (r.ok) patchLocal(id, { subject: r.draft.subject, body: r.draft.body, status: "draft", error: "" });
+    else setError(r.error ?? "Couldn't regenerate.");
   }
 
   async function send(id: string) {
@@ -193,8 +228,12 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
                 key={d.id}
                 draft={d}
                 busy={busyId === d.id}
+                refining={refiningId === d.id}
                 onLocal={(patch) => patchLocal(d.id, patch)}
                 onPersist={(patch) => persist(d.id, patch)}
+                onPick={(cand) => pickRecipient(d.id, cand)}
+                onRefine={(instruction) => refine(d.id, instruction)}
+                onRegenerate={() => regenerate(d.id)}
                 onSend={() => send(d.id)}
                 onDiscard={() => discard(d.id)}
               />
@@ -209,28 +248,47 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
 function DraftCard({
   draft,
   busy,
+  refining,
   onLocal,
   onPersist,
+  onPick,
+  onRefine,
+  onRegenerate,
   onSend,
   onDiscard,
 }: {
   draft: OutboundDraft;
   busy: boolean;
+  refining: boolean;
   onLocal: (patch: Partial<OutboundDraft>) => void;
   onPersist: (patch: { to_email?: string; subject?: string; body?: string }) => void;
+  onPick: (cand: RecipientCandidate) => void;
+  onRefine: (instruction: string) => void;
+  onRegenerate: () => void;
   onSend: () => void;
   onDiscard: () => void;
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [custom, setCustom] = useState("");
   const validTo = EMAIL_RE.test(draft.to_email);
   const failed = draft.status === "failed";
+  const otherCandidates = draft.candidates.filter((c) => c.email.toLowerCase() !== draft.to_email.toLowerCase());
+  const hasChoices = draft.candidates.length > 1 || (draft.candidates.length >= 1 && otherCandidates.length >= 1);
+
+  function submitCustom() {
+    const c = custom.trim();
+    if (!c) return;
+    setCustom("");
+    setCustomOpen(false);
+    onRefine(c);
+  }
 
   return (
     <div className={cn("rounded-lg border bg-card p-3", failed ? "border-red-200" : "border-border")}>
-      {draft.intent && (
-        <p className="mb-2 text-[11px] italic text-muted-foreground">“{draft.intent}”</p>
-      )}
+      {draft.intent && <p className="mb-2 text-[11px] italic text-muted-foreground">“{draft.intent}”</p>}
 
-      {/* To + source */}
+      {/* To + source + candidate picker */}
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-medium text-muted-foreground">To</span>
         <Input
@@ -238,7 +296,7 @@ function DraftCard({
           onChange={(e) => onLocal({ to_email: e.target.value })}
           onBlur={(e) => onPersist({ to_email: e.target.value })}
           placeholder={draft.recipient_name ? `${draft.recipient_name}'s email…` : "recipient@email.com"}
-          className={cn("h-8 max-w-[280px] flex-1 text-[12.5px]", !validTo && "border-amber-300")}
+          className={cn("h-8 max-w-[260px] flex-1 text-[12.5px]", !validTo && "border-amber-300")}
         />
         <span
           className={cn(
@@ -248,6 +306,37 @@ function DraftCard({
         >
           {validTo ? SOURCE_LABEL[draft.recipient_source] : SOURCE_LABEL.none}
         </span>
+        {hasChoices && (
+          <div className="relative">
+            <button
+              onClick={() => setPickerOpen((v) => !v)}
+              className="inline-flex items-center gap-0.5 rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+            >
+              {draft.candidates.length} match{draft.candidates.length === 1 ? "" : "es"}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {pickerOpen && (
+              <div className="absolute z-20 mt-1 w-[260px] rounded-lg border border-border bg-popover p-1 shadow-elevated">
+                {draft.candidates.map((c, i) => (
+                  <button
+                    key={`${c.email}-${i}`}
+                    onClick={() => {
+                      onPick(c);
+                      setPickerOpen(false);
+                    }}
+                    className="flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left hover:bg-muted"
+                  >
+                    <span className="text-[12.5px] font-medium">{c.name || c.email}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {c.email}
+                      {c.context ? ` · ${c.context}` : ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Subject */}
@@ -260,13 +349,67 @@ function DraftCard({
       />
 
       {/* Body */}
-      <Textarea
-        value={draft.body}
-        onChange={(e) => onLocal({ body: e.target.value })}
-        onBlur={(e) => onPersist({ body: e.target.value })}
-        rows={6}
-        className="text-[12.5px] leading-relaxed"
-      />
+      <div className="relative">
+        <Textarea
+          value={draft.body}
+          onChange={(e) => onLocal({ body: e.target.value })}
+          onBlur={(e) => onPersist({ body: e.target.value })}
+          rows={6}
+          className="text-[12.5px] leading-relaxed"
+        />
+        {refining && (
+          <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-card/70 text-[12px] text-muted-foreground">
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> Refining…
+          </div>
+        )}
+      </div>
+
+      {/* Refine toolbar */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+          <Wand2 className="h-3.5 w-3.5" /> Refine:
+        </span>
+        {REFINEMENTS.map((r) => (
+          <button
+            key={r.label}
+            disabled={refining}
+            onClick={() => onRefine(r.instruction)}
+            className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            {r.label}
+          </button>
+        ))}
+        <button
+          disabled={refining}
+          onClick={onRegenerate}
+          title="Redraft from your original instruction"
+          className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+        >
+          <RotateCcw className="h-3 w-3" /> Regenerate
+        </button>
+        <button
+          disabled={refining}
+          onClick={() => setCustomOpen((v) => !v)}
+          className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+        >
+          Refine…
+        </button>
+      </div>
+      {customOpen && (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <Input
+            value={custom}
+            onChange={(e) => setCustom(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submitCustom()}
+            placeholder="e.g. mention we met at the conference, keep it under 4 sentences"
+            className="h-8 flex-1 text-[12px]"
+            autoFocus
+          />
+          <Button size="sm" variant="outline" disabled={refining || !custom.trim()} onClick={submitCustom}>
+            Apply
+          </Button>
+        </div>
+      )}
 
       {failed && draft.error && <p className="mt-1.5 text-[11.5px] text-red-600">{draft.error}</p>}
 

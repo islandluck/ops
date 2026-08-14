@@ -63,6 +63,7 @@ import type {
   Priority,
   ProjectPlan,
   ProjectStatus,
+  RecipientCandidate,
   RiskLevel,
   SourceDistillation,
   TaskStatus,
@@ -341,6 +342,8 @@ export const outboundDrafts = pgTable(
     to_email: text("to_email").notNull().default(""),
     // How the address was found: explicit | hubspot | gmail | manual | none.
     recipient_source: text("recipient_source").notNull().default("none"),
+    // Other addresses the resolver found for this name (the user can pick among them).
+    candidates: jsonb("candidates").$type<RecipientCandidate[]>(),
     subject: text("subject").notNull().default(""),
     body: text("body").notNull().default(""),
     // Lifecycle: draft | sending | sent | failed.

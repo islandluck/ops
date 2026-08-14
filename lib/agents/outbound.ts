@@ -8,9 +8,9 @@ import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { sendGmail } from "@/lib/integrations/google";
 import { executionKilled } from "@/lib/integrations/guardrails";
 import { runWithUsage } from "@/lib/ai/usage";
-import { composeOutbound } from "@/lib/ai/compose";
-import { resolveRecipient } from "./recipient";
-import type { OutboundDraft, OutboundDraftStatus, RecipientSource } from "@/lib/types";
+import { composeOutbound, refineOutbound } from "@/lib/ai/compose";
+import { resolveRecipientCandidates } from "./recipient";
+import type { OutboundDraft, OutboundDraftStatus, RecipientCandidate, RecipientSource } from "@/lib/types";
 
 /**
  * The Email Manager's AI Outbound Composer. Turns short natural-language asks
@@ -28,6 +28,40 @@ function iso(d: Date | null | undefined): string {
   return d ? new Date(d).toISOString() : "";
 }
 
+/** The founder's brand + email context that grounds every compose/refine call. */
+async function loadComposeContext(workspaceId: string): Promise<{
+  company: string;
+  context: string;
+  replyStyle: string;
+  signature: string;
+}> {
+  const [b] = await db
+    .select({
+      company: businessBriefs.company_name,
+      desc: businessBriefs.business_description,
+      offer: businessBriefs.core_offer,
+      signature: businessBriefs.email_signature,
+      reply_style: businessBriefs.email_reply_style,
+    })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  return {
+    company: b?.company ?? "",
+    context: [b?.desc, b?.offer].filter(Boolean).join(" ").slice(0, 1200),
+    replyStyle: b?.reply_style ?? "",
+    signature: (b?.signature ?? "").trim(),
+  };
+}
+
+/** Remove a known trailing signature so a refine edits only the message. */
+function stripSignature(body: string, signature: string): string {
+  if (!signature) return body;
+  const b = body.trimEnd();
+  const s = signature.trim();
+  return b.endsWith(s) ? b.slice(0, b.length - s.length).trimEnd() : body;
+}
+
 function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
   return {
     id: r.id,
@@ -35,6 +69,7 @@ function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
     recipient_name: r.recipient_name,
     to_email: r.to_email,
     recipient_source: r.recipient_source as RecipientSource,
+    candidates: (r.candidates ?? []) as RecipientCandidate[],
     subject: r.subject,
     body: r.body,
     status: r.status as OutboundDraftStatus,
@@ -54,21 +89,7 @@ export async function composeOutboundDrafts(
   if (!clean.length) return { ok: false, error: "Write at least one instruction (one per line)." };
 
   return runWithUsage(workspaceId, "outbound-compose", async () => {
-    const [b] = await db
-      .select({
-        company: businessBriefs.company_name,
-        desc: businessBriefs.business_description,
-        offer: businessBriefs.core_offer,
-        signature: businessBriefs.email_signature,
-        reply_style: businessBriefs.email_reply_style,
-      })
-      .from(businessBriefs)
-      .where(eq(businessBriefs.workspace_id, workspaceId))
-      .limit(1);
-    const company = b?.company ?? "";
-    const context = [b?.desc, b?.offer].filter(Boolean).join(" ").slice(0, 1200);
-    const replyStyle = b?.reply_style ?? "";
-    const signature = (b?.signature ?? "").trim();
+    const { company, context, replyStyle, signature } = await loadComposeContext(workspaceId);
     const now = new Date();
 
     const rows = await Promise.all(
@@ -83,13 +104,18 @@ export async function composeOutboundDrafts(
         };
         try {
           const composed = await composeOutbound({ intent, company, context, replyStyle });
-          const rec = await resolveRecipient(workspaceId, composed.recipient_name, composed.recipient_email);
+          const { primary, candidates } = await resolveRecipientCandidates(
+            workspaceId,
+            composed.recipient_name,
+            composed.recipient_email,
+          );
           const body = signature ? `${composed.body.trimEnd()}\n\n${signature}` : composed.body;
           return {
             ...base,
             recipient_name: composed.recipient_name,
-            to_email: rec.email,
-            recipient_source: rec.source,
+            to_email: primary.email,
+            recipient_source: primary.source,
+            candidates,
             subject: composed.subject,
             body,
             status: "draft" as OutboundDraftStatus,
@@ -101,6 +127,7 @@ export async function composeOutboundDrafts(
             recipient_name: "",
             to_email: "",
             recipient_source: "none" as RecipientSource,
+            candidates: [] as RecipientCandidate[],
             subject: "",
             body: "",
             status: "failed" as OutboundDraftStatus,
@@ -213,6 +240,83 @@ export async function bulkSendOutboundDrafts(
     else failed += 1;
   }
   return { ok: true, sent, failed };
+}
+
+/** Refine a draft in place per a short instruction (warmer / shorter / custom).
+ *  Edits the message only; the signature is stripped and re-appended cleanly. */
+export async function refineOutboundDraft(
+  workspaceId: string,
+  id: string,
+  instruction: string,
+): Promise<{ ok: true; draft: OutboundDraft } | { ok: false; error: string }> {
+  const inst = instruction.trim();
+  if (!inst) return { ok: false, error: "Tell the agent how to change it." };
+  const [row] = await db
+    .select()
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Draft not found." };
+
+  return runWithUsage(workspaceId, "outbound-refine", async () => {
+    const ctx = await loadComposeContext(workspaceId);
+    const message = stripSignature(row.body, ctx.signature);
+    let refined;
+    try {
+      refined = await refineOutbound({
+        subject: row.subject,
+        message,
+        instruction: inst,
+        company: ctx.company,
+        replyStyle: ctx.replyStyle,
+      });
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't refine this draft." };
+    }
+    const body = ctx.signature ? `${refined.body.trimEnd()}\n\n${ctx.signature}` : refined.body;
+    const [updated] = await db
+      .update(outboundDrafts)
+      .set({ subject: refined.subject, body, status: "draft", error: "", updated_at: new Date() })
+      .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+      .returning();
+    return { ok: true as const, draft: toDraft(updated) };
+  });
+}
+
+/** Re-draft a message from its original instruction (keeps the resolved recipient). */
+export async function regenerateOutboundDraft(
+  workspaceId: string,
+  id: string,
+): Promise<{ ok: true; draft: OutboundDraft } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Draft not found." };
+  if (!row.intent.trim()) return { ok: false, error: "No original instruction to regenerate from." };
+
+  return runWithUsage(workspaceId, "outbound-compose", async () => {
+    const ctx = await loadComposeContext(workspaceId);
+    let composed;
+    try {
+      composed = await composeOutbound({
+        intent: row.intent,
+        company: ctx.company,
+        context: ctx.context,
+        replyStyle: ctx.replyStyle,
+      });
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't regenerate this draft." };
+    }
+    const body = ctx.signature ? `${composed.body.trimEnd()}\n\n${ctx.signature}` : composed.body;
+    const [updated] = await db
+      .update(outboundDrafts)
+      .set({ subject: composed.subject, body, status: "draft", error: "", updated_at: new Date() })
+      .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+      .returning();
+    return { ok: true as const, draft: toDraft(updated) };
+  });
 }
 
 /** Discard a draft. */

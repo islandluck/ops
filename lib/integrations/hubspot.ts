@@ -455,13 +455,13 @@ export async function hsSearchContactByEmail(token: string, email: string): Prom
 }
 
 /**
- * Find a contact by (partial) name — the CRM address-book lookup for the Outbound
+ * Find contacts by (partial) name — the CRM address-book lookup for the Outbound
  * Composer. Two tokens ("Jane Doe") match firstname AND lastname; a single token
- * matches firstname OR lastname. Returns the best match with an email, or null.
+ * matches firstname OR lastname. Returns up to `limit` matches that have an email.
  */
-export async function hsSearchContactByName(token: string, name: string): Promise<HsContact | null> {
+export async function hsSearchContactsByName(token: string, name: string, limit = 5): Promise<HsContact[]> {
   const tokens = name.trim().split(/\s+/).filter(Boolean);
-  if (!tokens.length) return null;
+  if (!tokens.length) return [];
   const props = ["email", "firstname", "lastname", "company", "createdate", "notes_last_contacted", "lifecyclestage"];
   const filterGroups =
     tokens.length >= 2
@@ -478,12 +478,17 @@ export async function hsSearchContactByName(token: string, name: string): Promis
           { filters: [{ propertyName: "lastname", operator: "CONTAINS_TOKEN", value: tokens[0] }] },
         ];
   try {
-    const json = await hsSearch(token, "contacts", { filterGroups, properties: props, limit: 5 });
-    const withEmail = (json.results ?? []).map(toContact).filter((c) => c.email);
-    return withEmail[0] ?? null;
+    const json = await hsSearch(token, "contacts", { filterGroups, properties: props, limit });
+    return (json.results ?? []).map(toContact).filter((c) => c.email);
   } catch {
-    return null;
+    return [];
   }
+}
+
+/** Convenience: the single best name match with an email, or null. */
+export async function hsSearchContactByName(token: string, name: string): Promise<HsContact | null> {
+  const [first] = await hsSearchContactsByName(token, name, 1);
+  return first ?? null;
 }
 
 /* -------------------------------- writes -------------------------------- */

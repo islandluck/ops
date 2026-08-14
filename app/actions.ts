@@ -104,6 +104,8 @@ import {
   composeOutboundDrafts,
   discardOutboundDraft,
   listOutboundDrafts,
+  refineOutboundDraft,
+  regenerateOutboundDraft,
   sendOutboundDraft,
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
@@ -1954,6 +1956,24 @@ export async function bulkSendOutboundDraftsAction(ids: string[]) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return bulkSendOutboundDrafts(ws, ids);
+}
+
+/** Refine one draft per a short instruction (warmer / shorter / custom). */
+export async function refineOutboundDraftAction(id: string, instruction: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return refineOutboundDraft(ws, id, instruction);
+}
+
+/** Re-draft one email from its original instruction. */
+export async function regenerateOutboundDraftAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return regenerateOutboundDraft(ws, id);
 }
 
 /** Discard an outbound draft. */

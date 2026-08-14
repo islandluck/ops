@@ -1,18 +1,18 @@
 import "server-only";
 
 import { getValidAccessToken } from "@/lib/integrations/tokens";
-import { hsSearchContactByName } from "@/lib/integrations/hubspot";
+import { hsSearchContactsByName } from "@/lib/integrations/hubspot";
 import { getMessageDetail, getMessageMeta, listInboxMessages } from "@/lib/integrations/google";
+import type { RecipientCandidate, RecipientSource } from "@/lib/types";
 
 /**
  * Resolve who an outbound email should go to, for the Email Manager's AI composer.
  * Layered + auto: an explicit address in the ask wins; else the CRM address book
  * (HubSpot) by name; else the founder's own Gmail history ("you've emailed them
- * before"); else nothing — the user fills it in. The source is returned so the UI
- * can show where the address came from and the user can confirm before sending.
+ * before"). Returns ALL candidates found (so the UI offers a picker when a name
+ * matches more than one contact) plus a chosen primary. The source is surfaced so
+ * the user can confirm before sending.
  */
-
-export type RecipientSource = "explicit" | "hubspot" | "gmail" | "manual" | "none";
 
 export interface ResolvedRecipient {
   email: string;
@@ -53,34 +53,53 @@ async function resolveViaGmail(workspaceId: string, name: string): Promise<strin
   return "";
 }
 
+/** Resolve to a set of candidate recipients + a chosen primary (the first). */
+export async function resolveRecipientCandidates(
+  workspaceId: string,
+  name: string,
+  explicitEmail?: string,
+): Promise<{ primary: ResolvedRecipient; candidates: RecipientCandidate[] }> {
+  // 1) An address stated right in the ask.
+  const stated = (explicitEmail && EMAIL_RE.test(explicitEmail) && explicitEmail) || firstEmailIn(name);
+  if (stated) {
+    const c: RecipientCandidate = { email: stated, name: name.trim() || stated, source: "explicit" };
+    return { primary: { email: stated, source: "explicit" }, candidates: [c] };
+  }
+
+  const cleanName = name.trim();
+  if (!cleanName) return { primary: { email: "", source: "none" }, candidates: [] };
+
+  const candidates: RecipientCandidate[] = [];
+
+  // 2) The CRM address book (multiple matches possible → the user picks).
+  const hsToken = await getValidAccessToken(workspaceId, "HubSpot");
+  if (hsToken) {
+    const contacts = await hsSearchContactsByName(hsToken, cleanName, 5);
+    for (const c of contacts) {
+      const ctx = [c.company && `at ${c.company}`, c.lifecycleStage].filter(Boolean).join(" ");
+      candidates.push({ email: c.email, name: c.name, source: "hubspot", context: ctx || undefined });
+    }
+  }
+
+  // 3) Your own Gmail history (add it if it's a new address).
+  const fromGmail = await resolveViaGmail(workspaceId, cleanName);
+  if (fromGmail && !candidates.some((c) => c.email.toLowerCase() === fromGmail.toLowerCase())) {
+    candidates.push({ email: fromGmail, name: cleanName, source: "gmail" });
+  }
+
+  const top = candidates[0];
+  const primary: ResolvedRecipient = top
+    ? { email: top.email, source: top.source, context: top.context }
+    : { email: "", source: "none" };
+  return { primary, candidates };
+}
+
+/** The single best recipient (back-compat wrapper). */
 export async function resolveRecipient(
   workspaceId: string,
   name: string,
   explicitEmail?: string,
 ): Promise<ResolvedRecipient> {
-  // 1) An address stated right in the ask.
-  const stated = (explicitEmail && EMAIL_RE.test(explicitEmail) && explicitEmail) || firstEmailIn(name);
-  if (stated) return { email: stated, source: "explicit" };
-
-  const cleanName = name.trim();
-  if (!cleanName) return { email: "", source: "none" };
-
-  // 2) The CRM address book.
-  const hsToken = await getValidAccessToken(workspaceId, "HubSpot");
-  if (hsToken) {
-    const contact = await hsSearchContactByName(hsToken, cleanName);
-    if (contact?.email) {
-      const ctx = [contact.name, contact.company && `at ${contact.company}`, contact.lifecycleStage]
-        .filter(Boolean)
-        .join(" ");
-      return { email: contact.email, source: "hubspot", context: ctx };
-    }
-  }
-
-  // 3) Your own Gmail history.
-  const fromGmail = await resolveViaGmail(workspaceId, cleanName);
-  if (fromGmail) return { email: fromGmail, source: "gmail" };
-
-  // 4) Unknown — the user will add it.
-  return { email: "", source: "none" };
+  const { primary } = await resolveRecipientCandidates(workspaceId, name, explicitEmail);
+  return primary;
 }
