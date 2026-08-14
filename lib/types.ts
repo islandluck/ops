@@ -717,6 +717,26 @@ export interface EmailBody {
   body: string;
 }
 
+/* --------------------------- outbound composer --------------------------- */
+
+export type RecipientSource = "explicit" | "hubspot" | "gmail" | "manual" | "none";
+export type OutboundDraftStatus = "draft" | "sending" | "sent" | "failed";
+
+/** An AI-drafted outbound email awaiting the founder's review + one-click send. */
+export interface OutboundDraft {
+  id: string;
+  intent: string;
+  recipient_name: string;
+  to_email: string;
+  recipient_source: RecipientSource;
+  subject: string;
+  body: string;
+  status: OutboundDraftStatus;
+  error: string;
+  created_at: string;
+  sent_at: string | null;
+}
+
 /* ------------------------------ Command Center ----------------------------- */
 
 /** One goal bullet. `done` renders strikethrough; `indent` (0|1) gives one nesting level. */

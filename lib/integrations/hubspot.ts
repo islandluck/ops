@@ -454,6 +454,38 @@ export async function hsSearchContactByEmail(token: string, email: string): Prom
   return first ? toContact(first) : null;
 }
 
+/**
+ * Find a contact by (partial) name — the CRM address-book lookup for the Outbound
+ * Composer. Two tokens ("Jane Doe") match firstname AND lastname; a single token
+ * matches firstname OR lastname. Returns the best match with an email, or null.
+ */
+export async function hsSearchContactByName(token: string, name: string): Promise<HsContact | null> {
+  const tokens = name.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+  const props = ["email", "firstname", "lastname", "company", "createdate", "notes_last_contacted", "lifecyclestage"];
+  const filterGroups =
+    tokens.length >= 2
+      ? [
+          {
+            filters: [
+              { propertyName: "firstname", operator: "CONTAINS_TOKEN", value: tokens[0] },
+              { propertyName: "lastname", operator: "CONTAINS_TOKEN", value: tokens[tokens.length - 1] },
+            ],
+          },
+        ]
+      : [
+          { filters: [{ propertyName: "firstname", operator: "CONTAINS_TOKEN", value: tokens[0] }] },
+          { filters: [{ propertyName: "lastname", operator: "CONTAINS_TOKEN", value: tokens[0] }] },
+        ];
+  try {
+    const json = await hsSearch(token, "contacts", { filterGroups, properties: props, limit: 5 });
+    const withEmail = (json.results ?? []).map(toContact).filter((c) => c.email);
+    return withEmail[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /* -------------------------------- writes -------------------------------- */
 
 /** Log a note on the CRM timeline, associated to a contact and/or deal.

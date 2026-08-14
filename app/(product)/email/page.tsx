@@ -11,6 +11,7 @@ import {
   Inbox,
   Loader2,
   Mail,
+  PenSquare,
   Plug,
   RefreshCw,
   Send,
@@ -41,6 +42,7 @@ import {
   trashEmailAction,
   triageEmailsAction,
 } from "@/app/actions";
+import { OutboundComposer } from "@/components/email/outbound-composer";
 import type { EmailBody, EmailCadence, EmailListItem, EmailManagerState, EmailSettings } from "@/lib/types";
 
 const CAT_BADGE: Record<string, string> = {
@@ -97,6 +99,7 @@ export default function EmailManagerPage() {
   const [draftQueue, setDraftQueue] = useState<EmailListItem[]>([]);
   const [notice, setNotice] = useState("");
   const [archivingSuggested, setArchivingSuggested] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
 
   const curToken = pageStack[pageStack.length - 1];
 
@@ -320,6 +323,15 @@ export default function EmailManagerPage() {
         description="See your inbox, let the Admin agent triage and draft replies, then edit, approve, and send — you stay in control of every email that goes out."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={composeOpen ? "outline" : undefined}
+              disabled={!state?.connected}
+              onClick={() => setComposeOpen((v) => !v)}
+            >
+              <PenSquare className="h-4 w-4" />
+              Compose
+            </Button>
             <Button size="sm" variant="outline" disabled={checkingNow || !state?.connected} onClick={checkNow}>
               {checkingNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Check now
@@ -360,6 +372,7 @@ export default function EmailManagerPage() {
                 onClose={() => setShowSettings(false)}
               />
             )}
+            {composeOpen && <OutboundComposer onClose={() => setComposeOpen(false)} />}
             <div className="grid gap-4 lg:grid-cols-[340px_1fr_300px]">
               {/* LEFT — Inbox */}
               <Card className="flex max-h-[calc(100vh-190px)] flex-col overflow-hidden p-0">

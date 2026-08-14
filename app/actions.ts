@@ -99,6 +99,14 @@ import {
   sendEmailReply,
   trashEmail,
 } from "@/lib/agents/email-manager";
+import {
+  bulkSendOutboundDrafts,
+  composeOutboundDrafts,
+  discardOutboundDraft,
+  listOutboundDrafts,
+  sendOutboundDraft,
+  updateOutboundDraft,
+} from "@/lib/agents/outbound";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
@@ -1896,6 +1904,65 @@ export async function saveEmailSettingsAction(settings: EmailSettings) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return saveEmailSettings(ws, settings);
+}
+
+/* ----------------------- outbound email composer ------------------------ */
+
+/** Draft one email per instruction (single or bulk) for review. */
+export async function composeOutboundDraftsAction(intents: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return composeOutboundDrafts(ws, intents);
+}
+
+/** The outbound review queue (everything not yet sent). */
+export async function listOutboundDraftsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listOutboundDrafts(ws);
+}
+
+/** Edit a draft's recipient / subject / body before sending. */
+export async function updateOutboundDraftAction(
+  id: string,
+  patch: { to_email?: string; subject?: string; body?: string },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return updateOutboundDraft(ws, id, patch);
+}
+
+/** Send one outbound draft now. */
+export async function sendOutboundDraftAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return sendOutboundDraft(ws, id);
+}
+
+/** Send several outbound drafts at once. */
+export async function bulkSendOutboundDraftsAction(ids: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return bulkSendOutboundDrafts(ws, ids);
+}
+
+/** Discard an outbound draft. */
+export async function discardOutboundDraftAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return discardOutboundDraft(ws, id);
 }
 
 /** Check for new mail now — sweep unread Primary+Updates, triage + draft, notify Executive. */

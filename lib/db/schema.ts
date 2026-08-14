@@ -322,6 +322,38 @@ export const emailTriage = pgTable(
 );
 
 /**
+ * Outbound Email Composer — the AI-drafted, human-approved OUTBOUND emails from
+ * a short natural-language intent ("email Jane for a follow-up"). Distinct from
+ * inbound `email_triage`: no source message, and a resolved recipient the user
+ * confirms before send. One explicit human click sends each; nothing auto-fires.
+ */
+export const outboundDrafts = pgTable(
+  "outbound_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // The founder's one-line ask.
+    intent: text("intent").notNull().default(""),
+    // Who the agent thinks this is for + the resolved address (editable by the user).
+    recipient_name: text("recipient_name").notNull().default(""),
+    to_email: text("to_email").notNull().default(""),
+    // How the address was found: explicit | hubspot | gmail | manual | none.
+    recipient_source: text("recipient_source").notNull().default("none"),
+    subject: text("subject").notNull().default(""),
+    body: text("body").notNull().default(""),
+    // Lifecycle: draft | sending | sent | failed.
+    status: text("status").notNull().default("draft"),
+    error: text("error").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+    sent_at: timestamp("sent_at", { withTimezone: true }),
+  },
+  (t) => [index("outbound_drafts_ws_idx").on(t.workspace_id, t.status)],
+);
+
+/**
  * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
  * usage returned by every response, attributed to a workspace (null = a call made
  * outside any workspace context). Powers the operator usage report (which workspaces

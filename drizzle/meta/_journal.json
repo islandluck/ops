@@ -232,6 +232,13 @@
       "when": 1786469701312,
       "tag": "0032_serious_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1786720801296,
+      "tag": "0033_messy_caretaker",
+      "breakpoints": true
     }
   ]
 }
