@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { publishDueScheduledPosts } from "@/lib/agents/schedule";
+import { sendDueOutboundDrafts } from "@/lib/agents/outbound";
 
 /**
  * Scheduler entry point — publishes every task whose scheduled time has arrived.
@@ -22,7 +23,9 @@ async function handle(request: NextRequest) {
 
   try {
     const result = await publishDueScheduledPosts();
-    return NextResponse.json({ ok: true, ...result });
+    // Also flush any scheduled outbound emails whose time has arrived.
+    const emails = await sendDueOutboundDrafts().catch(() => ({ sent: 0, failed: 0 }));
+    return NextResponse.json({ ok: true, ...result, emailsSent: emails.sent, emailsFailed: emails.failed });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: e instanceof Error ? e.message : "publish failed" },

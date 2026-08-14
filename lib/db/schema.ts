@@ -344,11 +344,16 @@ export const outboundDrafts = pgTable(
     recipient_source: text("recipient_source").notNull().default("none"),
     // Other addresses the resolver found for this name (the user can pick among them).
     candidates: jsonb("candidates").$type<RecipientCandidate[]>(),
+    // Optional cc / bcc (comma-separated addresses).
+    cc: text("cc").notNull().default(""),
+    bcc: text("bcc").notNull().default(""),
     subject: text("subject").notNull().default(""),
     body: text("body").notNull().default(""),
     // Lifecycle: draft | sending | sent | failed.
     status: text("status").notNull().default("draft"),
     error: text("error").notNull().default(""),
+    // When set (and in the future), the cron scheduler sends it at this time.
+    scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
     created_at: createdAt,
     updated_at: updatedAt,
     sent_at: timestamp("sent_at", { withTimezone: true }),

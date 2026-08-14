@@ -739,10 +739,13 @@ export interface OutboundDraft {
   to_email: string;
   recipient_source: RecipientSource;
   candidates: RecipientCandidate[];
+  cc: string;
+  bcc: string;
   subject: string;
   body: string;
   status: OutboundDraftStatus;
   error: string;
+  scheduled_at: string | null;
   created_at: string;
   sent_at: string | null;
 }

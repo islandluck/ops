@@ -106,7 +106,9 @@ import {
   listOutboundDrafts,
   refineOutboundDraft,
   regenerateOutboundDraft,
+  scheduleOutboundDraft,
   sendOutboundDraft,
+  unscheduleOutboundDraft,
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
@@ -1928,16 +1930,34 @@ export async function listOutboundDraftsAction() {
   return listOutboundDrafts(ws);
 }
 
-/** Edit a draft's recipient / subject / body before sending. */
+/** Edit a draft's recipient / cc / bcc / subject / body before sending. */
 export async function updateOutboundDraftAction(
   id: string,
-  patch: { to_email?: string; subject?: string; body?: string },
+  patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string },
 ) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return updateOutboundDraft(ws, id, patch);
+}
+
+/** Schedule a draft to auto-send at a future time. */
+export async function scheduleOutboundDraftAction(id: string, whenISO: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return scheduleOutboundDraft(ws, id, whenISO);
+}
+
+/** Cancel a scheduled send. */
+export async function unscheduleOutboundDraftAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return unscheduleOutboundDraft(ws, id);
 }
 
 /** Send one outbound draft now. */

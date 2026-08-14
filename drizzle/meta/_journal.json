@@ -246,6 +246,13 @@
       "when": 1786723464420,
       "tag": "0034_damp_multiple_man",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1786725623099,
+      "tag": "0035_new_gunslinger",
+      "breakpoints": true
     }
   ]
 }

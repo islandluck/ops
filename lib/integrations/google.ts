@@ -48,14 +48,18 @@ function encodeEmailHeader(value: string): string {
 
 export async function sendGmail(
   accessToken: string,
-  msg: { to: string; subject: string; body: string; threadId?: string; inReplyTo?: string },
+  msg: { to: string; subject: string; body: string; cc?: string; bcc?: string; threadId?: string; inReplyTo?: string },
 ): Promise<{ id: string }> {
-  const headers = [
-    `To: ${msg.to}`,
+  const headers = [`To: ${msg.to}`];
+  // Cc is delivered + visible; Bcc is delivered but Gmail strips the header from
+  // the recipients' copies (blind).
+  if (msg.cc?.trim()) headers.push(`Cc: ${msg.cc.trim()}`);
+  if (msg.bcc?.trim()) headers.push(`Bcc: ${msg.bcc.trim()}`);
+  headers.push(
     `Subject: ${encodeEmailHeader(msg.subject)}`,
     "Content-Type: text/plain; charset=UTF-8",
     "MIME-Version: 1.0",
-  ];
+  );
   // Threading: link the reply to the original message so it lands in-thread.
   if (msg.inReplyTo) {
     headers.push(`In-Reply-To: ${msg.inReplyTo}`, `References: ${msg.inReplyTo}`);

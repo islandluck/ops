@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
@@ -70,10 +70,13 @@ function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
     to_email: r.to_email,
     recipient_source: r.recipient_source as RecipientSource,
     candidates: (r.candidates ?? []) as RecipientCandidate[],
+    cc: r.cc,
+    bcc: r.bcc,
     subject: r.subject,
     body: r.body,
     status: r.status as OutboundDraftStatus,
     error: r.error,
+    scheduled_at: r.scheduled_at ? iso(r.scheduled_at) : null,
     created_at: iso(r.created_at),
     sent_at: r.sent_at ? iso(r.sent_at) : null,
   };
@@ -155,18 +158,20 @@ export async function listOutboundDrafts(workspaceId: string): Promise<OutboundD
   return rows.map(toDraft);
 }
 
-/** Edit a draft's recipient / subject / body before sending. Editing the address
- *  marks the recipient as manually set. */
+/** Edit a draft's recipient / cc / bcc / subject / body before sending. Editing the
+ *  address marks the recipient as manually set. */
 export async function updateOutboundDraft(
   workspaceId: string,
   id: string,
-  patch: { to_email?: string; subject?: string; body?: string },
+  patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string },
 ): Promise<ActionResult> {
   const set: Record<string, unknown> = { updated_at: new Date() };
   if (typeof patch.to_email === "string") {
     set.to_email = patch.to_email.trim();
     set.recipient_source = "manual";
   }
+  if (typeof patch.cc === "string") set.cc = patch.cc.trim().slice(0, 500);
+  if (typeof patch.bcc === "string") set.bcc = patch.bcc.trim().slice(0, 500);
   if (typeof patch.subject === "string") set.subject = patch.subject.slice(0, 300);
   if (typeof patch.body === "string") set.body = patch.body;
   await db
@@ -176,8 +181,52 @@ export async function updateOutboundDraft(
   return { ok: true };
 }
 
-/** Send one draft now (reuses the hardened Gmail send path). Requires a valid,
- *  user-visible recipient — outbound to others never guesses an address. */
+/** Deliver a claimed row via Gmail, then mark it sent (or failed). Assumes the
+ *  caller already set status = "sending". Shared by manual + scheduled sends. */
+async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise<{ ok: boolean; error?: string }> {
+  const id = row.id;
+  const to = row.to_email.trim();
+  const markFailed = async (error: string) => {
+    await db
+      .update(outboundDrafts)
+      .set({ status: "failed", error, updated_at: new Date() })
+      .where(eq(outboundDrafts.id, id));
+    return { ok: false as const, error };
+  };
+  if (!EMAIL_RE.test(to)) return markFailed("No valid recipient.");
+  const token = await getValidAccessToken(row.workspace_id, "Gmail");
+  if (!token) return markFailed("Gmail isn't connected.");
+  try {
+    await sendGmail(token, {
+      to,
+      cc: row.cc || undefined,
+      bcc: row.bcc || undefined,
+      subject: row.subject || "(no subject)",
+      body: row.body,
+    });
+  } catch (e) {
+    return markFailed(e instanceof Error ? e.message : "Send failed.");
+  }
+  const now = new Date();
+  await db
+    .update(outboundDrafts)
+    .set({ status: "sent", error: "", scheduled_at: null, sent_at: now, updated_at: now })
+    .where(eq(outboundDrafts.id, id));
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: row.workspace_id,
+    task_id: null,
+    event_type: "integration_touched",
+    actor_type: "human",
+    actor_id: "owner",
+    summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
+    created_at: now,
+  });
+  return { ok: true };
+}
+
+/** Send one draft now. Requires a valid, user-visible recipient — outbound to
+ *  others never guesses an address. */
 export async function sendOutboundDraft(workspaceId: string, id: string): Promise<ActionResult> {
   if (executionKilled()) return { ok: false, error: "Sending is paused (the kill switch is on)." };
 
@@ -188,41 +237,89 @@ export async function sendOutboundDraft(workspaceId: string, id: string): Promis
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
   if (row.status === "sent") return { ok: true };
-  const to = row.to_email.trim();
-  if (!EMAIL_RE.test(to)) return { ok: false, error: "Add a valid recipient email first." };
+  if (!EMAIL_RE.test(row.to_email.trim())) return { ok: false, error: "Add a valid recipient email first." };
   if (!row.subject.trim() && !row.body.trim()) return { ok: false, error: "This draft is empty." };
 
-  const token = await getValidAccessToken(workspaceId, "Gmail");
-  if (!token) {
-    await db.update(outboundDrafts).set({ status: "failed", error: "Gmail isn't connected." }).where(eq(outboundDrafts.id, id));
-    return { ok: false, error: "Gmail isn't connected." };
-  }
-
   await db.update(outboundDrafts).set({ status: "sending", error: "" }).where(eq(outboundDrafts.id, id));
-  try {
-    await sendGmail(token, { to, subject: row.subject || "(no subject)", body: row.body });
-  } catch (e) {
-    const error = e instanceof Error ? e.message : "Send failed.";
-    await db.update(outboundDrafts).set({ status: "failed", error }).where(eq(outboundDrafts.id, id));
-    return { ok: false, error };
-  }
+  const r = await deliverOutbound(row);
+  return r.ok ? { ok: true } : { ok: false, error: r.error ?? "Send failed." };
+}
 
-  const now = new Date();
+/** Schedule a draft to auto-send at a future time. */
+export async function scheduleOutboundDraft(
+  workspaceId: string,
+  id: string,
+  whenISO: string,
+): Promise<ActionResult> {
+  const when = new Date(whenISO);
+  if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid time." };
+  if (when.getTime() < Date.now() + 30_000) return { ok: false, error: "Pick a time in the future." };
+  const [row] = await db
+    .select()
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Draft not found." };
+  if (!EMAIL_RE.test(row.to_email.trim())) return { ok: false, error: "Add a valid recipient first." };
   await db
     .update(outboundDrafts)
-    .set({ status: "sent", error: "", sent_at: now, updated_at: now })
-    .where(eq(outboundDrafts.id, id));
-  await db.insert(activityEvents).values({
-    id: randomUUID(),
-    workspace_id: workspaceId,
-    task_id: null,
-    event_type: "integration_touched",
-    actor_type: "human",
-    actor_id: "owner",
-    summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
-    created_at: now,
-  });
+    .set({ scheduled_at: when, status: "draft", error: "", updated_at: new Date() })
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
   return { ok: true };
+}
+
+/** Cancel a scheduled send (back to a plain draft). */
+export async function unscheduleOutboundDraft(workspaceId: string, id: string): Promise<ActionResult> {
+  await db
+    .update(outboundDrafts)
+    .set({ scheduled_at: null, updated_at: new Date() })
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
+  return { ok: true };
+}
+
+/**
+ * Cron: send every scheduled draft whose time has arrived. A two-step claim
+ * (select ids → set "sending" where still claimable) prevents double-sends across
+ * overlapping ticks; the kill switch pauses all scheduled sends.
+ */
+export async function sendDueOutboundDrafts(limit = 50): Promise<{ sent: number; failed: number }> {
+  if (executionKilled()) return { sent: 0, failed: 0 };
+  const now = new Date();
+  // tenant-scope-exempt: the scheduler flushes due drafts across ALL workspaces;
+  // each row carries its own workspace_id and is delivered scoped to it.
+  const dueIds = await db
+    .select({ id: outboundDrafts.id })
+    .from(outboundDrafts)
+    .where(
+      and(
+        isNotNull(outboundDrafts.scheduled_at),
+        lte(outboundDrafts.scheduled_at, now),
+        inArray(outboundDrafts.status, ["draft", "failed"]),
+      ),
+    )
+    .limit(limit);
+  if (!dueIds.length) return { sent: 0, failed: 0 };
+  const claimed = await db
+    .update(outboundDrafts)
+    .set({ status: "sending", error: "" })
+    .where(
+      and(
+        inArray(
+          outboundDrafts.id,
+          dueIds.map((d) => d.id),
+        ),
+        inArray(outboundDrafts.status, ["draft", "failed"]),
+      ),
+    )
+    .returning();
+  let sent = 0;
+  let failed = 0;
+  for (const row of claimed) {
+    const r = await deliverOutbound(row);
+    if (r.ok) sent += 1;
+    else failed += 1;
+  }
+  return { sent, failed };
 }
 
 /** Send every provided draft sequentially. */
