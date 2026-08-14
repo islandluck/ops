@@ -282,44 +282,65 @@ export async function unscheduleOutboundDraft(workspaceId: string, id: string): 
  * (select ids → set "sending" where still claimable) prevents double-sends across
  * overlapping ticks; the kill switch pauses all scheduled sends.
  */
-export async function sendDueOutboundDrafts(limit = 50): Promise<{ sent: number; failed: number }> {
-  if (executionKilled()) return { sent: 0, failed: 0 };
+async function flushDue(
+  workspaceId: string | null,
+  limit: number,
+): Promise<{ sent: string[]; failed: { id: string; error: string }[] }> {
+  if (executionKilled()) return { sent: [], failed: [] };
   const now = new Date();
-  // tenant-scope-exempt: the scheduler flushes due drafts across ALL workspaces;
-  // each row carries its own workspace_id and is delivered scoped to it.
+  const dueConds = [
+    isNotNull(outboundDrafts.scheduled_at),
+    lte(outboundDrafts.scheduled_at, now),
+    inArray(outboundDrafts.status, ["draft", "failed"]),
+  ];
+  if (workspaceId) dueConds.push(eq(outboundDrafts.workspace_id, workspaceId));
+  // tenant-scope-exempt: with no workspaceId this is the cron flushing due drafts
+  // across ALL workspaces; each row carries its own workspace_id for delivery.
   const dueIds = await db
     .select({ id: outboundDrafts.id })
     .from(outboundDrafts)
-    .where(
-      and(
-        isNotNull(outboundDrafts.scheduled_at),
-        lte(outboundDrafts.scheduled_at, now),
-        inArray(outboundDrafts.status, ["draft", "failed"]),
-      ),
-    )
+    .where(and(...dueConds))
     .limit(limit);
-  if (!dueIds.length) return { sent: 0, failed: 0 };
+  if (!dueIds.length) return { sent: [], failed: [] };
+  const ids = dueIds.map((d) => d.id);
   const claimed = await db
     .update(outboundDrafts)
     .set({ status: "sending", error: "" })
     .where(
-      and(
-        inArray(
-          outboundDrafts.id,
-          dueIds.map((d) => d.id),
-        ),
-        inArray(outboundDrafts.status, ["draft", "failed"]),
-      ),
+      workspaceId
+        ? and(
+            eq(outboundDrafts.workspace_id, workspaceId),
+            inArray(outboundDrafts.id, ids),
+            inArray(outboundDrafts.status, ["draft", "failed"]),
+          )
+        : and(inArray(outboundDrafts.id, ids), inArray(outboundDrafts.status, ["draft", "failed"])),
     )
     .returning();
-  let sent = 0;
-  let failed = 0;
+  const sent: string[] = [];
+  const failed: { id: string; error: string }[] = [];
   for (const row of claimed) {
     const r = await deliverOutbound(row);
-    if (r.ok) sent += 1;
-    else failed += 1;
+    if (r.ok) sent.push(row.id);
+    else failed.push({ id: row.id, error: r.error ?? "Send failed." });
   }
   return { sent, failed };
+}
+
+/** Cron entry: send every scheduled draft (across all workspaces) whose time
+ *  has arrived. Atomic claim prevents double-sends; kill switch pauses all. */
+export async function sendDueOutboundDrafts(limit = 50): Promise<{ sent: number; failed: number }> {
+  const r = await flushDue(null, limit);
+  return { sent: r.sent.length, failed: r.failed.length };
+}
+
+/** Workspace-scoped due flush — lets the app send scheduled emails without waiting
+ *  for the cron (called on composer open + a short poll), the same "advance without
+ *  cron" pattern Projects + Deep Dive use. Returns the ids sent/failed so the UI can
+ *  update only those cards. */
+export async function flushDueOutboundDrafts(
+  workspaceId: string,
+): Promise<{ sent: string[]; failed: { id: string; error: string }[] }> {
+  return flushDue(workspaceId, 25);
 }
 
 /** Send every provided draft sequentially. */

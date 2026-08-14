@@ -9,6 +9,7 @@ import {
   bulkSendOutboundDraftsAction,
   composeOutboundDraftsAction,
   discardOutboundDraftAction,
+  flushDueOutboundDraftsAction,
   listOutboundDraftsAction,
   refineOutboundDraftAction,
   regenerateOutboundDraftAction,
@@ -79,10 +80,46 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
   const [bulkSending, setBulkSending] = useState(false);
 
   useEffect(() => {
-    void listOutboundDraftsAction().then((rows) => {
+    let cancelled = false;
+
+    // Apply a flush result surgically so we never clobber a draft being edited:
+    // drop the ones that sent, mark the ones that failed.
+    function apply(r: { sent: string[]; failed: { id: string; error: string }[] }) {
+      if (cancelled) return;
+      if (r.sent.length) {
+        setDrafts((prev) => prev.filter((d) => !r.sent.includes(d.id)));
+        setNotice(`Sent ${r.sent.length} scheduled email${r.sent.length === 1 ? "" : "s"}. ✓`);
+      }
+      if (r.failed.length) {
+        setDrafts((prev) =>
+          prev.map((d) => {
+            const f = r.failed.find((x) => x.id === d.id);
+            return f ? { ...d, status: "failed" as const, error: f.error } : d;
+          }),
+        );
+      }
+    }
+
+    // On open: send anything already past due, then load the queue.
+    void (async () => {
+      const r = await flushDueOutboundDraftsAction().catch(() => null);
+      const rows = await listOutboundDraftsAction();
+      if (cancelled) return;
       setDrafts(rows);
       setLoading(false);
-    });
+      if (r) apply(r);
+    })();
+
+    // While open: flush due scheduled emails every 30s (no cron needed locally).
+    const iv = setInterval(async () => {
+      const r = await flushDueOutboundDraftsAction().catch(() => null);
+      if (r) apply(r);
+    }, 30_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
   }, []);
 
   const lineCount = intents.split("\n").map((l) => l.trim()).filter(Boolean).length;

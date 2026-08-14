@@ -103,6 +103,7 @@ import {
   bulkSendOutboundDrafts,
   composeOutboundDrafts,
   discardOutboundDraft,
+  flushDueOutboundDrafts,
   listOutboundDrafts,
   refineOutboundDraft,
   regenerateOutboundDraft,
@@ -1958,6 +1959,16 @@ export async function unscheduleOutboundDraftAction(id: string) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return unscheduleOutboundDraft(ws, id);
+}
+
+/** Send any scheduled drafts whose time has arrived (called on composer open +
+ *  poll, so scheduling works without waiting for the cron). Returns sent/failed ids. */
+export async function flushDueOutboundDraftsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
+  return flushDueOutboundDrafts(ws);
 }
 
 /** Send one outbound draft now. */
