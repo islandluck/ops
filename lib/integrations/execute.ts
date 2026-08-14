@@ -124,7 +124,8 @@ export async function runTaskExecution(
   const runId = randomUUID();
   const steps: ExecutionStep[] = [];
   const touched: string[] = [];
-  const skipped: string[] = [];
+  const skipped: string[] = []; // skipped because the system isn't connected
+  const incomplete: string[] = []; // connected, but the task was missing details (e.g. a recipient)
   let failure: string | null = null;
 
   await db.insert(executionRuns).values({
@@ -178,6 +179,11 @@ export async function runTaskExecution(
         const token = await getValidAccessToken(workspaceId, name);
         if (!token) throw new Error("No Gmail token");
         const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
+        // Recipient: the explicit address captured at planning time (and shown to
+        // the approver) — or, when none was captured (e.g. a "send myself an
+        // email" task), the owner's OWN verified address. Never a guessed third
+        // party; the fallback only ever emails the approver themselves.
+        const to = meta?.to ? String(meta.to) : actor.email;
         if (meta && meta.kind === "reply" && meta.to) {
           // Triage reply: send the approved draft back to the original sender, in-thread.
           await sendGmail(token, {
@@ -189,19 +195,18 @@ export async function runTaskExecution(
           });
           steps.push({ label: `Replied via Gmail (to ${String(meta.to)})`, status: "done" });
           touched.push("Gmail");
-        } else if (meta?.to) {
-          // Real outbound: send the approved draft to the explicit recipient captured
-          // at planning time (and shown to the approver). Never a guessed address.
+        } else if (to) {
+          const self = !meta?.to; // sending to the owner because no recipient was captured
           await sendGmail(token, {
-            to: String(meta.to),
-            subject: meta.subject ? String(meta.subject) : parseSubject(draft),
+            to,
+            subject: meta?.subject ? String(meta.subject) : parseSubject(draft),
             body: draft || task.description,
           });
-          steps.push({ label: `Sent via Gmail (to ${String(meta.to)})`, status: "done" });
+          steps.push({ label: `Sent via Gmail (to ${to})${self ? " — your own inbox" : ""}`, status: "done" });
           touched.push("Gmail");
         } else {
-          steps.push({ label: "Gmail — no recipient specified; drafted only", status: "skipped" });
-          skipped.push("Gmail");
+          steps.push({ label: "Gmail — no recipient and no account email on file; drafted only", status: "skipped" });
+          incomplete.push("Gmail");
         }
       } else if (name === "Google Calendar") {
         const token = await getValidAccessToken(workspaceId, name);
@@ -282,7 +287,7 @@ export async function runTaskExecution(
           touched.push("HubSpot");
         } else {
           steps.push({ label: "HubSpot — no contact specified; skipped", status: "skipped" });
-          skipped.push("HubSpot");
+          incomplete.push("HubSpot");
         }
       } else if (name === "Google Sheets") {
         const token = await getValidAccessToken(workspaceId, name);
@@ -377,11 +382,11 @@ export async function runTaskExecution(
         const key = process.env.STRIPE_SECRET_KEY ?? "";
         if (!customerEmail || !Number.isFinite(amountCents) || amountCents <= 0) {
           steps.push({ label: "Stripe — no invoice details specified; skipped", status: "skipped" });
-          skipped.push("Stripe");
+          incomplete.push("Stripe");
         } else if (!isStripeTestKey(key)) {
           // Never call Stripe with a live key — test mode only.
           steps.push({ label: "Stripe — test mode only; skipped", status: "skipped" });
-          skipped.push("Stripe");
+          incomplete.push("Stripe");
         } else {
           await createDraftInvoice(key, { customerEmail, amountCents, description: task.title });
           steps.push({ label: `Created Stripe draft invoice (${customerEmail})`, status: "done" });
@@ -389,7 +394,7 @@ export async function runTaskExecution(
         }
       } else {
         steps.push({ label: `Skipped ${name} — no action handler`, status: "skipped" });
-        skipped.push(name);
+        incomplete.push(name);
       }
     } catch (e) {
       failure = e instanceof Error ? e.message : `Failed updating ${name}`;
@@ -418,11 +423,13 @@ export async function runTaskExecution(
     return { ok: false, error: failure };
   }
 
-  const summary = touched.length
-    ? `Executed live: ${touched.join(", ")}.${skipped.length ? ` Skipped (not connected): ${skipped.join(", ")}.` : ""}`
-    : skipped.length
-      ? `Skipped — no connected systems: ${skipped.join(", ")}. Connect them to act for real.`
-      : "Completed.";
+  // Report each outcome honestly and separately — a task skipped because it was
+  // missing a detail (e.g. no recipient) must NOT be reported as "not connected".
+  const bits: string[] = [];
+  if (touched.length) bits.push(`Executed live: ${touched.join(", ")}.`);
+  if (skipped.length) bits.push(`Skipped — not connected: ${skipped.join(", ")}. Connect them to act for real.`);
+  if (incomplete.length) bits.push(`Skipped — needs more detail: ${incomplete.join(", ")}.`);
+  const summary = bits.length ? bits.join(" ") : "Completed.";
   await db
     .update(executionRuns)
     .set({ status: "completed", completed_at: done, result_summary: summary, steps })
