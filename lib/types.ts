@@ -679,6 +679,15 @@ export interface EmailListItem {
   draft_reply: string;
 }
 
+/** One email on the "needs attention" shortlist — clickable to open in the reader. */
+export interface EmailAttentionItem {
+  id: string;
+  from_name: string;
+  subject: string;
+  category: string;
+  urgency: string;
+}
+
 /** The "Daily Triage Info" panel — counts + the attention shortlist. */
 export interface EmailTriageInfo {
   total: number;
@@ -686,7 +695,7 @@ export interface EmailTriageInfo {
   drafts: number;
   sent: number;
   cleared: number;
-  lines: string[];
+  attentionItems: EmailAttentionItem[];
 }
 
 /** How often the Admin agent auto-triages the inbox in the background. */

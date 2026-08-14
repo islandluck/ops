@@ -93,6 +93,7 @@ import {
   getEmailBody,
   getEmailManagerState,
   learnEmailStyleFromSent,
+  listAttentionQueue,
   listDraftQueue,
   saveEmailDraft,
   saveEmailSettings,
@@ -2044,6 +2045,19 @@ export async function getDraftQueueAction(): Promise<{ items: EmailListItem[] } 
     return { items: await listDraftQueue(ws) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your drafts." };
+  }
+}
+
+/** The focused "needs attention" queue — unhandled, important emails. */
+export async function getAttentionQueueAction(): Promise<{ items: EmailListItem[] } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return { items: await listAttentionQueue(ws) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load these emails." };
   }
 }
 

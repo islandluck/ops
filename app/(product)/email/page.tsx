@@ -31,6 +31,7 @@ import {
   bulkArchiveAction,
   bulkSendRepliesAction,
   checkInboxNowAction,
+  getAttentionQueueAction,
   getDraftQueueAction,
   learnEmailStyleAction,
   getEmailBodyAction,
@@ -95,8 +96,9 @@ export default function EmailManagerPage() {
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATS);
   const [checkingNow, setCheckingNow] = useState(false);
   const [bulkSending, setBulkSending] = useState(false);
-  const [view, setView] = useState<"inbox" | "drafts">("inbox");
+  const [view, setView] = useState<"inbox" | "attention" | "drafts">("inbox");
   const [draftQueue, setDraftQueue] = useState<EmailListItem[]>([]);
+  const [attentionQueue, setAttentionQueue] = useState<EmailListItem[]>([]);
   const [notice, setNotice] = useState("");
   const [archivingSuggested, setArchivingSuggested] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -120,32 +122,43 @@ export default function EmailManagerPage() {
     if (!("error" in r)) setDraftQueue(r.items);
   }, []);
 
+  const loadAttention = useCallback(async () => {
+    const r = await getAttentionQueueAction();
+    if (!("error" in r)) setAttentionQueue(r.items);
+  }, []);
+
   useEffect(() => {
     void load(undefined, DEFAULT_CATS);
     void loadDrafts();
-  }, [load, loadDrafts]);
+    void loadAttention();
+  }, [load, loadDrafts, loadAttention]);
 
   const inboxItems = state?.items ?? [];
-  const items = view === "drafts" ? draftQueue : inboxItems;
+  const items = view === "drafts" ? draftQueue : view === "attention" ? attentionQueue : inboxItems;
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
-  // Refresh the current list, and keep the Drafts tab count fresh.
+  // Refresh the current list, and keep the tab counts fresh.
   async function reload() {
     if (view === "drafts") {
       await loadDrafts();
       return;
     }
+    if (view === "attention") {
+      await loadAttention();
+      return;
+    }
     await load(curToken, categories);
     await loadDrafts();
+    await loadAttention();
   }
 
-  function switchView(v: "inbox" | "drafts") {
-    if (v === view) return;
+  function switchView(v: "inbox" | "attention" | "drafts", selectId?: string) {
     setView(v);
-    setSelectedId(null);
+    setSelectedId(selectId ?? null);
     setChecked(new Set());
     setNotice("");
     if (v === "drafts") void loadDrafts();
+    else if (v === "attention") void loadAttention();
     else void load(curToken, categories);
   }
 
@@ -389,6 +402,20 @@ export default function EmailManagerPage() {
                       Inbox
                     </button>
                     <button
+                      onClick={() => switchView("attention")}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
+                        view === "attention" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      Attention
+                      {attentionQueue.length > 0 && (
+                        <span className="inline-flex h-4 min-w-[16px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                          {attentionQueue.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
                       onClick={() => switchView("drafts")}
                       className={cn(
                         "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors",
@@ -529,7 +556,11 @@ export default function EmailManagerPage() {
 
               {/* RIGHT — Daily Triage Info + Send to Executive */}
               <div className="flex flex-col gap-4">
-                <TriageInfo info={state.triageInfo} />
+                <TriageInfo
+                  info={state.triageInfo}
+                  onOpen={(v) => switchView(v)}
+                  onSelect={(id) => switchView("attention", id)}
+                />
                 <Card className="p-4">
                   <p className="text-[13px] font-semibold">Keep the Executive in the loop</p>
                   <p className="mt-1 text-[12px] text-muted-foreground">
@@ -860,11 +891,19 @@ function DraftPane({
   );
 }
 
-function TriageInfo({ info }: { info: EmailManagerState["triageInfo"] }) {
-  const stats: { label: string; value: number }[] = [
-    { label: "Triaged", value: info.total },
-    { label: "Need attention", value: info.attention },
-    { label: "Drafts ready", value: info.drafts },
+function TriageInfo({
+  info,
+  onOpen,
+  onSelect,
+}: {
+  info: EmailManagerState["triageInfo"];
+  onOpen: (view: "inbox" | "attention" | "drafts") => void;
+  onSelect: (id: string) => void;
+}) {
+  const stats: { label: string; value: number; view?: "inbox" | "attention" | "drafts" }[] = [
+    { label: "Triaged", value: info.total, view: "inbox" },
+    { label: "Need attention", value: info.attention, view: "attention" },
+    { label: "Drafts ready", value: info.drafts, view: "drafts" },
     { label: "Sent", value: info.sent },
   ];
   return (
@@ -872,22 +911,55 @@ function TriageInfo({ info }: { info: EmailManagerState["triageInfo"] }) {
       <p className="text-[13px] font-semibold">Daily Triage Info</p>
       <p className="text-[11.5px] text-muted-foreground">Last 24 hours</p>
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {stats.map((s) => (
-          <div key={s.label} className="rounded-lg border border-border bg-muted/30 px-2.5 py-2">
-            <p className="text-[18px] font-semibold tabular-nums leading-none">{s.value}</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">{s.label}</p>
-          </div>
-        ))}
+        {stats.map((s) => {
+          const clickable = Boolean(s.view) && s.value > 0;
+          return (
+            <button
+              key={s.label}
+              type="button"
+              disabled={!clickable}
+              onClick={() => s.view && onOpen(s.view)}
+              className={cn(
+                "rounded-lg border border-border bg-muted/30 px-2.5 py-2 text-left transition-colors",
+                clickable ? "cursor-pointer hover:border-primary/40 hover:bg-primary/5" : "cursor-default",
+              )}
+            >
+              <p className="text-[18px] font-semibold tabular-nums leading-none">{s.value}</p>
+              <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                {s.label}
+                {clickable && <ChevronRight className="h-3 w-3 opacity-60" />}
+              </p>
+            </button>
+          );
+        })}
       </div>
-      {info.lines.length > 0 && (
+      {info.attentionItems.length > 0 && (
         <div className="mt-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
             Needs attention
           </p>
-          <ul className="space-y-1">
-            {info.lines.map((l, i) => (
-              <li key={i} className="truncate text-[11.5px] text-foreground/80" title={l}>
-                {l}
+          <ul className="space-y-0.5">
+            {info.attentionItems.map((it) => (
+              <li key={it.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(it.id)}
+                  title={`${it.from_name} — ${it.subject}`}
+                  className="flex w-full items-start gap-1.5 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-muted"
+                >
+                  <span
+                    className={cn(
+                      "mt-[3px] shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold uppercase leading-none",
+                      URG_BADGE[it.urgency] ?? "bg-slate-100 text-slate-600",
+                    )}
+                  >
+                    {it.urgency || "—"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11.5px] font-medium text-foreground/90">{it.from_name}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{it.subject}</span>
+                  </span>
+                </button>
               </li>
             ))}
           </ul>

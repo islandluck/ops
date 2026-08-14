@@ -165,20 +165,61 @@ async function buildTriageInfo(workspaceId: string): Promise<EmailTriageInfo> {
     .where(and(eq(emailTriage.workspace_id, workspaceId), gte(emailTriage.triaged_at, since)))
     .orderBy(desc(emailTriage.triaged_at))
     .limit(100);
+  // "Needs attention" = still unhandled (status triaged) + flagged important, so
+  // the count matches what you see when you open the Attention view.
   const attention = rows
-    .filter((r) => isAttention(r.category, r.urgency, r.action_type))
+    .filter((r) => r.status === "triaged" && isAttention(r.category, r.urgency, r.action_type))
     .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 9) - (URGENCY_RANK[b.urgency] ?? 9));
-  const lines = attention
-    .slice(0, 6)
-    .map((r) => `${CATEGORY_EMOJI[r.category] ?? ""} [${r.category} · ${r.urgency}] ${r.from_name} — ${r.subject}`);
+  const attentionItems = attention.slice(0, 8).map((r) => ({
+    id: r.gmail_message_id,
+    from_name: r.from_name,
+    subject: r.subject,
+    category: r.category,
+    urgency: r.urgency,
+  }));
   return {
     total: rows.length,
     attention: attention.length,
-    drafts: rows.filter((r) => r.draft_reply.trim()).length,
+    drafts: rows.filter((r) => r.status === "triaged" && r.draft_reply.trim()).length,
     sent: rows.filter((r) => r.status === "sent").length,
     cleared: rows.filter((r) => r.status === "archived" || r.status === "trashed").length,
-    lines,
+    attentionItems,
   };
+}
+
+/**
+ * The focused "needs attention" queue — unhandled, important emails from the last
+ * 24h (urgency-sorted), rendered straight from email_triage. Backs the Attention
+ * view you drop into from the Daily Triage panel.
+ */
+export async function listAttentionQueue(workspaceId: string): Promise<EmailListItem[]> {
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  const rows = await db
+    .select()
+    .from(emailTriage)
+    .where(and(eq(emailTriage.workspace_id, workspaceId), gte(emailTriage.triaged_at, since)))
+    .orderBy(desc(emailTriage.triaged_at))
+    .limit(100);
+  return rows
+    .filter((r) => r.status === "triaged" && isAttention(r.category, r.urgency, r.action_type))
+    .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 9) - (URGENCY_RANK[b.urgency] ?? 9))
+    .slice(0, 60)
+    .map((r) => ({
+      id: r.gmail_message_id,
+      thread_id: r.thread_id,
+      from_name: r.from_name,
+      from_email: r.from_email,
+      subject: r.subject,
+      date: r.triaged_at instanceof Date ? r.triaged_at.toISOString() : String(r.triaged_at ?? ""),
+      snippet: r.snippet,
+      unread: false,
+      status: r.status as EmailStatus,
+      category: r.category,
+      urgency: r.urgency,
+      action_type: r.action_type,
+      summary: r.summary,
+      draft_reply: r.draft_reply,
+    }));
 }
 
 /* ------------------------------- page state ------------------------------- */
