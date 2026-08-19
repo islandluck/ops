@@ -7,13 +7,15 @@ import {
   activityEvents,
   boardAlerts,
   boardContributions,
+  boardDirectives,
   boardMembers,
   boardSessions,
   boardSettings,
   businessBriefs,
   executiveMemory,
 } from "@/lib/db/schema";
-import { getPlanningContext } from "@/lib/db/queries";
+import { createPlannedTask, getPlanningContext } from "@/lib/db/queries";
+import { createProject } from "@/lib/agents/project";
 import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -23,6 +25,8 @@ import type {
   BoardAlertStatus,
   BoardCadence,
   BoardContribution,
+  BoardDirective,
+  BoardDirectiveStatus,
   BoardMember,
   BoardRecommendation,
   BoardRole,
@@ -31,6 +35,7 @@ import type {
   BoardSessionSummary,
   BoardSettings,
   BoardroomView,
+  Category,
 } from "@/lib/types";
 
 /**
@@ -176,6 +181,21 @@ async function buildBoardContext(workspaceId: string, question: string): Promise
     );
   }
 
+  // Prior commitments the board is tracking → so it follows up on what got done.
+  const directives = await db
+    .select({ title: boardDirectives.title, status: boardDirectives.status, created_at: boardDirectives.created_at })
+    .from(boardDirectives)
+    .where(and(eq(boardDirectives.workspace_id, workspaceId), inArray(boardDirectives.status, ["open", "in_motion"])))
+    .orderBy(desc(boardDirectives.created_at))
+    .limit(15);
+  if (directives.length) {
+    const ageDays = (d: Date) => Math.floor((Date.now() - new Date(d).getTime()) / (24 * 3600 * 1000));
+    parts.push(
+      "COMMITMENTS THE BOARD IS TRACKING (follow up hard on anything ignored or overdue):\n" +
+        directives.map((d) => `- [${d.status}, ${ageDays(d.created_at)}d ago] ${d.title}`).join("\n"),
+    );
+  }
+
   // Live market intel so the board reasons about today's landscape, not a guess.
   const query =
     `${brief.business_description || brief.company_name} — competitors, market size, funding, valuations, recent moves`.slice(
@@ -254,7 +274,8 @@ export async function advanceBoard(
     .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
     .limit(1);
   if (!s) return { ok: false, error: "Session not found." };
-  if (s.status === "complete" || s.status === "failed") {
+  // awaiting_founder is a deliberate pause — it advances only via respondToBoard.
+  if (s.status === "complete" || s.status === "failed" || s.status === "awaiting_founder") {
     return { ok: true, session: await getBoardSession(workspaceId, sessionId) };
   }
 
@@ -322,11 +343,19 @@ export async function advanceBoard(
             created_at: now,
           }));
         if (rows.length) await db.insert(boardContributions).values(rows);
-        await db.update(boardSessions).set({ status: "verdict_pending" }).where(eq(boardSessions.id, sessionId));
+        // Pause for the founder to respond / correct before the board rules.
+        await db.update(boardSessions).set({ status: "awaiting_founder" }).where(eq(boardSessions.id, sessionId));
       } else if (s.status === "verdict_pending") {
         const openings = await contributionsFor(workspaceId, sessionId,"opening");
         const rebuttals = await contributionsFor(workspaceId, sessionId,"rebuttal");
-        const v = await boardVerdict({ company, context: s.context, question: s.title, openings, rebuttals });
+        const v = await boardVerdict({
+          company,
+          context: s.context,
+          question: s.title,
+          openings,
+          rebuttals,
+          founderInput: s.founder_input || undefined,
+        });
         await db
           .update(boardSessions)
           .set({
@@ -347,6 +376,35 @@ export async function advanceBoard(
       return { ok: false as const, error };
     }
   });
+}
+
+/** The founder's response to the debate — captured before the board rules so it
+ *  can correct assumptions. Advances the paused session to the verdict stage. */
+export async function respondToBoard(
+  workspaceId: string,
+  sessionId: string,
+  text: string,
+): Promise<{ ok: true; session: BoardSession } | { ok: false; error: string }> {
+  const [s] = await db
+    .select({ status: boardSessions.status })
+    .from(boardSessions)
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
+    .limit(1);
+  if (!s) return { ok: false, error: "Session not found." };
+  if (s.status !== "awaiting_founder") return { ok: false, error: "The board isn't waiting on you right now." };
+  await db
+    .update(boardSessions)
+    .set({ founder_input: text.trim().slice(0, 2000), status: "verdict_pending" })
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)));
+  return { ok: true, session: await getBoardSession(workspaceId, sessionId) };
+}
+
+/** Delete a deliberation and its transcript (directives it spawned survive). */
+export async function deleteBoardSession(workspaceId: string, sessionId: string): Promise<{ ok: true }> {
+  await db
+    .delete(boardSessions)
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)));
+  return { ok: true };
 }
 
 /* --------------------------------- reads ---------------------------------- */
@@ -387,10 +445,12 @@ export async function getBoardSession(workspaceId: string, sessionId: string): P
     title: s?.title ?? "",
     trigger: (s?.trigger as BoardSession["trigger"]) ?? "user",
     status: (s?.status as BoardSessionStatus) ?? "failed",
+    founder_input: s?.founder_input ?? "",
     verdict: s?.verdict ?? "",
     disagreements: (s?.disagreements ?? []) as string[],
     recommendations: (s?.recommendations ?? []) as BoardRecommendation[],
     accountability: s?.accountability ?? "",
+    project_id: s?.project_id ?? null,
     contributions,
     error: s?.error ?? "",
     created_at: iso(s?.created_at) ?? new Date().toISOString(),
@@ -637,12 +697,144 @@ export async function runDueBoardScans(limit = 20): Promise<{ scanned: number; a
   return { scanned, alerts };
 }
 
+/* -------------------------- action & accountability ----------------------- */
+
+const ROLE_CATEGORY: Record<string, Category> = {
+  finance: "finance",
+  marketing: "growth",
+  product: "content",
+  strategy: "research",
+  technology: "research",
+  chair: "admin",
+  custom: "admin",
+};
+
+/** Hand a completed verdict to the Executive — spins up a project it will plan +
+ *  execute — and records the recommendations as tracked directives. */
+export async function handVerdictToExecutive(
+  workspaceId: string,
+  sessionId: string,
+): Promise<{ ok: boolean; projectId?: string; error?: string }> {
+  const [s] = await db
+    .select()
+    .from(boardSessions)
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
+    .limit(1);
+  if (!s) return { ok: false, error: "Session not found." };
+  if (s.status !== "complete") return { ok: false, error: "Wait for the board's verdict first." };
+  if (s.project_id) return { ok: true, projectId: s.project_id };
+
+  const recs = (s.recommendations ?? []) as BoardRecommendation[];
+  const goal = [
+    `Board directive: ${s.title}`,
+    s.verdict ? `\n\nThe board's verdict:\n${s.verdict}` : "",
+    recs.length
+      ? `\n\nExecute these moves:\n${recs.map((r, i) => `${i + 1}. ${r.title}${r.detail ? ` — ${r.detail}` : ""}`).join("\n")}`
+      : "",
+  ]
+    .join("")
+    .slice(0, 6000);
+
+  const res = await createProject(workspaceId, goal, "executive");
+  if (!res.ok || !res.projectId) return { ok: false, error: res.error ?? "Couldn't start the project." };
+
+  const now = new Date();
+  await db.update(boardSessions).set({ project_id: res.projectId }).where(eq(boardSessions.id, sessionId));
+  if (recs.length) {
+    await db.insert(boardDirectives).values(
+      recs.map((r) => ({
+        id: randomUUID(),
+        workspace_id: workspaceId,
+        session_id: sessionId,
+        title: r.title.slice(0, 200),
+        detail: r.detail.slice(0, 800),
+        status: "in_motion",
+        project_id: res.projectId,
+        created_at: now,
+      })),
+    );
+  }
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: null,
+    event_type: "output_created",
+    actor_type: "agent",
+    actor_id: "board",
+    summary: `The board's verdict on “${s.title}” was handed to the Executive as a project.`.slice(0, 300),
+    created_at: now,
+  });
+  return { ok: true, projectId: res.projectId };
+}
+
+/** Turn a board alert into a task on the Approval Center (routes to a worker agent). */
+export async function alertToTask(workspaceId: string, alertId: string): Promise<{ ok: boolean; error?: string }> {
+  const [a] = await db
+    .select()
+    .from(boardAlerts)
+    .where(and(eq(boardAlerts.workspace_id, workspaceId), eq(boardAlerts.id, alertId)))
+    .limit(1);
+  if (!a) return { ok: false, error: "Alert not found." };
+  await createPlannedTask(
+    workspaceId,
+    {
+      title: a.title.slice(0, 120),
+      category: ROLE_CATEGORY[a.member_role] ?? "admin",
+      affected_systems: [],
+      risk_level: "low",
+      requires_approval: true,
+      rationale: `From the board (${a.member_name}): ${a.detail}`.slice(0, 1000),
+      draft: a.suggested_action || a.detail,
+      needs_connection: [],
+    },
+    { name: "The Board" },
+  );
+  await db.update(boardAlerts).set({ status: "actioned" }).where(eq(boardAlerts.id, alertId));
+  return { ok: true };
+}
+
+function toDirective(r: typeof boardDirectives.$inferSelect): BoardDirective {
+  return {
+    id: r.id,
+    session_id: r.session_id,
+    title: r.title,
+    detail: r.detail,
+    status: r.status as BoardDirectiveStatus,
+    project_id: r.project_id,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+/** The open commitments the board is tracking (for the ledger + follow-up context). */
+export async function listBoardDirectives(workspaceId: string, limit = 30): Promise<BoardDirective[]> {
+  const rows = await db
+    .select()
+    .from(boardDirectives)
+    .where(and(eq(boardDirectives.workspace_id, workspaceId), inArray(boardDirectives.status, ["open", "in_motion"])))
+    .orderBy(desc(boardDirectives.created_at))
+    .limit(limit);
+  return rows.map(toDirective);
+}
+
+export async function setDirectiveStatus(
+  workspaceId: string,
+  id: string,
+  status: BoardDirectiveStatus,
+): Promise<{ ok: true }> {
+  await db
+    .update(boardDirectives)
+    .set({ status, ...(status === "done" || status === "dropped" ? { resolved_at: new Date() } : {}) })
+    .where(and(eq(boardDirectives.workspace_id, workspaceId), eq(boardDirectives.id, id)));
+  return { ok: true };
+}
+
 export async function getBoardroom(workspaceId: string): Promise<BoardroomView> {
-  const [members, sessions, alerts, settings] = await Promise.all([
+  const [members, sessions, alerts, directives, settings] = await Promise.all([
     getBoardMembers(workspaceId),
     listBoardSessions(workspaceId),
     listBoardAlerts(workspaceId),
+    listBoardDirectives(workspaceId),
     getBoardSettings(workspaceId),
   ]);
-  return { members, sessions, alerts, settings };
+  return { members, sessions, alerts, directives, settings };
 }

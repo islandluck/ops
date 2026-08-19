@@ -766,6 +766,7 @@ export type BoardRound = "opening" | "rebuttal" | "verdict";
 export type BoardSessionStatus =
   | "opening_pending"
   | "rebuttal_pending"
+  | "awaiting_founder"
   | "verdict_pending"
   | "complete"
   | "failed";
@@ -805,14 +806,31 @@ export interface BoardSession {
   title: string;
   trigger: "user" | "assessment" | "research";
   status: BoardSessionStatus;
+  /** The founder's response to the debate, before the board rules (may correct assumptions). */
+  founder_input: string;
   verdict: string;
   disagreements: string[];
   recommendations: BoardRecommendation[];
   accountability: string;
+  /** The project spawned when the verdict was handed to the Executive. */
+  project_id: string | null;
   contributions: BoardContribution[];
   error: string;
   created_at: string;
   completed_at: string | null;
+}
+
+export type BoardDirectiveStatus = "open" | "in_motion" | "done" | "dropped";
+
+/** A commitment the board is tracking — a recommendation the founder put into motion. */
+export interface BoardDirective {
+  id: string;
+  session_id: string | null;
+  title: string;
+  detail: string;
+  status: BoardDirectiveStatus;
+  project_id: string | null;
+  created_at: string;
 }
 
 export interface BoardSessionSummary {
@@ -852,6 +870,7 @@ export interface BoardroomView {
   members: BoardMember[];
   sessions: BoardSessionSummary[];
   alerts: BoardAlert[];
+  directives: BoardDirective[];
   settings: BoardSettings;
 }
 

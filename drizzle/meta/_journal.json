@@ -267,6 +267,13 @@
       "when": 1787163691803,
       "tag": "0037_massive_sinister_six",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787175601047,
+      "tag": "0038_overrated_jack_power",
+      "breakpoints": true
     }
   ]
 }

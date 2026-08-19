@@ -1,7 +1,24 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Bell, Gavel, Loader2, Radar, ScrollText, Send, Sparkles, Target, X } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Bell,
+  CheckCircle2,
+  Gavel,
+  ListChecks,
+  Loader2,
+  Plus,
+  Radar,
+  ScrollText,
+  Send,
+  Sparkles,
+  Target,
+  Trash2,
+  X,
+} from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,18 +27,24 @@ import { cn } from "@/lib/cn";
 import { markdownToHtml } from "@/lib/content/format";
 import {
   advanceBoardAction,
+  boardAlertToTaskAction,
   conveneBoardAction,
+  deleteBoardSessionAction,
   getBoardroomAction,
   getBoardSessionAction,
+  handVerdictToExecutiveAction,
   markAllBoardAlertsReadAction,
+  respondToBoardAction,
   scanBoardIfDueAction,
   scanBoardNowAction,
   setBoardAlertStatusAction,
   setBoardCadenceAction,
+  setBoardDirectiveStatusAction,
 } from "@/app/actions";
 import type {
   BoardAlert,
   BoardCadence,
+  BoardDirective,
   BoardMember,
   BoardSession,
   BoardSessionStatus,
@@ -49,9 +72,14 @@ const ACCENT: Record<string, string> = {
 const STAGE_LABEL: Record<BoardSessionStatus, string> = {
   opening_pending: "The board is forming opening positions…",
   rebuttal_pending: "The board is debating…",
+  awaiting_founder: "",
   verdict_pending: "The Chair is weighing the verdict…",
   complete: "",
   failed: "",
+};
+const DIRECTIVE_STYLE: Record<string, string> = {
+  open: "bg-slate-100 text-slate-600",
+  in_motion: "bg-sky-100 text-sky-700",
 };
 
 const SEVERITY: Record<string, { chip: string; label: string }> = {
@@ -88,10 +116,12 @@ function blankSession(id: string, title: string): BoardSession {
     title,
     trigger: "user",
     status: "opening_pending",
+    founder_input: "",
     verdict: "",
     disagreements: [],
     recommendations: [],
     accountability: "",
+    project_id: null,
     contributions: [],
     error: "",
     created_at: new Date().toISOString(),
@@ -103,7 +133,10 @@ export default function BoardroomPage() {
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [sessions, setSessions] = useState<BoardSessionSummary[]>([]);
   const [alerts, setAlerts] = useState<BoardAlert[]>([]);
+  const [directives, setDirectives] = useState<BoardDirective[]>([]);
   const [settings, setSettings] = useState<BoardSettings>({ cadence: "daily", last_scan_at: null });
+  const [founderReply, setFounderReply] = useState("");
+  const [handingOff, setHandingOff] = useState(false);
   const [loading, setLoading] = useState(true);
   const [question, setQuestion] = useState("");
   const [convening, setConvening] = useState(false);
@@ -120,6 +153,7 @@ export default function BoardroomPage() {
       setMembers(r.members);
       setSessions(r.sessions);
       setAlerts(r.alerts);
+      setDirectives(r.directives);
       setSettings(r.settings);
     }
     setLoading(false);
@@ -152,7 +186,8 @@ export default function BoardroomPage() {
         break;
       }
       setActive(r.session);
-      if (r.session.status === "complete" || r.session.status === "failed") break;
+      // Stop at the founder-input pause, the verdict, or a failure.
+      if (["complete", "failed", "awaiting_founder"].includes(r.session.status)) break;
     }
     setBusy(false);
     void load();
@@ -221,6 +256,57 @@ export default function BoardroomPage() {
     await convene(`${a.title}. ${a.detail}`.trim());
   }
 
+  async function alertToTask(a: BoardAlert) {
+    const r = await boardAlertToTaskAction(a.id);
+    if (r.ok) {
+      setAlerts((prev) => prev.map((x) => (x.id === a.id ? { ...x, status: "actioned" } : x)));
+      setNotice(`Added “${a.title}” to the Approval Center as a task.`);
+    } else {
+      setError(r.error ?? "Couldn't create the task.");
+    }
+  }
+
+  // The founder answers the board before it rules (skip = let them rule as-is).
+  async function respond(skip: boolean) {
+    if (!active || busy) return;
+    const text = skip ? "" : founderReply.trim();
+    if (!skip && !text) return;
+    setFounderReply("");
+    const r = await respondToBoardAction(active.id, text);
+    if (!r.ok) {
+      setError(r.error);
+      return;
+    }
+    setActive(r.session);
+    void drive(active.id); // resume → the verdict
+  }
+
+  async function handOff() {
+    if (!active || handingOff) return;
+    setHandingOff(true);
+    setError("");
+    const r = await handVerdictToExecutiveAction(active.id);
+    setHandingOff(false);
+    if (!r.ok) {
+      setError(r.error ?? "Couldn't hand it off.");
+      return;
+    }
+    setActive((s) => (s ? { ...s, project_id: r.projectId ?? s.project_id } : s));
+    setNotice("Handed to the Executive — it's now a project. Track it in Projects.");
+    void load();
+  }
+
+  async function deleteSession(id: string) {
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (active?.id === id) setActive(null);
+    await deleteBoardSessionAction(id);
+  }
+
+  async function setDirective(id: string, status: "done" | "dropped") {
+    setDirectives((prev) => prev.filter((d) => d.id !== id));
+    await setBoardDirectiveStatusAction(id, status);
+  }
+
   return (
     <>
       <PageHeader
@@ -241,7 +327,16 @@ export default function BoardroomPage() {
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : active ? (
-          <Deliberation session={active} busy={busy} />
+          <Deliberation
+            session={active}
+            busy={busy}
+            founderReply={founderReply}
+            onFounderReply={setFounderReply}
+            onRespond={respond}
+            onHandOff={handOff}
+            handingOff={handingOff}
+            onDelete={() => deleteSession(active.id)}
+          />
         ) : (
           <div className="space-y-6">
             {error && (
@@ -300,9 +395,57 @@ export default function BoardroomPage() {
                 </div>
                 <div className="space-y-2.5">
                   {alerts.map((a) => (
-                    <AlertCard key={a.id} a={a} onTake={() => takeToBoard(a)} onDismiss={() => dismissAlert(a.id)} />
+                    <AlertCard
+                      key={a.id}
+                      a={a}
+                      onTake={() => takeToBoard(a)}
+                      onTask={() => alertToTask(a)}
+                      onDismiss={() => dismissAlert(a.id)}
+                    />
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Commitments the board is tracking (accountability ledger) */}
+            {directives.length > 0 && (
+              <div>
+                <p className="mb-2 flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                  <ListChecks className="h-3.5 w-3.5" /> The board is tracking
+                </p>
+                <Card className="divide-y divide-border p-0">
+                  {directives.map((d) => (
+                    <div key={d.id} className="flex items-center gap-3 px-3.5 py-2.5">
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
+                          DIRECTIVE_STYLE[d.status] ?? DIRECTIVE_STYLE.open,
+                        )}
+                      >
+                        {d.status === "in_motion" ? "In motion" : "Open"}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px]" title={d.title}>
+                        {d.title}
+                      </span>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          onClick={() => setDirective(d.id, "done")}
+                          title="Mark done"
+                          className="rounded p-1 text-muted-foreground transition-colors hover:bg-emerald-50 hover:text-emerald-600"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setDirective(d.id, "dropped")}
+                          title="Drop"
+                          className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </Card>
               </div>
             )}
 
@@ -373,13 +516,17 @@ export default function BoardroomPage() {
                 </p>
                 <Card className="divide-y divide-border p-0">
                   {sessions.map((s) => (
-                    <button
+                    <div
                       key={s.id}
-                      onClick={() => openSession(s.id)}
-                      className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-muted/50"
+                      className="group/row flex items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-muted/50"
                     >
-                      <ScrollText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+                      <button
+                        onClick={() => openSession(s.id)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      >
+                        <ScrollText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-[13px]">{s.title}</span>
+                      </button>
                       <span
                         className={cn(
                           "shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium",
@@ -392,7 +539,14 @@ export default function BoardroomPage() {
                       >
                         {s.status === "complete" ? "Verdict" : s.status === "failed" ? "Failed" : "In progress"}
                       </span>
-                    </button>
+                      <button
+                        onClick={() => deleteSession(s.id)}
+                        title="Delete"
+                        className="rounded p-1 text-muted-foreground opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover/row:opacity-100"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ))}
                 </Card>
               </div>
@@ -404,16 +558,45 @@ export default function BoardroomPage() {
   );
 }
 
-function Deliberation({ session, busy }: { session: BoardSession; busy: boolean }) {
+function Deliberation({
+  session,
+  busy,
+  founderReply,
+  onFounderReply,
+  onRespond,
+  onHandOff,
+  handingOff,
+  onDelete,
+}: {
+  session: BoardSession;
+  busy: boolean;
+  founderReply: string;
+  onFounderReply: (v: string) => void;
+  onRespond: (skip: boolean) => void;
+  onHandOff: () => void;
+  handingOff: boolean;
+  onDelete: () => void;
+}) {
   const openings = session.contributions.filter((c) => c.round === "opening");
   const rebuttals = session.contributions.filter((c) => c.round === "rebuttal");
   const stageNote = busy ? STAGE_LABEL[session.status] : "";
 
   return (
     <div className="space-y-5">
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Matter before the board</p>
-        <p className="mt-0.5 text-[16px] font-semibold">{session.title}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+            Matter before the board
+          </p>
+          <p className="mt-0.5 text-[16px] font-semibold">{session.title}</p>
+        </div>
+        <button
+          onClick={onDelete}
+          title="Delete this deliberation"
+          className="shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
       </div>
 
       {session.error && (
@@ -442,13 +625,74 @@ function Deliberation({ session, busy }: { session: BoardSession; busy: boolean 
         </Section>
       )}
 
+      {/* Your response to the board (once submitted) */}
+      {session.founder_input && (
+        <Section title="Your response">
+          <Card className="border-primary/20 bg-primary/[0.03] p-3.5">
+            <div className="mb-1 flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-[14px]">🧑</span>
+              <p className="text-[12.5px] font-semibold">You</p>
+            </div>
+            <Md className="text-[12.5px] leading-relaxed text-foreground/90">{session.founder_input}</Md>
+          </Card>
+        </Section>
+      )}
+
+      {/* The pause: answer the board before it rules */}
+      {session.status === "awaiting_founder" && (
+        <Card className="border-primary/30 bg-primary/[0.03] p-4">
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold">
+            <Gavel className="h-4 w-4 text-primary" /> Before the board rules — anything to add or correct?
+          </p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">
+            The board is about to deliver its verdict. If they're working off a wrong assumption, or you have context they
+            don't, tell them now — they'll weigh it (but won't just capitulate).
+          </p>
+          <Textarea
+            value={founderReply}
+            onChange={(e) => onFounderReply(e.target.value)}
+            rows={3}
+            placeholder="e.g. We already tried that channel — it didn't work because… / Our actual runway is 18 months, not 9…"
+            className="mt-3 text-[13px]"
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <Button size="sm" disabled={busy || !founderReply.trim()} onClick={() => onRespond(false)}>
+              <Send className="h-4 w-4" />
+              Submit to the board
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => onRespond(true)}>
+              Let them rule
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* Verdict */}
       {busy && session.status === "verdict_pending" && (
         <Card className="border-primary/30 bg-primary/[0.03] p-4">
           <StageSpinner label={STAGE_LABEL.verdict_pending} />
         </Card>
       )}
-      {session.status === "complete" && <Verdict session={session} />}
+      {session.status === "complete" && (
+        <>
+          <Verdict session={session} />
+          <div className="flex flex-wrap items-center gap-2">
+            {session.project_id ? (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800">
+                <CheckCircle2 className="h-4 w-4" /> Handed to the Executive — it's a project now.
+                <Link href="/projects" className="underline underline-offset-2">
+                  Open Projects
+                </Link>
+              </span>
+            ) : (
+              <Button size="sm" disabled={handingOff} onClick={onHandOff}>
+                {handingOff ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
+                Hand to the Executive
+              </Button>
+            )}
+          </div>
+        </>
+      )}
 
       {stageNote && session.status !== "verdict_pending" && (
         <p className="text-[11.5px] text-muted-foreground">{stageNote}</p>
@@ -546,7 +790,17 @@ function Verdict({ session }: { session: BoardSession }) {
   );
 }
 
-function AlertCard({ a, onTake, onDismiss }: { a: BoardAlert; onTake: () => void; onDismiss: () => void }) {
+function AlertCard({
+  a,
+  onTake,
+  onTask,
+  onDismiss,
+}: {
+  a: BoardAlert;
+  onTake: () => void;
+  onTask: () => void;
+  onDismiss: () => void;
+}) {
   const sev = SEVERITY[a.severity] ?? SEVERITY.info;
   return (
     <Card className={cn("p-3.5", a.status === "new" && "border-l-[3px] border-l-primary")}>
@@ -567,7 +821,10 @@ function AlertCard({ a, onTake, onDismiss }: { a: BoardAlert; onTake: () => void
           <span className="font-medium text-foreground/70">Suggested:</span> {a.suggested_action}
         </p>
       )}
-      <div className="mt-2.5 flex items-center gap-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <Button size="sm" variant="outline" onClick={onTask}>
+          <Plus className="h-4 w-4" /> Create a task
+        </Button>
         <Button size="sm" variant="outline" onClick={onTake}>
           <Gavel className="h-4 w-4" /> Take it to the board
         </Button>

@@ -115,17 +115,22 @@ import {
 } from "@/lib/agents/outbound";
 import {
   advanceBoard,
+  alertToTask,
   conveneBoard,
+  deleteBoardSession,
   getBoardSession,
   getBoardroom,
+  handVerdictToExecutive,
   markAllAlertsRead,
+  respondToBoard,
   runBoardScan,
   runBoardScanIfDue,
   setAlertStatus,
   setBoardCadence,
+  setDirectiveStatus,
   unreadBoardAlertCount,
 } from "@/lib/agents/boardroom";
-import type { BoardAlertStatus, BoardCadence } from "@/lib/types";
+import type { BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
@@ -2100,6 +2105,51 @@ export async function getBoardAlertCountAction(): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/** Submit the founder's response to the debate before the board rules (empty = skip). */
+export async function respondToBoardAction(sessionId: string, text: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return respondToBoard(ws, sessionId, text);
+}
+
+/** Delete a deliberation. */
+export async function deleteBoardSessionAction(sessionId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return deleteBoardSession(ws, sessionId);
+}
+
+/** Hand a completed verdict to the Executive as a project + tracked directives. */
+export async function handVerdictToExecutiveAction(sessionId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return handVerdictToExecutive(ws, sessionId);
+}
+
+/** Turn a board alert into a task on the Approval Center. */
+export async function boardAlertToTaskAction(alertId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return alertToTask(ws, alertId);
+}
+
+/** Mark a tracked directive done / dropped / etc. */
+export async function setBoardDirectiveStatusAction(id: string, status: BoardDirectiveStatus) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return setDirectiveStatus(ws, id, status);
 }
 
 /** Send one outbound draft now. */

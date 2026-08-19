@@ -97,6 +97,7 @@ export async function boardVerdict(input: {
   question: string;
   openings: { name: string; role: string; content: string }[];
   rebuttals: { name: string; role: string; content: string }[];
+  founderInput?: string;
 }): Promise<BoardVerdict> {
   const client = getAnthropic();
   const system = [
@@ -104,12 +105,18 @@ export async function boardVerdict(input: {
     MISSION,
     "",
     "You've heard the members' openings and their debate. Deliver the board's VERDICT. Be direct and hold the founder accountable — the verdict may be exactly what they don't want to hear. Bias to action.",
+    input.founderInput
+      ? "The founder responded to the debate (below). Weigh it seriously and correct your assumptions where they clearly have better information — but do NOT simply capitulate. If they're wrong, rationalizing, or dodging, say so directly."
+      : "",
     "",
     'Respond with ONLY JSON, no markdown fences:',
     '{"verdict": string (the board\'s call, 1–3 paragraphs), "disagreements": string[] (0–4 short lines where the board genuinely split), "recommendations": [{"title": string, "detail": string}] (3–6 concrete next moves, most important first, action-oriented), "accountability": string (1–2 sentences: what the founder must own and be measured on now)}',
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   const openings = othersBlock(input.openings);
   const rebuttals = othersBlock(input.rebuttals);
+  const founder = input.founderInput ? `\n\nTHE FOUNDER RESPONDED TO THE DEBATE:\n${input.founderInput}` : "";
   const msg = await client.messages.create({
     model: MODEL,
     // Generous headroom: a full verdict + disagreements + recommendations must
@@ -120,7 +127,7 @@ export async function boardVerdict(input: {
       {
         role: "user",
         content:
-          `Matter: ${input.question}\n\nOPENINGS:\n${openings}\n\nDEBATE:\n${rebuttals}\n\nContext:\n${input.context}`.slice(
+          `Matter: ${input.question}\n\nOPENINGS:\n${openings}\n\nDEBATE:\n${rebuttals}${founder}\n\nContext:\n${input.context}`.slice(
             0,
             18000,
           ),

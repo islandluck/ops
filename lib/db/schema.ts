@@ -404,11 +404,15 @@ export const boardSessions = pgTable(
     status: text("status").notNull().default("opening_pending"),
     // Assembled company + market context, reused across the deliberation steps.
     context: text("context").notNull().default(""),
+    // The founder's response to the debate, captured before the board rules.
+    founder_input: text("founder_input").notNull().default(""),
     // The Chair's synthesis.
     verdict: text("verdict").notNull().default(""),
     disagreements: jsonb("disagreements").$type<string[]>(),
     recommendations: jsonb("recommendations").$type<BoardRecommendation[]>(),
     accountability: text("accountability").notNull().default(""),
+    // The project spawned when the verdict was handed to the Executive.
+    project_id: uuid("project_id"),
     error: text("error").notNull().default(""),
     created_at: createdAt,
     completed_at: timestamp("completed_at", { withTimezone: true }),
@@ -480,6 +484,28 @@ export const boardSettings = pgTable(
     updated_at: updatedAt,
   },
   (t) => [uniqueIndex("board_settings_ws_uniq").on(t.workspace_id)],
+);
+
+/** A commitment the board is tracking — a recommendation the founder put into
+ *  motion — so the board can follow up on what actually got done (accountability). */
+export const boardDirectives = pgTable(
+  "board_directives",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Survives deletion of the deliberation it came from.
+    session_id: uuid("session_id").references(() => boardSessions.id, { onDelete: "set null" }),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    // open | in_motion | done | dropped.
+    status: text("status").notNull().default("open"),
+    project_id: uuid("project_id"),
+    created_at: createdAt,
+    resolved_at: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [index("board_directives_ws_idx").on(t.workspace_id, t.status)],
 );
 
 /**
