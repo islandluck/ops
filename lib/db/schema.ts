@@ -22,6 +22,7 @@ import type {
   AgentTier,
   ApprovalStatus,
   AssetType,
+  BoardRecommendation,
   Category,
   BriefKind,
   CommandCenterDoc,
@@ -359,6 +360,84 @@ export const outboundDrafts = pgTable(
     sent_at: timestamp("sent_at", { withTimezone: true }),
   },
   (t) => [index("outbound_drafts_ws_idx").on(t.workspace_id, t.status)],
+);
+
+/**
+ * The Boardroom — a standing board of specialized AI advisors (a domain lens per
+ * seat, modeled after blue-chip VC wisdom) whose mandate is to drive the company
+ * to a $10B valuation, fast, biased to action. Members deliberate + debate; the
+ * Chair delivers a verdict. Distinct from the worker `agents` and the Executive.
+ */
+export const boardMembers = pgTable(
+  "board_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // finance | marketing | product | strategy | technology | chair | custom.
+    role: text("role").notNull().default("custom"),
+    name: text("name").notNull().default(""),
+    // The seat's persona / VC lens / directives.
+    mandate: text("mandate").notNull().default(""),
+    emoji: text("emoji").notNull().default("🧑‍⚖️"),
+    accent: text("accent").notNull().default("slate"),
+    seat: integer("seat").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("board_members_ws_idx").on(t.workspace_id)],
+);
+
+export const boardSessions = pgTable(
+  "board_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    // user | assessment | research (what convened the board).
+    trigger: text("trigger").notNull().default("user"),
+    // opening_pending | rebuttal_pending | verdict_pending | complete | failed.
+    status: text("status").notNull().default("opening_pending"),
+    // Assembled company + market context, reused across the deliberation steps.
+    context: text("context").notNull().default(""),
+    // The Chair's synthesis.
+    verdict: text("verdict").notNull().default(""),
+    disagreements: jsonb("disagreements").$type<string[]>(),
+    recommendations: jsonb("recommendations").$type<BoardRecommendation[]>(),
+    accountability: text("accountability").notNull().default(""),
+    error: text("error").notNull().default(""),
+    created_at: createdAt,
+    completed_at: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [index("board_sessions_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+export const boardContributions = pgTable(
+  "board_contributions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    session_id: uuid("session_id")
+      .notNull()
+      .references(() => boardSessions.id, { onDelete: "cascade" }),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Member snapshot (kept on the row so edits/deletes don't rewrite history).
+    member_id: uuid("member_id"),
+    member_name: text("member_name").notNull().default(""),
+    member_role: text("member_role").notNull().default("custom"),
+    member_emoji: text("member_emoji").notNull().default(""),
+    // opening | rebuttal | verdict.
+    round: text("round").notNull().default("opening"),
+    content: text("content").notNull().default(""),
+    seq: integer("seq").notNull().default(0),
+    created_at: createdAt,
+  },
+  (t) => [index("board_contributions_session_idx").on(t.session_id)],
 );
 
 /**

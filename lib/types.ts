@@ -759,6 +759,74 @@ export interface OutboundDraft {
   sent_at: string | null;
 }
 
+/* ------------------------------- boardroom ------------------------------- */
+
+export type BoardRole = "finance" | "marketing" | "product" | "strategy" | "technology" | "chair" | "custom";
+export type BoardRound = "opening" | "rebuttal" | "verdict";
+export type BoardSessionStatus =
+  | "opening_pending"
+  | "rebuttal_pending"
+  | "verdict_pending"
+  | "complete"
+  | "failed";
+
+/** One seat on the board — a domain lens modeled after blue-chip VC wisdom. */
+export interface BoardMember {
+  id: string;
+  role: BoardRole;
+  name: string;
+  mandate: string;
+  emoji: string;
+  accent: string;
+  seat: number;
+  active: boolean;
+}
+
+/** One thing a member said during a deliberation (an opening or a rebuttal). */
+export interface BoardContribution {
+  id: string;
+  member_id: string | null;
+  member_name: string;
+  member_role: BoardRole;
+  member_emoji: string;
+  round: BoardRound;
+  content: string;
+  seq: number;
+}
+
+export interface BoardRecommendation {
+  title: string;
+  detail: string;
+}
+
+/** A full board deliberation: the debate transcript + the Chair's verdict. */
+export interface BoardSession {
+  id: string;
+  title: string;
+  trigger: "user" | "assessment" | "research";
+  status: BoardSessionStatus;
+  verdict: string;
+  disagreements: string[];
+  recommendations: BoardRecommendation[];
+  accountability: string;
+  contributions: BoardContribution[];
+  error: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface BoardSessionSummary {
+  id: string;
+  title: string;
+  status: BoardSessionStatus;
+  created_at: string;
+}
+
+export interface BoardroomView {
+  members: BoardMember[];
+  sessions: BoardSessionSummary[];
+}
+
 /* ------------------------------ Command Center ----------------------------- */
 
 /** One goal bullet. `done` renders strikethrough; `indent` (0|1) gives one nesting level. */

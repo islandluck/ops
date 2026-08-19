@@ -9,6 +9,7 @@ import {
   ChevronsUpDown,
   CircleDot,
   Compass,
+  Gavel,
   FileText,
   FolderKanban,
   FolderOpen,
@@ -45,6 +46,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
     items: [
       { href: "/approvals", label: "Approval Center", icon: SquareKanban },
       { href: "/executive", label: "Executive", icon: Compass },
+      { href: "/boardroom", label: "Boardroom", icon: Gavel },
       { href: "/command-center", label: "Command Center", icon: ListChecks },
       { href: "/email", label: "Email Manager", icon: Mail },
       { href: "/notes", label: "Notes", icon: NotebookPen },

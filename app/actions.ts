@@ -113,6 +113,7 @@ import {
   unscheduleOutboundDraft,
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
+import { advanceBoard, conveneBoard, getBoardSession, getBoardroom } from "@/lib/agents/boardroom";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
@@ -200,6 +201,8 @@ import {
 } from "@/lib/pages";
 import type {
   AppState,
+  BoardSession,
+  BoardroomView,
   BriefKind,
   CampaignData,
   ChannelKind,
@@ -1970,6 +1973,54 @@ export async function flushDueOutboundDraftsAction() {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
   return flushDueOutboundDrafts(ws);
+}
+
+/* -------------------------------- boardroom ------------------------------- */
+
+/** The board roster + recent deliberations. */
+export async function getBoardroomAction(): Promise<BoardroomView | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return await getBoardroom(ws);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load the boardroom." };
+  }
+}
+
+/** Convene the board on a matter (creates the session; drive it with advanceBoardAction). */
+export async function conveneBoardAction(question: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return conveneBoard(ws, question);
+}
+
+/** Run the session's next deliberation stage (openings → rebuttals → verdict). */
+export async function advanceBoardAction(sessionId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return advanceBoard(ws, sessionId);
+}
+
+/** Load one deliberation (transcript + verdict). */
+export async function getBoardSessionAction(
+  sessionId: string,
+): Promise<{ session: BoardSession } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return { session: await getBoardSession(ws, sessionId) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load that deliberation." };
+  }
 }
 
 /** Send one outbound draft now. */
