@@ -47,7 +47,7 @@ export async function boardOpening(input: {
   ].join("\n");
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 900,
+    max_tokens: 1600,
     system,
     messages: [{ role: "user", content: `Matter before the board:\n${input.question}\n\nContext:\n${input.context}`.slice(0, 12000) }],
   });
@@ -72,7 +72,7 @@ export async function boardRebuttal(input: {
   const others = othersBlock(input.openings.filter((o) => o.name !== input.member.name));
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 700,
+    max_tokens: 1400,
     system,
     messages: [
       {
@@ -112,7 +112,9 @@ export async function boardVerdict(input: {
   const rebuttals = othersBlock(input.rebuttals);
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 1600,
+    // Generous headroom: a full verdict + disagreements + recommendations must
+    // never truncate (a cut-off JSON blob is what broke rendering before).
+    max_tokens: 4000,
     system,
     messages: [
       {
@@ -126,15 +128,23 @@ export async function boardVerdict(input: {
     ],
   });
   const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  // If the JSON ever fails to parse, salvage the verdict prose (never dump raw,
+  // fenced, or truncated JSON at the founder).
+  const salvage = (): BoardVerdict => {
+    const m = text.match(/"verdict"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    const verdict = m
+      ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      : text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+    return { verdict, disagreements: [], recommendations: [], accountability: "" };
+  };
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
-  const fallback: BoardVerdict = { verdict: text.slice(0, 2000), disagreements: [], recommendations: [], accountability: "" };
-  if (start === -1 || end === -1) return fallback;
+  if (start === -1 || end === -1) return salvage();
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
   } catch {
-    return fallback;
+    return salvage();
   }
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const strArr = (v: unknown) =>
@@ -147,7 +157,7 @@ export async function boardVerdict(input: {
         .slice(0, 6)
     : [];
   return {
-    verdict: str(parsed.verdict) || fallback.verdict,
+    verdict: str(parsed.verdict) || salvage().verdict,
     disagreements: strArr(parsed.disagreements),
     recommendations: recs,
     accountability: str(parsed.accountability),

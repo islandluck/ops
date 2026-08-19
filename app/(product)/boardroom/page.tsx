@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
+import { markdownToHtml } from "@/lib/content/format";
 import {
   advanceBoardAction,
   conveneBoardAction,
@@ -46,6 +47,16 @@ const PROMPTS = [
   "Who are our real competitors, and how do we beat them?",
   "Where am I fooling myself about this business?",
 ];
+
+/** Render the board's markdown (bold, lists, paragraphs) — HTML-escaped + safe. */
+function Md({ children, className }: { children: string; className?: string }) {
+  return (
+    <div
+      className={cn("prose-chat", className)}
+      dangerouslySetInnerHTML={{ __html: markdownToHtml(children) }}
+    />
+  );
+}
 
 function blankSession(id: string, title: string): BoardSession {
   return {
@@ -323,7 +334,7 @@ function Contribution({ c, rebuttal }: { c: BoardSession["contributions"][number
           <p className="text-[11px] text-muted-foreground">{ROLE_LABEL[c.member_role] ?? c.member_role}</p>
         </div>
       </div>
-      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">{c.content}</p>
+      <Md className="text-[12.5px] leading-relaxed text-foreground/90">{c.content}</Md>
     </Card>
   );
 }
@@ -343,18 +354,17 @@ function Verdict({ session }: { session: BoardSession }) {
       <p className="flex items-center gap-1.5 text-[13px] font-semibold uppercase tracking-wide text-primary">
         <Gavel className="h-4 w-4" /> The board's verdict
       </p>
-      <p className="mt-2 whitespace-pre-wrap text-[13.5px] leading-relaxed text-foreground">{session.verdict}</p>
+      <Md className="mt-2 text-[13.5px] leading-relaxed text-foreground">{session.verdict}</Md>
 
       {session.disagreements.length > 0 && (
         <div className="mt-3.5">
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
             Where the board split
           </p>
-          <ul className="space-y-1">
+          <ul className="space-y-1.5">
             {session.disagreements.map((d, i) => (
-              <li key={i} className="flex gap-1.5 text-[12.5px] text-foreground/80">
-                <span className="text-muted-foreground">•</span>
-                {d}
+              <li key={i} className="border-l-2 border-border pl-2.5">
+                <Md className="text-[12.5px] leading-relaxed text-foreground/80">{d}</Md>
               </li>
             ))}
           </ul>
@@ -374,7 +384,7 @@ function Verdict({ session }: { session: BoardSession }) {
                 </span>
                 <div className="min-w-0">
                   <p className="text-[13px] font-semibold">{r.title}</p>
-                  {r.detail && <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">{r.detail}</p>}
+                  {r.detail && <Md className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground">{r.detail}</Md>}
                 </div>
               </li>
             ))}
@@ -387,7 +397,7 @@ function Verdict({ session }: { session: BoardSession }) {
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
             <Target className="h-3.5 w-3.5" /> What you must own
           </p>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-amber-900">{session.accountability}</p>
+          <Md className="mt-1 text-[12.5px] leading-relaxed text-amber-900">{session.accountability}</Md>
         </div>
       )}
     </Card>
