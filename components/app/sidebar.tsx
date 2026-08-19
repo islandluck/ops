@@ -34,7 +34,7 @@ import { Logo } from "@/components/brand";
 import { CATEGORY_ICONS } from "@/components/badges";
 import { Avatar } from "@/components/ui/misc";
 import { useStore } from "@/lib/store";
-import { getExecutiveAttentionAction } from "@/app/actions";
+import { getBoardAlertCountAction, getExecutiveAttentionAction } from "@/app/actions";
 import { categoryCounts } from "@/lib/filters";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/constants";
 import { cn } from "@/lib/cn";
@@ -111,6 +111,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       .catch(() => {});
   }, [pathname]);
 
+  // Boardroom unread-alert badge — refreshed as you move around the app.
+  const [boardAlerts, setBoardAlerts] = useState(0);
+  useEffect(() => {
+    getBoardAlertCountAction()
+      .then(setBoardAlerts)
+      .catch(() => {});
+  }, [pathname]);
+
   function go(path: string) {
     router.push(path);
     onNavigate?.();
@@ -177,7 +185,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 item.href === "/approvals" && counts
                   ? Object.values(counts).reduce((a, c) => a + c.ready, 0)
                   : 0;
-              const badge = item.href === "/executive" ? attention : ready;
+              const badge =
+                item.href === "/boardroom" ? boardAlerts : item.href === "/executive" ? attention : ready;
               return (
                 <button
                   key={item.href}

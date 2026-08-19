@@ -822,9 +822,37 @@ export interface BoardSessionSummary {
   created_at: string;
 }
 
+export type BoardAlertSeverity = "info" | "attention" | "urgent";
+export type BoardAlertStatus = "new" | "read" | "dismissed" | "actioned";
+
+/** An unprompted finding a board member raised during an autonomous scan. */
+export interface BoardAlert {
+  id: string;
+  member_id: string | null;
+  member_name: string;
+  member_role: BoardRole;
+  member_emoji: string;
+  severity: BoardAlertSeverity;
+  title: string;
+  detail: string;
+  suggested_action: string;
+  status: BoardAlertStatus;
+  created_at: string;
+}
+
+/** How often the board researches on its own and raises alerts. */
+export type BoardCadence = "off" | "daily" | "weekly";
+
+export interface BoardSettings {
+  cadence: BoardCadence;
+  last_scan_at: string | null;
+}
+
 export interface BoardroomView {
   members: BoardMember[];
   sessions: BoardSessionSummary[];
+  alerts: BoardAlert[];
+  settings: BoardSettings;
 }
 
 /* ------------------------------ Command Center ----------------------------- */

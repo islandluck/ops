@@ -440,6 +440,48 @@ export const boardContributions = pgTable(
   (t) => [index("board_contributions_session_idx").on(t.session_id)],
 );
 
+/** An unprompted finding the board raised during an autonomous research scan. */
+export const boardAlerts = pgTable(
+  "board_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    member_id: uuid("member_id"),
+    member_name: text("member_name").notNull().default(""),
+    member_role: text("member_role").notNull().default("custom"),
+    member_emoji: text("member_emoji").notNull().default(""),
+    // info | attention | urgent.
+    severity: text("severity").notNull().default("info"),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    suggested_action: text("suggested_action").notNull().default(""),
+    // new | read | dismissed | actioned.
+    status: text("status").notNull().default("new"),
+    created_at: createdAt,
+    read_at: timestamp("read_at", { withTimezone: true }),
+  },
+  (t) => [index("board_alerts_ws_idx").on(t.workspace_id, t.status)],
+);
+
+/** Per-workspace autonomous-scan settings (cadence + last run). */
+export const boardSettings = pgTable(
+  "board_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // off | daily | weekly.
+    cadence: text("cadence").notNull().default("daily"),
+    last_scan_at: timestamp("last_scan_at", { withTimezone: true }),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [uniqueIndex("board_settings_ws_uniq").on(t.workspace_id)],
+);
+
 /**
  * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
  * usage returned by every response, attributed to a workspace (null = a call made

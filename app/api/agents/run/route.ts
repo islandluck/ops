@@ -5,6 +5,7 @@ import { refreshAllReplyRadars } from "@/lib/agents/reply-radar";
 import { generateDueBriefs } from "@/lib/agents/executive";
 import { crmRadarSweep } from "@/lib/agents/crm";
 import { runDueEmailTriage } from "@/lib/agents/triage";
+import { runDueBoardScans } from "@/lib/agents/boardroom";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -37,6 +38,8 @@ async function handle(request: NextRequest) {
     const crm = await crmRadarSweep();
     // Auto-triage each workspace's inbox on its configured cadence (drafts only).
     const dueEmail = await runDueEmailTriage();
+    // The board's autonomous market scan on its cadence → unprompted alerts.
+    const board = await runDueBoardScans().catch(() => ({ scanned: 0, alerts: 0 }));
     return NextResponse.json({
       ok: true,
       ...result,
@@ -45,6 +48,8 @@ async function handle(request: NextRequest) {
       briefsGenerated: briefs.generated,
       crm,
       emailTriaged: dueEmail.ran,
+      boardScans: board.scanned,
+      boardAlerts: board.alerts,
     });
   } catch (e) {
     return NextResponse.json(

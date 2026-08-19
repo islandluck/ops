@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Gavel, Loader2, ScrollText, Send, Sparkles, Target } from "lucide-react";
+import { ArrowLeft, Bell, Gavel, Loader2, Radar, ScrollText, Send, Sparkles, Target, X } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,8 +13,21 @@ import {
   conveneBoardAction,
   getBoardroomAction,
   getBoardSessionAction,
+  markAllBoardAlertsReadAction,
+  scanBoardIfDueAction,
+  scanBoardNowAction,
+  setBoardAlertStatusAction,
+  setBoardCadenceAction,
 } from "@/app/actions";
-import type { BoardMember, BoardSession, BoardSessionStatus, BoardSessionSummary } from "@/lib/types";
+import type {
+  BoardAlert,
+  BoardCadence,
+  BoardMember,
+  BoardSession,
+  BoardSessionStatus,
+  BoardSessionSummary,
+  BoardSettings,
+} from "@/lib/types";
 
 const ROLE_LABEL: Record<string, string> = {
   finance: "Finance",
@@ -40,6 +53,17 @@ const STAGE_LABEL: Record<BoardSessionStatus, string> = {
   complete: "",
   failed: "",
 };
+
+const SEVERITY: Record<string, { chip: string; label: string }> = {
+  info: { chip: "bg-slate-100 text-slate-600", label: "Info" },
+  attention: { chip: "bg-amber-100 text-amber-700", label: "Attention" },
+  urgent: { chip: "bg-red-100 text-red-700", label: "Urgent" },
+};
+const CADENCES: { value: BoardCadence; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+];
 
 const PROMPTS = [
   "Assess where we stand and what's holding us back.",
@@ -78,10 +102,14 @@ function blankSession(id: string, title: string): BoardSession {
 export default function BoardroomPage() {
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [sessions, setSessions] = useState<BoardSessionSummary[]>([]);
+  const [alerts, setAlerts] = useState<BoardAlert[]>([]);
+  const [settings, setSettings] = useState<BoardSettings>({ cadence: "daily", last_scan_at: null });
   const [loading, setLoading] = useState(true);
   const [question, setQuestion] = useState("");
   const [convening, setConvening] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [notice, setNotice] = useState("");
   const [active, setActive] = useState<BoardSession | null>(null);
   const [error, setError] = useState("");
 
@@ -91,13 +119,29 @@ export default function BoardroomPage() {
     else {
       setMembers(r.members);
       setSessions(r.sessions);
+      setAlerts(r.alerts);
+      setSettings(r.settings);
     }
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    void (async () => {
+      await load();
+      // Page-load poke: run a scan if the cadence is due (works without cron locally).
+      const p = await scanBoardIfDueAction();
+      if (!cancelled && p.created > 0) {
+        void load();
+        setNotice(`The board raised ${p.created} new alert${p.created === 1 ? "" : "s"} from its scan.`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
+
+  const newCount = alerts.filter((a) => a.status === "new").length;
 
   const drive = useCallback(async (id: string) => {
     setBusy(true);
@@ -137,6 +181,46 @@ export default function BoardroomPage() {
     else setError(r.error);
   }
 
+  async function scanNow() {
+    if (scanning || busy) return;
+    setScanning(true);
+    setError("");
+    setNotice("");
+    const r = await scanBoardNowAction();
+    setScanning(false);
+    if (!r.ok) {
+      setError(r.error);
+      return;
+    }
+    await load();
+    setNotice(
+      r.created > 0
+        ? `The board raised ${r.created} new alert${r.created === 1 ? "" : "s"}.`
+        : "The board scanned the market — nothing material to raise right now.",
+    );
+  }
+
+  async function setCadence(c: BoardCadence) {
+    setSettings((s) => ({ ...s, cadence: c }));
+    await setBoardCadenceAction(c);
+  }
+
+  async function dismissAlert(id: string) {
+    setAlerts((prev) => prev.filter((a) => a.id !== id));
+    await setBoardAlertStatusAction(id, "dismissed");
+  }
+
+  async function markAllRead() {
+    setAlerts((prev) => prev.map((a) => (a.status === "new" ? { ...a, status: "read" } : a)));
+    await markAllBoardAlertsReadAction();
+  }
+
+  async function takeToBoard(a: BoardAlert) {
+    setAlerts((prev) => prev.map((x) => (x.id === a.id ? { ...x, status: "actioned" } : x)));
+    void setBoardAlertStatusAction(a.id, "actioned");
+    await convene(`${a.title}. ${a.detail}`.trim());
+  }
+
   return (
     <>
       <PageHeader
@@ -162,6 +246,64 @@ export default function BoardroomPage() {
           <div className="space-y-6">
             {error && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-700">{error}</div>
+            )}
+            {notice && !error && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800">
+                {notice}
+              </div>
+            )}
+
+            {/* Autonomous market scan controls */}
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
+              <Radar className="h-4 w-4 text-muted-foreground" />
+              <span className="text-[12px] text-muted-foreground">Autonomous market scan:</span>
+              <div className="inline-flex rounded-md border border-border p-0.5">
+                {CADENCES.map((c) => (
+                  <button
+                    key={c.value}
+                    onClick={() => setCadence(c.value)}
+                    className={cn(
+                      "rounded px-2 py-0.5 text-[11.5px] font-medium transition-colors",
+                      settings.cadence === c.value ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+              <Button size="sm" variant="outline" className="ml-auto" disabled={scanning} onClick={scanNow}>
+                {scanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Radar className="h-4 w-4" />}
+                {scanning ? "Scanning…" : "Scan now"}
+              </Button>
+            </div>
+
+            {/* Alerts the board raised on its own */}
+            {alerts.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    <Bell className="h-3.5 w-3.5" /> From the board
+                    {newCount > 0 && (
+                      <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {newCount} new
+                      </span>
+                    )}
+                  </p>
+                  {newCount > 0 && (
+                    <button
+                      onClick={markAllRead}
+                      className="text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2.5">
+                  {alerts.map((a) => (
+                    <AlertCard key={a.id} a={a} onTake={() => takeToBoard(a)} onDismiss={() => dismissAlert(a.id)} />
+                  ))}
+                </div>
+              </div>
             )}
 
             {/* Convene */}
@@ -400,6 +542,39 @@ function Verdict({ session }: { session: BoardSession }) {
           <Md className="mt-1 text-[12.5px] leading-relaxed text-amber-900">{session.accountability}</Md>
         </div>
       )}
+    </Card>
+  );
+}
+
+function AlertCard({ a, onTake, onDismiss }: { a: BoardAlert; onTake: () => void; onDismiss: () => void }) {
+  const sev = SEVERITY[a.severity] ?? SEVERITY.info;
+  return (
+    <Card className={cn("p-3.5", a.status === "new" && "border-l-[3px] border-l-primary")}>
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-muted text-[15px]">{a.member_emoji}</span>
+        <div className="flex items-baseline gap-1.5">
+          <p className="text-[12.5px] font-semibold">{a.member_name}</p>
+          <p className="text-[11px] text-muted-foreground">{ROLE_LABEL[a.member_role] ?? a.member_role}</p>
+        </div>
+        <span className={cn("ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase", sev.chip)}>
+          {sev.label}
+        </span>
+      </div>
+      <p className="text-[13.5px] font-semibold">{a.title}</p>
+      {a.detail && <Md className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/85">{a.detail}</Md>}
+      {a.suggested_action && (
+        <p className="mt-1.5 text-[12px] text-muted-foreground">
+          <span className="font-medium text-foreground/70">Suggested:</span> {a.suggested_action}
+        </p>
+      )}
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button size="sm" variant="outline" onClick={onTake}>
+          <Gavel className="h-4 w-4" /> Take it to the board
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDismiss}>
+          <X className="h-4 w-4" /> Dismiss
+        </Button>
+      </div>
     </Card>
   );
 }

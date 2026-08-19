@@ -113,7 +113,19 @@ import {
   unscheduleOutboundDraft,
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
-import { advanceBoard, conveneBoard, getBoardSession, getBoardroom } from "@/lib/agents/boardroom";
+import {
+  advanceBoard,
+  conveneBoard,
+  getBoardSession,
+  getBoardroom,
+  markAllAlertsRead,
+  runBoardScan,
+  runBoardScanIfDue,
+  setAlertStatus,
+  setBoardCadence,
+  unreadBoardAlertCount,
+} from "@/lib/agents/boardroom";
+import type { BoardAlertStatus, BoardCadence } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
@@ -2020,6 +2032,73 @@ export async function getBoardSessionAction(
     return { session: await getBoardSession(ws, sessionId) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load that deliberation." };
+  }
+}
+
+/** Run the board's autonomous scan now (manual trigger). */
+export async function scanBoardNowAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await runBoardScan(ws);
+    return { ok: true as const, created: r.created };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "The scan failed." };
+  }
+}
+
+/** Run a scan only if the cadence is due (page-load poke, so it works without cron). */
+export async function scanBoardIfDueAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ran: false, created: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ran: false, created: 0 };
+  try {
+    return await runBoardScanIfDue(ws);
+  } catch {
+    return { ran: false, created: 0 };
+  }
+}
+
+/** Set how often the board scans on its own (off | daily | weekly). */
+export async function setBoardCadenceAction(cadence: BoardCadence) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return setBoardCadence(ws, cadence);
+}
+
+/** Mark one alert read / dismissed / actioned. */
+export async function setBoardAlertStatusAction(id: string, status: BoardAlertStatus) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return setAlertStatus(ws, id, status);
+}
+
+/** Mark every new alert read (clears the badge). */
+export async function markAllBoardAlertsReadAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return markAllAlertsRead(ws);
+}
+
+/** Unread board-alert count for the sidebar badge. */
+export async function getBoardAlertCountAction(): Promise<number> {
+  const user = await getCurrentUser();
+  if (!user) return 0;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return 0;
+  try {
+    return await unreadBoardAlertCount(ws);
+  } catch {
+    return 0;
   }
 }
 

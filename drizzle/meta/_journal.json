@@ -260,6 +260,13 @@
       "when": 1787160236110,
       "tag": "0036_acoustic_mariko_yashida",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787163691803,
+      "tag": "0037_massive_sinister_six",
+      "breakpoints": true
     }
   ]
 }

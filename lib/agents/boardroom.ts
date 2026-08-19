@@ -1,15 +1,27 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { boardContributions, boardMembers, boardSessions, businessBriefs } from "@/lib/db/schema";
+import {
+  activityEvents,
+  boardAlerts,
+  boardContributions,
+  boardMembers,
+  boardSessions,
+  boardSettings,
+  businessBriefs,
+  executiveMemory,
+} from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
 import { runWithUsage } from "@/lib/ai/usage";
-import { boardOpening, boardRebuttal, boardVerdict } from "@/lib/ai/board";
+import { boardOpening, boardRebuttal, boardScan, boardVerdict } from "@/lib/ai/board";
 import type {
+  BoardAlert,
+  BoardAlertStatus,
+  BoardCadence,
   BoardContribution,
   BoardMember,
   BoardRecommendation,
@@ -17,6 +29,7 @@ import type {
   BoardSession,
   BoardSessionStatus,
   BoardSessionSummary,
+  BoardSettings,
   BoardroomView,
 } from "@/lib/types";
 
@@ -405,7 +418,231 @@ export async function listBoardSessions(workspaceId: string, limit = 20): Promis
   }));
 }
 
+/* -------------------------------- settings -------------------------------- */
+
+const CADENCE_MS: Record<BoardCadence, number> = {
+  off: Infinity,
+  daily: 24 * 3600 * 1000,
+  weekly: 7 * 24 * 3600 * 1000,
+};
+
+/** The workspace's autonomous-scan settings — lazily created (default daily). */
+export async function getBoardSettings(workspaceId: string): Promise<BoardSettings> {
+  const [row] = await db
+    .select()
+    .from(boardSettings)
+    .where(eq(boardSettings.workspace_id, workspaceId))
+    .limit(1);
+  if (row) {
+    return {
+      cadence: row.cadence as BoardCadence,
+      last_scan_at: row.last_scan_at ? new Date(row.last_scan_at).toISOString() : null,
+    };
+  }
+  const now = new Date();
+  await db
+    .insert(boardSettings)
+    .values({ id: randomUUID(), workspace_id: workspaceId, cadence: "daily", created_at: now, updated_at: now });
+  return { cadence: "daily", last_scan_at: null };
+}
+
+export async function setBoardCadence(workspaceId: string, cadence: BoardCadence): Promise<{ ok: true }> {
+  await getBoardSettings(workspaceId);
+  await db
+    .update(boardSettings)
+    .set({ cadence, updated_at: new Date() })
+    .where(eq(boardSettings.workspace_id, workspaceId));
+  return { ok: true };
+}
+
+/* --------------------------------- alerts --------------------------------- */
+
+function toAlert(r: typeof boardAlerts.$inferSelect): BoardAlert {
+  return {
+    id: r.id,
+    member_id: r.member_id,
+    member_name: r.member_name,
+    member_role: r.member_role as BoardRole,
+    member_emoji: r.member_emoji,
+    severity: r.severity as BoardAlert["severity"],
+    title: r.title,
+    detail: r.detail,
+    suggested_action: r.suggested_action,
+    status: r.status as BoardAlertStatus,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listBoardAlerts(workspaceId: string, limit = 20): Promise<BoardAlert[]> {
+  const rows = await db
+    .select()
+    .from(boardAlerts)
+    .where(and(eq(boardAlerts.workspace_id, workspaceId), inArray(boardAlerts.status, ["new", "read", "actioned"])))
+    .orderBy(desc(boardAlerts.created_at))
+    .limit(limit);
+  return rows.map(toAlert);
+}
+
+export async function unreadBoardAlertCount(workspaceId: string): Promise<number> {
+  const rows = await db
+    .select({ id: boardAlerts.id })
+    .from(boardAlerts)
+    .where(and(eq(boardAlerts.workspace_id, workspaceId), eq(boardAlerts.status, "new")));
+  return rows.length;
+}
+
+export async function setAlertStatus(
+  workspaceId: string,
+  id: string,
+  status: BoardAlertStatus,
+): Promise<{ ok: true }> {
+  await db
+    .update(boardAlerts)
+    .set({ status, ...(status === "read" ? { read_at: new Date() } : {}) })
+    .where(and(eq(boardAlerts.workspace_id, workspaceId), eq(boardAlerts.id, id)));
+  return { ok: true };
+}
+
+export async function markAllAlertsRead(workspaceId: string): Promise<{ ok: true }> {
+  await db
+    .update(boardAlerts)
+    .set({ status: "read", read_at: new Date() })
+    .where(and(eq(boardAlerts.workspace_id, workspaceId), eq(boardAlerts.status, "new")));
+  return { ok: true };
+}
+
+/* ------------------------------- autonomous ------------------------------- */
+
+function normTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** One autonomous scan: research + reason → dedup'd alerts → brief the Executive. */
+export async function runBoardScan(workspaceId: string): Promise<{ created: number }> {
+  return runWithUsage(workspaceId, "boardroom-scan", async () => {
+    await getBoardSettings(workspaceId); // ensure a settings row exists
+    const members = (await getBoardMembers(workspaceId)).filter((m) => m.active);
+    const company = await companyName(workspaceId);
+    const context = await buildBoardContext(
+      workspaceId,
+      "Standing market scan — what is material right now on the path to $10B?",
+    );
+    let scanned: Awaited<ReturnType<typeof boardScan>> = [];
+    try {
+      scanned = await boardScan({ company, context, roles: members.map((m) => m.role) });
+    } catch {
+      scanned = [];
+    }
+    // Always stamp the scan time (even a 0-alert scan) so cadence advances.
+    const now = new Date();
+    await db
+      .update(boardSettings)
+      .set({ last_scan_at: now, updated_at: now })
+      .where(eq(boardSettings.workspace_id, workspaceId));
+    if (!scanned.length) return { created: 0 };
+
+    // Dedup against recent alerts (last 14 days) by normalized title.
+    const since = new Date(Date.now() - 14 * 24 * 3600 * 1000);
+    const recent = await db
+      .select({ title: boardAlerts.title })
+      .from(boardAlerts)
+      .where(and(eq(boardAlerts.workspace_id, workspaceId), gte(boardAlerts.created_at, since)));
+    const seen = new Set(recent.map((r) => normTitle(r.title)));
+
+    const byRole = new Map(members.map((m) => [m.role, m] as const));
+    const rows = scanned
+      .filter((a) => !seen.has(normTitle(a.title)))
+      .map((a) => {
+        const m = byRole.get(a.member_role as BoardRole) ?? members[0];
+        return {
+          id: randomUUID(),
+          workspace_id: workspaceId,
+          member_id: m?.id ?? null,
+          member_name: m?.name ?? "The board",
+          member_role: a.member_role,
+          member_emoji: m?.emoji ?? "🧑‍⚖️",
+          severity: a.severity,
+          title: a.title,
+          detail: a.detail,
+          suggested_action: a.action,
+          status: "new",
+          created_at: now,
+        };
+      });
+    if (!rows.length) return { created: 0 };
+    await db.insert(boardAlerts).values(rows);
+
+    // Brief the Executive so board findings also reach the founder via the daily
+    // brief + Executive chat — an unprompted hand-off to the chief of staff.
+    const summary =
+      `📋 The board raised ${rows.length} alert${rows.length === 1 ? "" : "s"} from its market scan:\n` +
+      rows.map((r) => `• [${r.severity}] ${r.title} — ${r.detail}`).join("\n");
+    await db.insert(executiveMemory).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      content: summary.slice(0, 4000),
+      kind: "insight",
+      source: "agent",
+      pinned: false,
+      created_at: now,
+      updated_at: now,
+    });
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: null,
+      event_type: "output_created",
+      actor_type: "agent",
+      actor_id: "board",
+      summary: `The board raised ${rows.length} alert${rows.length === 1 ? "" : "s"} from its market scan.`,
+      created_at: now,
+    });
+    return { created: rows.length };
+  });
+}
+
+/** Run a scan only if the cadence is due (used by the page-load poke + the cron). */
+export async function runBoardScanIfDue(workspaceId: string): Promise<{ ran: boolean; created: number }> {
+  const s = await getBoardSettings(workspaceId);
+  if (s.cadence === "off") return { ran: false, created: 0 };
+  const last = s.last_scan_at ? new Date(s.last_scan_at).getTime() : 0;
+  if (Date.now() - last < CADENCE_MS[s.cadence]) return { ran: false, created: 0 };
+  const r = await runBoardScan(workspaceId);
+  return { ran: true, created: r.created };
+}
+
+/** Cron: run due autonomous scans across every workspace with a board configured. */
+export async function runDueBoardScans(limit = 20): Promise<{ scanned: number; alerts: number }> {
+  // tenant-scope-exempt: the scheduler sweeps board_settings across ALL workspaces;
+  // each scan then runs scoped to its own workspace_id.
+  const rows = await db
+    .select({ ws: boardSettings.workspace_id, cadence: boardSettings.cadence, last: boardSettings.last_scan_at })
+    .from(boardSettings)
+    .where(ne(boardSettings.cadence, "off"))
+    .limit(limit);
+  let scanned = 0;
+  let alerts = 0;
+  for (const r of rows) {
+    const last = r.last ? new Date(r.last).getTime() : 0;
+    const cad = CADENCE_MS[r.cadence as BoardCadence] ?? CADENCE_MS.daily;
+    if (Date.now() - last < cad) continue;
+    try {
+      const res = await runBoardScan(r.ws);
+      scanned += 1;
+      alerts += res.created;
+    } catch {
+      /* skip a failing workspace */
+    }
+  }
+  return { scanned, alerts };
+}
+
 export async function getBoardroom(workspaceId: string): Promise<BoardroomView> {
-  const [members, sessions] = await Promise.all([getBoardMembers(workspaceId), listBoardSessions(workspaceId)]);
-  return { members, sessions };
+  const [members, sessions, alerts, settings] = await Promise.all([
+    getBoardMembers(workspaceId),
+    listBoardSessions(workspaceId),
+    listBoardAlerts(workspaceId),
+    getBoardSettings(workspaceId),
+  ]);
+  return { members, sessions, alerts, settings };
 }

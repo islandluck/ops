@@ -163,3 +163,67 @@ export async function boardVerdict(input: {
     accountability: str(parsed.accountability),
   };
 }
+
+export interface BoardScanAlert {
+  member_role: string;
+  severity: "info" | "attention" | "urgent";
+  title: string;
+  detail: string;
+  action: string;
+}
+
+/**
+ * The board's standing autonomous scan. Given the company's state + today's market
+ * intel, raise ONLY genuinely material, dot-connecting findings — or nothing. One
+ * call (kept cheap so it can run on a cadence). Attributes each to a member's role.
+ */
+export async function boardScan(input: {
+  company: string;
+  context: string;
+  roles: string[];
+}): Promise<BoardScanAlert[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return [];
+  const client = getAnthropic();
+  const roleList = input.roles.join(", ");
+  const system = [
+    `You are the collective board of directors for ${input.company || "the company"}, doing your standing market scan.`,
+    MISSION,
+    "",
+    "You've reviewed the company's current state and today's market intel (below). Raise ONLY genuinely material, non-obvious findings that connect dots the founder likely can't see — a competitor's move, a market shift, a metric that should alarm someone, a time-sensitive opening, or a real risk to the $10B path.",
+    `If nothing is genuinely material, raise NOTHING (an empty array). Never manufacture noise. At most 3, most urgent first. Attribute each to the member whose domain it is — one of: ${roleList}.`,
+    "",
+    'Respond with ONLY JSON, no fences: {"alerts": [{"member_role": one of the roles above, "severity": "info"|"attention"|"urgent", "title": short punchy line, "detail": 1–2 sentences (the finding + why it matters now), "action": one concrete next step}]}',
+  ].join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1400,
+    system,
+    messages: [{ role: "user", content: `Company state + today's market intel:\n${input.context}`.slice(0, 16000) }],
+  });
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) return [];
+  let parsed: { alerts?: unknown };
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as { alerts?: unknown };
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed.alerts)) return [];
+  const sev = new Set(["info", "attention", "urgent"]);
+  const roles = new Set(input.roles);
+  return parsed.alerts
+    .map((a) => (a ?? {}) as Record<string, unknown>)
+    .map((a) => ({
+      member_role: typeof a.member_role === "string" && roles.has(a.member_role) ? a.member_role : "strategy",
+      severity: (typeof a.severity === "string" && sev.has(a.severity) ? a.severity : "attention") as BoardScanAlert["severity"],
+      title: typeof a.title === "string" ? a.title.trim().slice(0, 200) : "",
+      detail: typeof a.detail === "string" ? a.detail.trim().slice(0, 800) : "",
+      action: typeof a.action === "string" ? a.action.trim().slice(0, 400) : "",
+    }))
+    .filter((a) => a.title)
+    .slice(0, 3);
+}
