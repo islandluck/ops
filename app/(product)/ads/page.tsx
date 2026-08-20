@@ -561,12 +561,129 @@ function XPublish({ creative, dailyBudgetCents }: { creative: AdCreative; dailyB
   );
 }
 
+/** Friction-free manual handoff for X: the ready-to-paste post + the exact
+ *  settings to mirror in X Ads + a deep link. No API / company account needed. */
+function XManualHandoff({
+  creative,
+  destinationUrl,
+  campaignName,
+  dailyBudgetCents,
+}: {
+  creative: AdCreative;
+  destinationUrl: string;
+  campaignName: string;
+  dailyBudgetCents: number;
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const [showSteps, setShowSteps] = useState(false);
+  const utm = utmUrl(destinationUrl, "x", campaignName);
+  const post = [creative.primary_text?.trim(), utm].filter(Boolean).join("\n\n");
+  const objective = destinationUrl ? "Website traffic" : "Engagements";
+
+  async function copy(which: string, text: string) {
+    if (text && (await copyText(text))) {
+      setCopied(which);
+      setTimeout(() => setCopied(null), 1400);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-3">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-400">
+        <Send className="h-3.5 w-3.5" /> Publish on X Ads
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Create the campaign in X Ads and paste each piece below — about two minutes, no API needed.
+      </p>
+
+      {/* The post to promote */}
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Promoted post</span>
+          <button
+            type="button"
+            onClick={() => copy("post", post || creative.primary_text)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            {copied === "post" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied === "post" ? "Copied" : "Copy post"}
+          </button>
+        </div>
+        <div className="whitespace-pre-wrap rounded-md bg-background p-2.5 text-[13px] leading-snug">
+          {post || creative.primary_text}
+        </div>
+      </div>
+
+      {/* Settings to mirror in X's campaign creator */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs sm:grid-cols-4">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Objective</div>
+          <div className="truncate font-medium">{objective}</div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Daily budget</div>
+          <div className="truncate font-medium">{dollars(dailyBudgetCents)}/day</div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Location</div>
+          <div className="truncate font-medium">{creative.geo || "—"}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => copy("aud", creative.audience)}
+          className="min-w-0 text-left"
+          title="Copy audience"
+        >
+          <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Audience {copied === "aud" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          </div>
+          <div className="truncate font-medium">{creative.audience || "—"}</div>
+        </button>
+      </div>
+
+      {/* Actions */}
+      <div className="flex flex-wrap gap-1.5">
+        <a href="https://ads.x.com/" target="_blank" rel="noreferrer" className={CHIP}>
+          Create on X Ads <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+        <button
+          type="button"
+          onClick={() => copy("utm", utm)}
+          disabled={!utm}
+          title={utm || "Set a destination URL above to build the tracked link"}
+          className={CHIP}
+        >
+          {copied === "utm" ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
+          {copied === "utm" ? "Copied" : "UTM link"}
+        </button>
+        {creative.image_url && (
+          <a href={creative.image_url} target="_blank" rel="noreferrer" className={CHIP}>
+            Image <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
+        <button type="button" onClick={() => setShowSteps((v) => !v)} className={CHIP}>
+          <ListChecks className="h-3.5 w-3.5" /> Steps
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showSteps && "rotate-180")} />
+        </button>
+      </div>
+      {showSteps && (
+        <ol className="ml-4 list-decimal space-y-1 text-xs text-muted-foreground">
+          {LAUNCH.x.steps.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function CreativeCard({
   creative,
   brand,
   destinationUrl,
   campaignName,
   dailyBudgetCents,
+  xAdsConfigured,
   onChange,
 }: {
   creative: AdCreative;
@@ -574,6 +691,7 @@ function CreativeCard({
   destinationUrl: string;
   campaignName: string;
   dailyBudgetCents: number;
+  xAdsConfigured: boolean;
   onChange: (c: AdCreative) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -627,6 +745,35 @@ function CreativeCard({
     setBusy(false);
     if ("ok" in r && r.ok) onChange({ ...creative, status: next, placement_ref: placement });
   }
+
+  // X uses the friction-free manual handoff unless the Ads API is configured.
+  const isXManual = creative.platform === "x" && !xAdsConfigured;
+  const launchedControl = (
+    <div className="flex items-center gap-2">
+      <Input
+        value={placement}
+        onChange={(e) => setPlacement(e.target.value)}
+        placeholder="Where's it live? (optional note / campaign ID)"
+        className="h-8 text-xs"
+      />
+      <Button
+        variant={launched ? "secondary" : "success"}
+        size="sm"
+        onClick={toggleLaunched}
+        disabled={busy}
+        className="shrink-0"
+      >
+        {busy ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : launched ? (
+          <RotateCcw className="h-3.5 w-3.5" />
+        ) : (
+          <Rocket className="h-3.5 w-3.5" />
+        )}
+        {launched ? "Mark draft" : "Mark launched"}
+      </Button>
+    </div>
+  );
 
   return (
     <Card className={cn("flex flex-col gap-3 p-4", launched && "ring-1 ring-success/40")}>
@@ -704,66 +851,54 @@ function CreativeCard({
       {/* Launch kit */}
       {!editing && (
         <div className="flex flex-col gap-2.5 border-t border-border pt-3">
-          <div className="flex flex-wrap gap-1.5">
-            <a href={link.adManager} target="_blank" rel="noreferrer" className={CHIP}>
-              Open {PLATFORM_LABEL[creative.platform]} <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-            <button
-              type="button"
-              onClick={copyUtm}
-              disabled={!utm}
-              title={utm || "Add a destination URL above to build UTM links"}
-              className={CHIP}
-            >
-              {copiedUtm ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
-              {copiedUtm ? "Copied" : "UTM link"}
-            </button>
-            {creative.image_url && (
-              <a href={creative.image_url} target="_blank" rel="noreferrer" className={CHIP}>
-                Image <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            )}
-            <button type="button" onClick={() => setShowSteps((v) => !v)} className={CHIP}>
-              <ListChecks className="h-3.5 w-3.5" /> How to launch
-              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showSteps && "rotate-180")} />
-            </button>
-          </div>
+          {isXManual ? (
+            <XManualHandoff
+              creative={creative}
+              destinationUrl={destinationUrl}
+              campaignName={campaignName}
+              dailyBudgetCents={dailyBudgetCents}
+            />
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                <a href={link.adManager} target="_blank" rel="noreferrer" className={CHIP}>
+                  Open {PLATFORM_LABEL[creative.platform]} <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+                <button
+                  type="button"
+                  onClick={copyUtm}
+                  disabled={!utm}
+                  title={utm || "Add a destination URL above to build UTM links"}
+                  className={CHIP}
+                >
+                  {copiedUtm ? <Check className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />}
+                  {copiedUtm ? "Copied" : "UTM link"}
+                </button>
+                {creative.image_url && (
+                  <a href={creative.image_url} target="_blank" rel="noreferrer" className={CHIP}>
+                    Image <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+                <button type="button" onClick={() => setShowSteps((v) => !v)} className={CHIP}>
+                  <ListChecks className="h-3.5 w-3.5" /> How to launch
+                  <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showSteps && "rotate-180")} />
+                </button>
+              </div>
 
-          {showSteps && (
-            <ol className="ml-4 list-decimal space-y-1 text-xs text-muted-foreground">
-              {link.steps.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ol>
+              {showSteps && (
+                <ol className="ml-4 list-decimal space-y-1 text-xs text-muted-foreground">
+                  {link.steps.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ol>
+              )}
+            </>
           )}
 
-          {creative.platform === "x" ? (
+          {creative.platform === "x" && xAdsConfigured ? (
             <XPublish creative={creative} dailyBudgetCents={dailyBudgetCents} />
           ) : (
-            <div className="flex items-center gap-2">
-              <Input
-                value={placement}
-                onChange={(e) => setPlacement(e.target.value)}
-                placeholder="Where's it live? (optional note / campaign ID)"
-                className="h-8 text-xs"
-              />
-              <Button
-                variant={launched ? "secondary" : "success"}
-                size="sm"
-                onClick={toggleLaunched}
-                disabled={busy}
-                className="shrink-0"
-              >
-                {busy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : launched ? (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                ) : (
-                  <Rocket className="h-3.5 w-3.5" />
-                )}
-                {launched ? "Mark draft" : "Mark launched"}
-              </Button>
-            </div>
+            launchedControl
           )}
         </div>
       )}
@@ -792,6 +927,7 @@ export default function AdsPage() {
   const [history, setHistory] = useState<AdCampaignSummary[]>([]);
   const [dest, setDest] = useState("");
   const [savingDest, setSavingDest] = useState(false);
+  const [xAdsConfigured, setXAdsConfigured] = useState(false);
 
   const platforms = useMemo(
     () => (Object.keys(selected) as AdPlatform[]).filter((p) => selected[p]),
@@ -800,6 +936,7 @@ export default function AdsPage() {
 
   useEffect(() => {
     listAdCampaignsAction().then(setHistory);
+    getXAdsStatusAction().then((s) => setXAdsConfigured(s.configured));
   }, []);
 
   // Keep the URL box in sync with whichever campaign is open.
@@ -1111,6 +1248,7 @@ export default function AdsPage() {
                   destinationUrl={campaign.destination_url}
                   campaignName={campaign.name}
                   dailyBudgetCents={campaign.daily_budget_cents}
+                  xAdsConfigured={xAdsConfigured}
                   onChange={handleCreativeChange}
                 />
               ))}
