@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Globe,
   Heart,
+  Lightbulb,
   Link2,
   ListChecks,
   Loader2,
@@ -37,9 +38,10 @@ import {
   listAdCampaignsAction,
   setAdCreativeStatusAction,
   setAdDestinationAction,
+  suggestAdCampaignsAction,
   updateAdCreativeAction,
 } from "@/app/actions";
-import type { AdCampaign, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
+import type { AdCampaign, AdCampaignIdea, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
 
 const PLATFORMS: { key: AdPlatform; label: string; hint: string }[] = [
   { key: "meta", label: "Meta", hint: "Facebook · Instagram" },
@@ -586,6 +588,8 @@ export default function AdsPage() {
   const [budget, setBudget] = useState("");
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [ideas, setIdeas] = useState<AdCampaignIdea[]>([]);
 
   const [campaign, setCampaign] = useState<AdCampaign | null>(null);
   const [history, setHistory] = useState<AdCampaignSummary[]>([]);
@@ -605,6 +609,27 @@ export default function AdsPage() {
   useEffect(() => {
     setDest(campaign?.destination_url ?? "");
   }, [campaign?.id, campaign?.destination_url]);
+
+  async function suggest() {
+    if (suggesting) return;
+    setSuggesting(true);
+    setError(null);
+    const r = await suggestAdCampaignsAction();
+    setSuggesting(false);
+    if ("ok" in r && r.ok) setIdeas(r.ideas);
+    else setError("error" in r ? r.error : "Couldn't suggest campaigns.");
+  }
+
+  function applyIdea(idea: AdCampaignIdea) {
+    setObjective(idea.objective);
+    setSelected({
+      meta: idea.platforms.includes("meta"),
+      google: idea.platforms.includes("google"),
+      x: idea.platforms.includes("x"),
+      linkedin: idea.platforms.includes("linkedin"),
+    });
+    setIdeas([]);
+  }
 
   async function generate() {
     if (!objective.trim() || !platforms.length || generating) return;
@@ -687,7 +712,18 @@ export default function AdsPage() {
         {/* Composer */}
         <Card className="flex flex-col gap-4 p-5">
           <div>
-            <Label htmlFor="ad-objective">What should this campaign achieve?</Label>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <Label htmlFor="ad-objective">What should this campaign achieve?</Label>
+              <button
+                type="button"
+                onClick={suggest}
+                disabled={suggesting}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+              >
+                {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lightbulb className="h-3.5 w-3.5" />}
+                {suggesting ? "Reading your strategy…" : "Suggest campaigns"}
+              </button>
+            </div>
             <Textarea
               id="ad-objective"
               rows={3}
@@ -695,6 +731,47 @@ export default function AdsPage() {
               value={objective}
               onChange={(e) => setObjective(e.target.value)}
             />
+
+            {ideas.length > 0 && (
+              <div className="mt-2.5 flex flex-col gap-2 rounded-lg border border-dashed border-border bg-muted/30 p-2.5">
+                <div className="flex items-center justify-between px-0.5">
+                  <span className="text-xs font-medium text-muted-foreground">
+                    From your strategy — pick one to start
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIdeas([])}
+                    className="text-muted-foreground hover:text-foreground"
+                    aria-label="Dismiss suggestions"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {ideas.map((idea, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => applyIdea(idea)}
+                      className="flex flex-col gap-1.5 rounded-lg border border-border bg-background p-3 text-left transition-colors hover:border-primary hover:bg-accent/40"
+                    >
+                      <span className="text-sm font-semibold leading-tight">{idea.title}</span>
+                      <span className="text-xs leading-snug text-muted-foreground">{idea.rationale}</span>
+                      <span className="mt-auto flex flex-wrap gap-1 pt-1">
+                        {idea.platforms.map((p) => (
+                          <span
+                            key={p}
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                          >
+                            {PLATFORM_LABEL[p]}
+                          </span>
+                        ))}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -847,7 +924,8 @@ export default function AdsPage() {
           <div className="mt-10 flex flex-col items-center gap-2 text-center text-muted-foreground">
             <MonitorPlay className="h-9 w-9 opacity-40" />
             <p className="text-sm">
-              Describe a goal above and the Growth agent will draft native ads for each platform — ready to review,
+              Describe a goal above — or hit <span className="font-medium text-foreground">Suggest campaigns</span> to
+              start from your strategy — and the Growth agent will draft native ads for each platform, ready to review,
               edit, and hand to your ad accounts.
             </p>
           </div>

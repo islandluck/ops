@@ -3,12 +3,12 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { adCampaigns, adCreatives } from "@/lib/db/schema";
+import { adCampaigns, adCreatives, businessBriefs } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { runWithUsage } from "@/lib/ai/usage";
-import { generateAdCampaign } from "@/lib/ai/ads";
+import { generateAdCampaign, suggestAdCampaigns } from "@/lib/ai/ads";
 import { searchStockImages, stockConfigured } from "@/lib/ai/stock";
-import type { AdCampaign, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
+import type { AdCampaign, AdCampaignIdea, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
 
 /**
  * Ads Manager engine (P0 — campaign studio). Turns an objective into ready-to-run
@@ -143,6 +143,41 @@ export async function createAdCampaign(
     );
     await db.insert(adCreatives).values(rows);
     return { ok: true as const, campaign: await getAdCampaign(workspaceId, campaignId) };
+  });
+}
+
+/** Propose 2–3 ad campaigns from the business strategy (brief + goals + Deep Dive). */
+export async function suggestCampaigns(
+  workspaceId: string,
+): Promise<{ ok: true; ideas: AdCampaignIdea[] } | { ok: false; error: string }> {
+  return runWithUsage(workspaceId, "ads-suggest", async () => {
+    const { brief } = await getPlanningContext(workspaceId);
+    const context = [
+      brief.business_description,
+      brief.core_offer,
+      brief.ideal_customer_profile,
+      brief.company_context,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 2000);
+    const [briefRow] = await db
+      .select({ goals: businessBriefs.goals })
+      .from(businessBriefs)
+      .where(eq(businessBriefs.workspace_id, workspaceId))
+      .limit(1);
+
+    try {
+      const ideas = await suggestAdCampaigns({
+        company: brief.company_name ?? "",
+        context,
+        goals: briefRow?.goals ?? [],
+      });
+      if (!ideas.length) return { ok: false as const, error: "No campaign ideas came back — try again." };
+      return { ok: true as const, ideas };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't suggest campaigns." };
+    }
   });
 }
 

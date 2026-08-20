@@ -141,6 +141,7 @@ import {
   listAdCampaigns,
   setCampaignDestination,
   setCreativeStatus,
+  suggestCampaigns,
   updateAdCreative,
 } from "@/lib/agents/ads";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
@@ -2680,6 +2681,15 @@ export async function saveOpportunityLocationAction(loc: {
 }
 
 // ── Ads Manager ─────────────────────────────────────────────────────────────
+
+/** Propose ad campaigns from the business strategy (to prefill the composer). */
+export async function suggestAdCampaignsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return suggestCampaigns(ws);
+}
 
 /** Generate a launch-ready, multi-platform ad campaign from an objective. */
 export async function createAdCampaignAction(input: {

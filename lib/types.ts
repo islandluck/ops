@@ -133,6 +133,15 @@ export interface AdCampaignSummary {
   created_at: string;
 }
 
+/** A proposed ad campaign the Growth agent derived from the business strategy. */
+export interface AdCampaignIdea {
+  title: string;
+  rationale: string;
+  /** Ready to drop straight into the campaign composer. */
+  objective: string;
+  platforms: AdPlatform[];
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getAnthropic } from "@/lib/ai/client";
-import type { AdPlatform } from "@/lib/types";
+import type { AdCampaignIdea, AdPlatform } from "@/lib/types";
 
 /**
  * Ads Manager creative engine — turn a campaign objective into launch-ready,
@@ -132,4 +132,69 @@ export async function generateAdCampaign(input: {
     daily_budget_cents: input.budgetCents ?? (Number.isFinite(budget) && budget > 0 ? Math.round(budget) : 3000),
     creatives,
   };
+}
+
+/**
+ * Read the business strategy and propose 2–3 concrete paid-ad campaigns worth
+ * running now. Each idea is a ready-to-use objective the composer can generate
+ * from directly — the Growth agent's thinking, turned into launchable campaigns.
+ */
+export async function suggestAdCampaigns(input: {
+  company: string;
+  context: string;
+  goals: string[];
+}): Promise<AdCampaignIdea[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("Campaign suggestions aren't configured (ANTHROPIC_API_KEY missing).");
+
+  const client = getAnthropic();
+  const goals = input.goals.filter(Boolean).slice(0, 8);
+  const system = [
+    `You are a growth strategist proposing paid-ad campaigns for ${input.company || "the company"}.`,
+    input.context ? `Business context: ${input.context}` : "",
+    goals.length ? `Current goals: ${goals.join("; ")}` : "",
+    "",
+    "Propose the 2–3 highest-leverage paid-ad campaigns this business should run right now. Make them DISTINCT (different offers, audiences, or funnel stages) — not variations of one idea. Ground them in the context; never invent products, prices, or claims.",
+    "For each: a short title (≤6 words), a one-sentence rationale (why this, why now), a concrete `objective` written the way a founder would brief it (specific audience + measurable goal, 1–2 sentences), and the best platforms (subset of meta, google, x, linkedin).",
+    "",
+    'Respond with ONLY JSON, no fences: {"ideas": [{"title": string, "rationale": string, "objective": string, "platforms": string[]}]}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1400,
+    system,
+    messages: [{ role: "user", content: "Propose the campaigns." }],
+  });
+
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) throw new Error("The model didn't return usable ideas.");
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    throw new Error("Couldn't parse the suggested campaigns.");
+  }
+
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const allPlatforms = new Set<AdPlatform>(["meta", "google", "x", "linkedin"]);
+  return (Array.isArray(parsed.ideas) ? parsed.ideas : [])
+    .map((i) => (i ?? {}) as Record<string, unknown>)
+    .map((i) => {
+      const platforms = (Array.isArray(i.platforms) ? i.platforms : [])
+        .map((p) => str(p).toLowerCase())
+        .filter((p): p is AdPlatform => allPlatforms.has(p as AdPlatform));
+      return {
+        title: str(i.title).slice(0, 80),
+        rationale: str(i.rationale).slice(0, 300),
+        objective: str(i.objective).slice(0, 600),
+        platforms: platforms.length ? platforms : (["meta", "google", "x"] as AdPlatform[]),
+      };
+    })
+    .filter((i) => i.title && i.objective)
+    .slice(0, 3);
 }
