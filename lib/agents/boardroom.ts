@@ -20,6 +20,7 @@ import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
 import { runWithUsage } from "@/lib/ai/usage";
 import { boardOpening, boardRebuttal, boardScan, boardVerdict, buildMission } from "@/lib/ai/board";
+import { DEFAULT_BOARD_MEMBERS } from "@/lib/constants";
 import type {
   BoardAlert,
   BoardAlertStatus,
@@ -45,58 +46,6 @@ import type {
  * biased to action. Each stage is a bounded pass so the UI can reveal the debate
  * as it unfolds.
  */
-
-interface SeedMember {
-  role: BoardRole;
-  name: string;
-  emoji: string;
-  accent: string;
-  mandate: string;
-}
-
-/** The default 5-seat board. Each mandate encodes a blue-chip VC domain lens. */
-const DEFAULT_MEMBERS: SeedMember[] = [
-  {
-    role: "finance",
-    name: "Diana Osei",
-    emoji: "💰",
-    accent: "emerald",
-    mandate:
-      "You are a top-tier venture CFO and capital allocator. You own unit economics, burn, runway, capital efficiency, the concrete milestone-and-valuation math to $10B, and fundraising strategy. You are ruthless about the numbers and allergic to vanity metrics. If the model doesn't math to $10B, you say so plainly.",
-  },
-  {
-    role: "marketing",
-    name: "Marcus Vale",
-    emoji: "📣",
-    accent: "amber",
-    mandate:
-      "You are a legendary growth and go-to-market partner. You own distribution as the real moat, CAC:LTV, channel economics, category creation, and demand. You believe most startups die of no distribution, not bad product, and you push relentlessly on how this company actually reaches $10B worth of customers.",
-  },
-  {
-    role: "product",
-    name: "Priya Rao",
-    emoji: "🧩",
-    accent: "violet",
-    mandate:
-      "You are a revered product partner. You own product-market fit, activation and retention, the wedge, and ruthless focus. You kill features, chase the one thing customers can't live without, and do things that don't scale before scaling. Retention is your religion.",
-  },
-  {
-    role: "strategy",
-    name: "Elena Voss",
-    emoji: "♟️",
-    accent: "sky",
-    mandate:
-      "You are a sharp strategy partner. You own moats, timing and 'why now', TAM, competitive positioning, and the sequence of markets to own. You think three moves ahead and force clarity on what makes this a $10B company versus a merely nice business.",
-  },
-  {
-    role: "technology",
-    name: "Kenji Tan",
-    emoji: "⚙️",
-    accent: "rose",
-    mandate:
-      "You are a battle-tested technical partner. You own technical moat and leverage, AI as an unfair advantage, scalability, engineering velocity, and build-vs-buy. You judge whether the tech compounds into defensibility or is just table stakes — and whether the team ships fast enough to win.",
-  },
-];
 
 const ROLE_LABEL: Record<string, string> = {
   finance: "Finance",
@@ -133,7 +82,7 @@ export async function getBoardMembers(workspaceId: string): Promise<BoardMember[
   if (rows.length) return rows.map(toMember);
 
   const now = new Date();
-  const seed = DEFAULT_MEMBERS.map((m, i) => ({
+  const seed = DEFAULT_BOARD_MEMBERS.map((m, i) => ({
     id: randomUUID(),
     workspace_id: workspaceId,
     role: m.role,
@@ -148,6 +97,45 @@ export async function getBoardMembers(workspaceId: string): Promise<BoardMember[
   }));
   await db.insert(boardMembers).values(seed);
   return seed.map(toMember);
+}
+
+/** Seed the board during onboarding with the founder's chosen names + goal (idempotent). */
+export async function seedBoardFromOnboarding(
+  workspaceId: string,
+  goal: string,
+  members: { role: string; name: string; emoji: string }[],
+): Promise<void> {
+  await getBoardSettings(workspaceId); // ensure a settings row exists
+  if (goal.trim()) {
+    await db
+      .update(boardSettings)
+      .set({ mission: goal.trim().slice(0, 500), updated_at: new Date() })
+      .where(eq(boardSettings.workspace_id, workspaceId));
+  }
+  const existing = await db
+    .select({ id: boardMembers.id })
+    .from(boardMembers)
+    .where(eq(boardMembers.workspace_id, workspaceId))
+    .limit(1);
+  if (existing.length) return; // board already seeded — don't duplicate
+  const now = new Date();
+  const rows = DEFAULT_BOARD_MEMBERS.map((seed, i) => {
+    const custom = members.find((m) => m.role === seed.role);
+    return {
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      role: seed.role,
+      name: (custom?.name?.trim() || seed.name).slice(0, 80),
+      mandate: seed.mandate,
+      emoji: (custom?.emoji?.trim() || seed.emoji).slice(0, 8),
+      accent: seed.accent,
+      seat: i,
+      active: true,
+      created_at: now,
+      updated_at: now,
+    };
+  });
+  await db.insert(boardMembers).values(rows);
 }
 
 /* -------------------------------- context --------------------------------- */
@@ -557,7 +545,7 @@ export async function resetBoardMember(
     .where(and(eq(boardMembers.workspace_id, workspaceId), eq(boardMembers.id, memberId)))
     .limit(1);
   if (!row) return { ok: false, error: "Member not found." };
-  const seed = DEFAULT_MEMBERS.find((m) => m.role === row.role);
+  const seed = DEFAULT_BOARD_MEMBERS.find((m) => m.role === row.role);
   if (!seed) return { ok: false, error: "No archetype for this seat." };
   await db
     .update(boardMembers)

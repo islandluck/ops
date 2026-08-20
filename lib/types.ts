@@ -64,6 +64,12 @@ export interface PlannedTask {
 }
 
 /** Payload persisted when a user completes guided onboarding (server mode). */
+export interface OnboardingBoardMember {
+  role: BoardRole;
+  name: string;
+  emoji: string;
+}
+
 export interface OnboardingInput {
   user_name: string;
   company_name: string;
@@ -73,6 +79,10 @@ export interface OnboardingInput {
   goals: string[];
   voice_rules: string[];
   approvalDefault: PermissionMode;
+  /** The board's goal set during onboarding ("" = default). */
+  boardGoal?: string;
+  /** The 5 board seats with the founder's chosen names/avatars. */
+  boardMembers?: OnboardingBoardMember[];
 }
 
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";

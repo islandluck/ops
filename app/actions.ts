@@ -126,6 +126,7 @@ import {
   respondToBoard,
   runBoardScan,
   runBoardScanIfDue,
+  seedBoardFromOnboarding,
   setAlertStatus,
   setBoardCadence,
   setBoardMission,
@@ -2534,6 +2535,11 @@ export async function completeOnboardingAction(
     // initial load didn't provision (session cookie not ready right after signup).
     await ensureProvisioned(user.id, user.email ?? "", input.user_name);
     await applyOnboardingForUser(user.id, input);
+    // Seed the boardroom with the founder's chosen goal + member names.
+    if (input.boardGoal !== undefined || input.boardMembers) {
+      const ws = await workspaceIdForUser(user.id);
+      if (ws) await seedBoardFromOnboarding(ws, input.boardGoal ?? "", input.boardMembers ?? []);
+    }
     const prevName = (user.user_metadata as { full_name?: string } | undefined)?.full_name ?? "";
     await supabase.auth.updateUser({
       data: { onboarded: true, full_name: input.user_name || prevName },

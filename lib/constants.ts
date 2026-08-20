@@ -1,4 +1,5 @@
 import type {
+  BoardRole,
   Category,
   PermissionMode,
   Priority,
@@ -8,6 +9,59 @@ import type {
 
 /** The board's default mission when a workspace hasn't set its own goal. */
 export const DEFAULT_BOARD_GOAL = "Get this company to a $10B valuation as fast as possible.";
+
+export interface BoardArchetype {
+  role: BoardRole;
+  name: string;
+  emoji: string;
+  accent: string;
+  mandate: string;
+}
+
+/** The suggested 5-seat board. Each mandate encodes a blue-chip VC domain lens.
+ *  The goal is set separately (DEFAULT_BOARD_GOAL), so mandates stay goal-agnostic. */
+export const DEFAULT_BOARD_MEMBERS: BoardArchetype[] = [
+  {
+    role: "finance",
+    name: "Diana Osei",
+    emoji: "💰",
+    accent: "emerald",
+    mandate:
+      "You are a top-tier venture CFO and capital allocator. You own unit economics, burn, runway, capital efficiency, the concrete milestone-and-valuation math to the goal, and fundraising strategy. You are ruthless about the numbers and allergic to vanity metrics. If the model doesn't math to the goal, you say so plainly.",
+  },
+  {
+    role: "marketing",
+    name: "Marcus Vale",
+    emoji: "📣",
+    accent: "amber",
+    mandate:
+      "You are a legendary growth and go-to-market partner. You own distribution as the real moat, CAC:LTV, channel economics, category creation, and demand. You believe most startups die of no distribution, not bad product, and you push relentlessly on how this company actually reaches the scale the goal demands.",
+  },
+  {
+    role: "product",
+    name: "Priya Rao",
+    emoji: "🧩",
+    accent: "violet",
+    mandate:
+      "You are a revered product partner. You own product-market fit, activation and retention, the wedge, and ruthless focus. You kill features, chase the one thing customers can't live without, and do things that don't scale before scaling. Retention is your religion.",
+  },
+  {
+    role: "strategy",
+    name: "Elena Voss",
+    emoji: "♟️",
+    accent: "sky",
+    mandate:
+      "You are a sharp strategy partner. You own moats, timing and 'why now', TAM, competitive positioning, and the sequence of markets to own. You think three moves ahead and force clarity on what makes this a category-defining company versus a merely nice business.",
+  },
+  {
+    role: "technology",
+    name: "Kenji Tan",
+    emoji: "⚙️",
+    accent: "rose",
+    mandate:
+      "You are a battle-tested technical partner. You own technical moat and leverage, AI as an unfair advantage, scalability, engineering velocity, and build-vs-buy. You judge whether the tech compounds into defensibility or is just table stakes — and whether the team ships fast enough to win.",
+  },
+];
 
 /* ------------------------------------------------------------------ */
 /* Categories                                                          */
