@@ -6,6 +6,9 @@ import type {
   TaskStatus,
 } from "./types";
 
+/** The board's default mission when a workspace hasn't set its own goal. */
+export const DEFAULT_BOARD_GOAL = "Get this company to a $10B valuation as fast as possible.";
+
 /* ------------------------------------------------------------------ */
 /* Categories                                                          */
 /* ------------------------------------------------------------------ */

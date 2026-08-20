@@ -122,13 +122,16 @@ import {
   getBoardroom,
   handVerdictToExecutive,
   markAllAlertsRead,
+  resetBoardMember,
   respondToBoard,
   runBoardScan,
   runBoardScanIfDue,
   setAlertStatus,
   setBoardCadence,
+  setBoardMission,
   setDirectiveStatus,
   unreadBoardAlertCount,
+  updateBoardMember,
 } from "@/lib/agents/boardroom";
 import type { BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
@@ -2150,6 +2153,36 @@ export async function setBoardDirectiveStatusAction(id: string, status: BoardDir
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return setDirectiveStatus(ws, id, status);
+}
+
+/** Set the board's mission/goal (empty restores the default). */
+export async function setBoardMissionAction(mission: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return setBoardMission(ws, mission);
+}
+
+/** Edit a board member's name / emoji / mandate. */
+export async function updateBoardMemberAction(
+  memberId: string,
+  patch: { name?: string; emoji?: string; mandate?: string },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return updateBoardMember(ws, memberId, patch);
+}
+
+/** Restore a board member to its suggested archetype. */
+export async function resetBoardMemberAction(memberId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return resetBoardMember(ws, memberId);
 }
 
 /** Send one outbound draft now. */

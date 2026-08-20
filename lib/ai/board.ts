@@ -1,24 +1,28 @@
 import "server-only";
 
 import { getAnthropic } from "@/lib/ai/client";
+import { DEFAULT_BOARD_GOAL } from "@/lib/constants";
 import type { BoardRecommendation } from "@/lib/types";
 
 /**
  * The Boardroom's debate engine. Each member speaks in their own voice (opening →
- * rebuttal), then the Chair synthesizes a verdict. The board's mandate: drive the
- * company to a $10B valuation as fast as possible, biased to action, and hold the
- * founder accountable — even when the truth is unwelcome.
+ * rebuttal), then the Chair synthesizes a verdict. The mission is the workspace's
+ * own goal (default: a $10B valuation, fast); the fixed board character below keeps
+ * it VC-caliber, direct, and accountable regardless of the goal.
  */
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
-const MISSION = [
-  "The board's single mission: get this company to a $10B valuation as fast as possible.",
-  "You carry the collective wisdom of the best blue-chip VC partners in your domain.",
-  "Be direct and specific. Have a spine — take positions that may be counter to what the founder wants to hear.",
-  "Bias hard toward action over analysis. Hold the founder accountable for results, not effort.",
-  "Never invent facts, numbers, funding rounds, or competitors that aren't in the context or the market intel.",
-].join(" ");
+/** The board's mission preamble = the workspace's goal + the fixed board character. */
+export function buildMission(goal: string): string {
+  return [
+    `The board's single mission: ${(goal || DEFAULT_BOARD_GOAL).trim()}`,
+    "You carry the collective wisdom of the best blue-chip VC partners in your domain.",
+    "Be direct and specific. Have a spine — take positions that may be counter to what the founder wants to hear.",
+    "Bias hard toward action over analysis. Hold the founder accountable for results, not effort.",
+    "Never invent facts, numbers, funding rounds, or competitors that aren't in the context or the market intel.",
+  ].join(" ");
+}
 
 interface MemberRef {
   name: string;
@@ -36,12 +40,13 @@ export async function boardOpening(input: {
   company: string;
   context: string;
   question: string;
+  mission: string;
 }): Promise<string> {
   const client = getAnthropic();
   const system = [
     `You are ${input.member.name}, the ${input.member.role} voice on the board of directors for ${input.company || "the company"}.`,
     input.member.mandate,
-    MISSION,
+    input.mission,
     "",
     "Give your OPENING position on the matter before the board — through your domain lens, grounded in the context and today's market. Take a clear, decisive stance. 2–4 tight paragraphs. No hedging, no throat-clearing, no filler.",
   ].join("\n");
@@ -60,12 +65,13 @@ export async function boardRebuttal(input: {
   context: string;
   question: string;
   openings: { name: string; role: string; content: string }[];
+  mission: string;
 }): Promise<string> {
   const client = getAnthropic();
   const system = [
     `You are ${input.member.name}, the ${input.member.role} voice on the board for ${input.company || "the company"}.`,
     input.member.mandate,
-    MISSION,
+    input.mission,
     "",
     "You've heard the other members' opening positions. Now DEBATE: say where they're wrong, what they're missing, where you agree and want to push harder. Challenge them by name. This is a real boardroom argument — be pointed and specific. 1–3 tight paragraphs.",
   ].join("\n");
@@ -98,11 +104,12 @@ export async function boardVerdict(input: {
   openings: { name: string; role: string; content: string }[];
   rebuttals: { name: string; role: string; content: string }[];
   founderInput?: string;
+  mission: string;
 }): Promise<BoardVerdict> {
   const client = getAnthropic();
   const system = [
     `You are the Chair of the board of directors for ${input.company || "the company"}.`,
-    MISSION,
+    input.mission,
     "",
     "You've heard the members' openings and their debate. Deliver the board's VERDICT. Be direct and hold the founder accountable — the verdict may be exactly what they don't want to hear. Bias to action.",
     input.founderInput
@@ -188,6 +195,7 @@ export async function boardScan(input: {
   company: string;
   context: string;
   roles: string[];
+  mission: string;
 }): Promise<BoardScanAlert[]> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return [];
@@ -195,9 +203,9 @@ export async function boardScan(input: {
   const roleList = input.roles.join(", ");
   const system = [
     `You are the collective board of directors for ${input.company || "the company"}, doing your standing market scan.`,
-    MISSION,
+    input.mission,
     "",
-    "You've reviewed the company's current state and today's market intel (below). Raise ONLY genuinely material, non-obvious findings that connect dots the founder likely can't see — a competitor's move, a market shift, a metric that should alarm someone, a time-sensitive opening, or a real risk to the $10B path.",
+    "You've reviewed the company's current state and today's market intel (below). Raise ONLY genuinely material, non-obvious findings that connect dots the founder likely can't see — a competitor's move, a market shift, a metric that should alarm someone, a time-sensitive opening, or a real risk to the mission.",
     `If nothing is genuinely material, raise NOTHING (an empty array). Never manufacture noise. At most 3, most urgent first. Attribute each to the member whose domain it is — one of: ${roleList}.`,
     "",
     'Respond with ONLY JSON, no fences: {"alerts": [{"member_role": one of the roles above, "severity": "info"|"attention"|"urgent", "title": short punchy line, "detail": 1–2 sentences (the finding + why it matters now), "action": one concrete next step}]}',

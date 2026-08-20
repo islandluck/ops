@@ -19,7 +19,7 @@ import { createProject } from "@/lib/agents/project";
 import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
 import { runWithUsage } from "@/lib/ai/usage";
-import { boardOpening, boardRebuttal, boardScan, boardVerdict } from "@/lib/ai/board";
+import { boardOpening, boardRebuttal, boardScan, boardVerdict, buildMission } from "@/lib/ai/board";
 import type {
   BoardAlert,
   BoardAlertStatus,
@@ -283,12 +283,13 @@ export async function advanceBoard(
     try {
       const members = (await getBoardMembers(workspaceId)).filter((m) => m.active);
       const company = await companyName(workspaceId);
+      const mission = buildMission((await getBoardSettings(workspaceId)).mission);
       const now = new Date();
 
       if (s.status === "opening_pending") {
         const results = await Promise.allSettled(
           members.map((m) =>
-            boardOpening({ member: { name: m.name, role: ROLE_LABEL[m.role] ?? m.role, mandate: m.mandate }, company, context: s.context, question: s.title }),
+            boardOpening({ member: { name: m.name, role: ROLE_LABEL[m.role] ?? m.role, mandate: m.mandate }, company, context: s.context, question: s.title, mission }),
           ),
         );
         const rows = members
@@ -323,6 +324,7 @@ export async function advanceBoard(
               context: s.context,
               question: s.title,
               openings,
+              mission,
             }),
           ),
         );
@@ -355,6 +357,7 @@ export async function advanceBoard(
           openings,
           rebuttals,
           founderInput: s.founder_input || undefined,
+          mission,
         });
         await db
           .update(boardSessions)
@@ -497,13 +500,14 @@ export async function getBoardSettings(workspaceId: string): Promise<BoardSettin
     return {
       cadence: row.cadence as BoardCadence,
       last_scan_at: row.last_scan_at ? new Date(row.last_scan_at).toISOString() : null,
+      mission: row.mission ?? "",
     };
   }
   const now = new Date();
   await db
     .insert(boardSettings)
     .values({ id: randomUUID(), workspace_id: workspaceId, cadence: "daily", created_at: now, updated_at: now });
-  return { cadence: "daily", last_scan_at: null };
+  return { cadence: "daily", last_scan_at: null, mission: "" };
 }
 
 export async function setBoardCadence(workspaceId: string, cadence: BoardCadence): Promise<{ ok: true }> {
@@ -513,6 +517,53 @@ export async function setBoardCadence(workspaceId: string, cadence: BoardCadence
     .set({ cadence, updated_at: new Date() })
     .where(eq(boardSettings.workspace_id, workspaceId));
   return { ok: true };
+}
+
+/** Set the board's mission/goal (empty restores the default). */
+export async function setBoardMission(workspaceId: string, mission: string): Promise<{ ok: true }> {
+  await getBoardSettings(workspaceId);
+  await db
+    .update(boardSettings)
+    .set({ mission: mission.trim().slice(0, 500), updated_at: new Date() })
+    .where(eq(boardSettings.workspace_id, workspaceId));
+  return { ok: true };
+}
+
+/** Edit a board member's name / emoji / mandate (persona). Role/seat stay fixed. */
+export async function updateBoardMember(
+  workspaceId: string,
+  memberId: string,
+  patch: { name?: string; emoji?: string; mandate?: string },
+): Promise<{ ok: true }> {
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (typeof patch.name === "string") set.name = patch.name.trim().slice(0, 80) || "Advisor";
+  if (typeof patch.emoji === "string") set.emoji = patch.emoji.trim().slice(0, 8) || "🧑‍⚖️";
+  if (typeof patch.mandate === "string") set.mandate = patch.mandate.trim().slice(0, 1200);
+  await db
+    .update(boardMembers)
+    .set(set)
+    .where(and(eq(boardMembers.workspace_id, workspaceId), eq(boardMembers.id, memberId)));
+  return { ok: true };
+}
+
+/** Restore a member to its suggested archetype (name/emoji/mandate for its role). */
+export async function resetBoardMember(
+  workspaceId: string,
+  memberId: string,
+): Promise<{ ok: true; member: BoardMember } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(boardMembers)
+    .where(and(eq(boardMembers.workspace_id, workspaceId), eq(boardMembers.id, memberId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Member not found." };
+  const seed = DEFAULT_MEMBERS.find((m) => m.role === row.role);
+  if (!seed) return { ok: false, error: "No archetype for this seat." };
+  await db
+    .update(boardMembers)
+    .set({ name: seed.name, emoji: seed.emoji, mandate: seed.mandate, accent: seed.accent, updated_at: new Date() })
+    .where(and(eq(boardMembers.workspace_id, workspaceId), eq(boardMembers.id, memberId)));
+  return { ok: true, member: { ...toMember(row), name: seed.name, emoji: seed.emoji, mandate: seed.mandate, accent: seed.accent } };
 }
 
 /* --------------------------------- alerts --------------------------------- */
@@ -580,16 +631,17 @@ function normTitle(t: string): string {
 /** One autonomous scan: research + reason → dedup'd alerts → brief the Executive. */
 export async function runBoardScan(workspaceId: string): Promise<{ created: number }> {
   return runWithUsage(workspaceId, "boardroom-scan", async () => {
-    await getBoardSettings(workspaceId); // ensure a settings row exists
+    const settings = await getBoardSettings(workspaceId); // ensures a settings row exists
+    const mission = buildMission(settings.mission);
     const members = (await getBoardMembers(workspaceId)).filter((m) => m.active);
     const company = await companyName(workspaceId);
     const context = await buildBoardContext(
       workspaceId,
-      "Standing market scan — what is material right now on the path to $10B?",
+      "Standing market scan — what is material right now for the mission?",
     );
     let scanned: Awaited<ReturnType<typeof boardScan>> = [];
     try {
-      scanned = await boardScan({ company, context, roles: members.map((m) => m.role) });
+      scanned = await boardScan({ company, context, roles: members.map((m) => m.role), mission });
     } catch {
       scanned = [];
     }

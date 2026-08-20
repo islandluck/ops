@@ -1,0 +1,1 @@
+ALTER TABLE "board_settings" ADD COLUMN "mission" text DEFAULT '' NOT NULL;

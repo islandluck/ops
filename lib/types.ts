@@ -864,6 +864,8 @@ export type BoardCadence = "off" | "daily" | "weekly";
 export interface BoardSettings {
   cadence: BoardCadence;
   last_scan_at: string | null;
+  /** The board's mission/goal (empty = use the default). Drives every deliberation. */
+  mission: string;
 }
 
 export interface BoardroomView {

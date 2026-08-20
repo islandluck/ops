@@ -10,8 +10,10 @@ import {
   Gavel,
   ListChecks,
   Loader2,
+  Pencil,
   Plus,
   Radar,
+  RotateCcw,
   ScrollText,
   Send,
   Sparkles,
@@ -22,9 +24,10 @@ import {
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { markdownToHtml } from "@/lib/content/format";
+import { DEFAULT_BOARD_GOAL } from "@/lib/constants";
 import {
   advanceBoardAction,
   boardAlertToTaskAction,
@@ -34,12 +37,15 @@ import {
   getBoardSessionAction,
   handVerdictToExecutiveAction,
   markAllBoardAlertsReadAction,
+  resetBoardMemberAction,
   respondToBoardAction,
   scanBoardIfDueAction,
   scanBoardNowAction,
   setBoardAlertStatusAction,
   setBoardCadenceAction,
   setBoardDirectiveStatusAction,
+  setBoardMissionAction,
+  updateBoardMemberAction,
 } from "@/app/actions";
 import type {
   BoardAlert,
@@ -134,9 +140,10 @@ export default function BoardroomPage() {
   const [sessions, setSessions] = useState<BoardSessionSummary[]>([]);
   const [alerts, setAlerts] = useState<BoardAlert[]>([]);
   const [directives, setDirectives] = useState<BoardDirective[]>([]);
-  const [settings, setSettings] = useState<BoardSettings>({ cadence: "daily", last_scan_at: null });
+  const [settings, setSettings] = useState<BoardSettings>({ cadence: "daily", last_scan_at: null, mission: "" });
   const [founderReply, setFounderReply] = useState("");
   const [handingOff, setHandingOff] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [question, setQuestion] = useState("");
   const [convening, setConvening] = useState(false);
@@ -318,7 +325,12 @@ export default function BoardroomPage() {
               <ArrowLeft className="h-4 w-4" />
               Back to the board
             </Button>
-          ) : undefined
+          ) : (
+            <Button size="sm" variant={customizeOpen ? "outline" : undefined} onClick={() => setCustomizeOpen((v) => !v)}>
+              <Pencil className="h-4 w-4" />
+              Customize board
+            </Button>
+          )
         }
       />
       <PageBody>
@@ -346,6 +358,19 @@ export default function BoardroomPage() {
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800">
                 {notice}
               </div>
+            )}
+
+            {customizeOpen && (
+              <BoardCustomizer
+                members={members}
+                mission={settings.mission}
+                onClose={() => setCustomizeOpen(false)}
+                onSaved={() => {
+                  setCustomizeOpen(false);
+                  setNotice("Board updated.");
+                  void load();
+                }}
+              />
             )}
 
             {/* Autonomous market scan controls */}
@@ -833,5 +858,137 @@ function AlertCard({
         </Button>
       </div>
     </Card>
+  );
+}
+
+function BoardCustomizer({
+  members,
+  mission,
+  onClose,
+  onSaved,
+}: {
+  members: BoardMember[];
+  mission: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [goal, setGoal] = useState(mission || DEFAULT_BOARD_GOAL);
+  const [roster, setRoster] = useState<BoardMember[]>(members);
+  const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState<string | null>(null);
+
+  function patch(id: string, p: Partial<BoardMember>) {
+    setRoster((prev) => prev.map((m) => (m.id === id ? { ...m, ...p } : m)));
+  }
+
+  async function reset(id: string) {
+    setResetting(id);
+    const r = await resetBoardMemberAction(id);
+    setResetting(null);
+    if ("member" in r && r.member) {
+      patch(id, { name: r.member.name, emoji: r.member.emoji, mandate: r.member.mandate, accent: r.member.accent });
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    await setBoardMissionAction(goal);
+    for (const m of roster) {
+      await updateBoardMemberAction(m.id, { name: m.name, emoji: m.emoji, mandate: m.mandate });
+    }
+    setSaving(false);
+    onSaved();
+  }
+
+  return (
+    <div className="rounded-xl border border-primary/25 bg-primary/[0.03] p-4">
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div>
+          <p className="flex items-center gap-1.5 text-[14px] font-semibold">
+            <Pencil className="h-4 w-4 text-primary" /> Customize board
+          </p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">
+            Set the board's goal and shape each seat. It stays a 5-member board — you can rename members, swap their
+            avatar, and rewrite each mandate.
+          </p>
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Goal */}
+      <div className="mb-4">
+        <p className="mb-1 flex items-center gap-1.5 text-[12.5px] font-semibold">
+          <Target className="h-3.5 w-3.5 text-primary" /> The board's goal
+        </p>
+        <p className="mb-1.5 text-[11.5px] text-muted-foreground">
+          What the board argues toward in every debate, scan, and verdict. It keeps its VC-caliber, direct character
+          regardless of the goal.
+        </p>
+        <Textarea
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          rows={2}
+          placeholder={DEFAULT_BOARD_GOAL}
+          className="text-[13px]"
+        />
+      </div>
+
+      {/* Members */}
+      <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">Board members</p>
+      <div className="space-y-2.5">
+        {roster.map((m) => (
+          <div key={m.id} className="rounded-lg border border-border bg-card p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <input
+                value={m.emoji}
+                onChange={(e) => patch(m.id, { emoji: e.target.value })}
+                maxLength={4}
+                className="h-8 w-10 rounded-md border border-input bg-background text-center text-[16px]"
+              />
+              <Input
+                value={m.name}
+                onChange={(e) => patch(m.id, { name: e.target.value })}
+                placeholder="Member name"
+                className="h-8 flex-1 text-[13px] font-medium"
+              />
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+                {ROLE_LABEL[m.role] ?? m.role}
+              </span>
+              <button
+                onClick={() => reset(m.id)}
+                disabled={resetting === m.id}
+                title="Reset to suggested archetype"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              >
+                {resetting === m.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </div>
+            <Textarea
+              value={m.mandate}
+              onChange={(e) => patch(m.id, { mandate: e.target.value })}
+              rows={3}
+              placeholder="What this member owns and how they argue…"
+              className="text-[12px] leading-relaxed"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-center gap-2">
+        <Button size="sm" disabled={saving} onClick={save}>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+          Save changes
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </div>
   );
 }

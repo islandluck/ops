@@ -479,6 +479,8 @@ export const boardSettings = pgTable(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     // off | daily | weekly.
     cadence: text("cadence").notNull().default("daily"),
+    // The board's mission/goal ("" = use the default $10B goal).
+    mission: text("mission").notNull().default(""),
     last_scan_at: timestamp("last_scan_at", { withTimezone: true }),
     created_at: createdAt,
     updated_at: updatedAt,
