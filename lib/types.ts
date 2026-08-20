@@ -142,6 +142,44 @@ export interface AdCampaignIdea {
   platforms: AdPlatform[];
 }
 
+/** A record of placing (or planning to place) a creative on an external ad platform. */
+export interface AdPlacement {
+  id: string;
+  creative_id: string;
+  platform: string;
+  /** planned (dry-run) | paused (created, $0 spend) | active (live) | failed. */
+  status: string;
+  external_campaign_id: string;
+  detail: string;
+  spend_cents: number;
+  created_at: string;
+}
+
+/** Whether the X Ads integration is set up (drives the publish vs. setup UI). */
+export interface XAdsStatus {
+  /** App keys present — we can describe setup. */
+  configured: boolean;
+  /** All credentials present — we can actually publish. */
+  ready: boolean;
+  /** Human-readable list of missing env values. */
+  missing: string[];
+}
+
+/** One step in the dry-run preview of what a publish would send to the platform. */
+export interface AdPublishStep {
+  label: string;
+  method: string;
+  path: string;
+}
+
+/** Client-safe preview of the campaign a publish would create on the platform. */
+export interface AdPublishPreview {
+  objective: string;
+  daily_budget_cents: number;
+  tweet_text: string;
+  steps: AdPublishStep[];
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */

@@ -568,6 +568,45 @@ export const adCreatives = pgTable(
 );
 
 /**
+ * One row per attempt to place a creative on an external ad platform (X first).
+ * Tracks the platform-side ids + status so campaigns are monitored in one spot.
+ * status: planned (dry-run, nothing sent) | paused (created on-platform, $0 spend)
+ *        | active (live, spending) | failed. Nothing here ever spends until a human
+ * explicitly activates a paused placement.
+ */
+export const adPlacements = pgTable(
+  "ad_placements",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    creative_id: uuid("creative_id")
+      .notNull()
+      .references(() => adCreatives.id, { onDelete: "cascade" }),
+    campaign_id: uuid("campaign_id")
+      .notNull()
+      .references(() => adCampaigns.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull().default("x"),
+    // planned | paused | active | failed.
+    status: text("status").notNull().default("planned"),
+    external_campaign_id: text("external_campaign_id").notNull().default(""),
+    external_line_item_id: text("external_line_item_id").notNull().default(""),
+    external_tweet_id: text("external_tweet_id").notNull().default(""),
+    // Human-readable note: dry-run reason, error, or last sync detail.
+    detail: text("detail").notNull().default(""),
+    spend_cents: integer("spend_cents").notNull().default(0),
+    last_synced_at: timestamp("last_synced_at", { withTimezone: true }),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("ad_placements_ws_idx").on(t.workspace_id, t.created_at),
+    index("ad_placements_creative_idx").on(t.creative_id),
+  ],
+);
+
+/**
  * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
  * usage returned by every response, attributed to a workspace (null = a call made
  * outside any workspace context). Powers the operator usage report (which workspaces

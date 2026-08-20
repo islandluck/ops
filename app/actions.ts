@@ -135,14 +135,19 @@ import {
   updateBoardMember,
 } from "@/lib/agents/boardroom";
 import {
+  activatePlacement,
   createAdCampaign,
   deleteAdCampaign,
   getAdCampaign,
+  getPlacement,
   listAdCampaigns,
+  pausePlacement,
+  publishCreativeToX,
   setCampaignDestination,
   setCreativeStatus,
   suggestCampaigns,
   updateAdCreative,
+  xAdsStatus,
 } from "@/lib/agents/ads";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
@@ -2780,6 +2785,57 @@ export async function setAdDestinationAction(id: string, url: string) {
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the URL." };
   }
+}
+
+/** Whether X Ads is connected (drives the publish vs. setup UI). */
+export async function getXAdsStatusAction() {
+  const user = await getCurrentUser();
+  if (!user) return { configured: false, ready: false, missing: [] as string[] };
+  return xAdsStatus();
+}
+
+/** Publish an X creative to X Ads — creates it PAUSED, or dry-runs if not connected. */
+export async function publishAdToXAction(creativeId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await publishCreativeToX(ws, creativeId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't publish." };
+  }
+}
+
+/** Current placement (X campaign id + status) for one creative. */
+export async function getAdPlacementAction(creativeId: string) {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getPlacement(ws, creativeId);
+  } catch {
+    return null;
+  }
+}
+
+/** Flip a paused X placement live — starts spending. Explicit, human-triggered. */
+export async function activateAdPlacementAction(placementId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return activatePlacement(ws, placementId);
+}
+
+/** Pause a live X placement — stops spending. */
+export async function pauseAdPlacementAction(placementId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return pausePlacement(ws, placementId);
 }
 
 /** Mark one platform's ad launched / back to draft, with an optional placement note. */

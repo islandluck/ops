@@ -3,12 +3,30 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { adCampaigns, adCreatives, businessBriefs } from "@/lib/db/schema";
+import { adCampaigns, adCreatives, adPlacements, businessBriefs } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { runWithUsage } from "@/lib/ai/usage";
 import { generateAdCampaign, suggestAdCampaigns } from "@/lib/ai/ads";
 import { searchStockImages, stockConfigured } from "@/lib/ai/stock";
-import type { AdCampaign, AdCampaignIdea, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
+import {
+  activateXCampaign,
+  buildXCampaignPlan,
+  pauseXCampaign,
+  publishToX,
+  xAdsConfigured,
+  xAdsCreds,
+  xAdsMissing,
+} from "@/lib/integrations/x-ads";
+import type {
+  AdCampaign,
+  AdCampaignIdea,
+  AdCampaignSummary,
+  AdCreative,
+  AdPlacement,
+  AdPublishPreview,
+  AdPlatform,
+  XAdsStatus,
+} from "@/lib/types";
 
 /**
  * Ads Manager engine (P0 — campaign studio). Turns an objective into ready-to-run
@@ -313,4 +331,202 @@ export async function setCreativeStatus(
     .where(and(eq(adCampaigns.workspace_id, workspaceId), eq(adCampaigns.id, row.campaign_id)));
 
   return { ok: true, campaignStatus };
+}
+
+// ── X Ads placement (publish / activate / monitor) ──────────────────────────
+
+function toPlacement(r: typeof adPlacements.$inferSelect): AdPlacement {
+  return {
+    id: r.id,
+    creative_id: r.creative_id,
+    platform: r.platform,
+    status: r.status,
+    external_campaign_id: r.external_campaign_id,
+    detail: r.detail,
+    spend_cents: r.spend_cents,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+interface PlacementFields {
+  status?: string;
+  external_campaign_id?: string;
+  external_line_item_id?: string;
+  external_tweet_id?: string;
+  detail?: string;
+  spend_cents?: number;
+  last_synced_at?: Date | null;
+}
+
+/** One placement row per creative — update in place on re-publish. */
+async function upsertPlacement(
+  workspaceId: string,
+  creative: AdCreative,
+  campaignId: string,
+  fields: PlacementFields,
+): Promise<AdPlacement> {
+  const now = new Date();
+  const [existing] = await db
+    .select()
+    .from(adPlacements)
+    .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.creative_id, creative.id)))
+    .limit(1);
+  if (existing) {
+    const [row] = await db
+      .update(adPlacements)
+      .set({ ...fields, updated_at: now })
+      .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.id, existing.id)))
+      .returning();
+    return toPlacement(row);
+  }
+  const [row] = await db
+    .insert(adPlacements)
+    .values({
+      workspace_id: workspaceId,
+      creative_id: creative.id,
+      campaign_id: campaignId,
+      platform: creative.platform,
+      status: fields.status ?? "planned",
+      external_campaign_id: fields.external_campaign_id ?? "",
+      external_line_item_id: fields.external_line_item_id ?? "",
+      external_tweet_id: fields.external_tweet_id ?? "",
+      detail: fields.detail ?? "",
+      spend_cents: fields.spend_cents ?? 0,
+      last_synced_at: fields.last_synced_at ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return toPlacement(row);
+}
+
+/** Whether X Ads is set up (drives publish vs. setup UI). Pure from env. */
+export function xAdsStatus(): XAdsStatus {
+  return { configured: xAdsConfigured(), ready: xAdsCreds() !== null, missing: xAdsMissing() };
+}
+
+/** Latest placement for a creative (for status badges). */
+export async function getPlacement(workspaceId: string, creativeId: string): Promise<AdPlacement | null> {
+  const [row] = await db
+    .select()
+    .from(adPlacements)
+    .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.creative_id, creativeId)))
+    .orderBy(desc(adPlacements.created_at))
+    .limit(1);
+  return row ? toPlacement(row) : null;
+}
+
+export type PublishResult =
+  | { ok: true; mode: "dry_run"; preview: AdPublishPreview; missing: string[]; placement: AdPlacement }
+  | { ok: true; mode: "live"; placement: AdPlacement }
+  | { ok: false; error: string };
+
+/**
+ * Publish an X creative to X Ads — creates the campaign PAUSED (never spends).
+ * When X Ads isn't fully configured, runs as a dry-run: returns the exact plan
+ * + what's missing and sends nothing.
+ */
+export async function publishCreativeToX(workspaceId: string, creativeId: string): Promise<PublishResult> {
+  const [cr] = await db
+    .select()
+    .from(adCreatives)
+    .where(and(eq(adCreatives.workspace_id, workspaceId), eq(adCreatives.id, creativeId)))
+    .limit(1);
+  if (!cr) return { ok: false, error: "That ad no longer exists." };
+  if (cr.platform !== "x") return { ok: false, error: "Only X ads can be published to X right now." };
+
+  const campaign = await getAdCampaign(workspaceId, cr.campaign_id);
+  const creative = toCreative(cr);
+  const plan = buildXCampaignPlan(campaign, creative);
+  const preview: AdPublishPreview = {
+    objective: plan.objective,
+    daily_budget_cents: campaign.daily_budget_cents,
+    tweet_text: plan.tweetText,
+    steps: plan.steps.map((s) => ({ label: s.label, method: s.method, path: s.path })),
+  };
+
+  const creds = xAdsCreds();
+  if (!creds) {
+    const missing = xAdsMissing();
+    const placement = await upsertPlacement(workspaceId, creative, campaign.id, {
+      status: "planned",
+      detail: missing.length ? `Dry run — connect X Ads. Missing: ${missing.join(", ")}` : "Dry run.",
+    });
+    return { ok: true, mode: "dry_run", preview, missing, placement };
+  }
+
+  try {
+    const res = await publishToX(creds, campaign, creative);
+    const placement = await upsertPlacement(workspaceId, creative, campaign.id, {
+      status: "paused",
+      external_campaign_id: res.campaignId,
+      external_line_item_id: res.lineItemId,
+      external_tweet_id: res.tweetId,
+      detail: "Created on X — paused. Activate to go live.",
+      last_synced_at: new Date(),
+    });
+    // Reflect the launch on the creative + campaign.
+    await setCreativeStatus(workspaceId, creativeId, "launched", res.campaignId);
+    return { ok: true, mode: "live", placement };
+  } catch (e) {
+    await upsertPlacement(workspaceId, creative, campaign.id, {
+      status: "failed",
+      detail: e instanceof Error ? e.message : "Publish failed.",
+    });
+    return { ok: false, error: e instanceof Error ? e.message : "Publish failed." };
+  }
+}
+
+/** Flip a paused placement live — THIS STARTS SPENDING. Human-triggered only. */
+export async function activatePlacement(
+  workspaceId: string,
+  placementId: string,
+): Promise<{ ok: true; placement: AdPlacement } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(adPlacements)
+    .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.id, placementId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Placement not found." };
+  if (!row.external_campaign_id) return { ok: false, error: "This campaign was never created on X (dry run)." };
+  const creds = xAdsCreds();
+  if (!creds) return { ok: false, error: "X Ads isn't connected." };
+  try {
+    await activateXCampaign(creds, row.external_campaign_id);
+    const [upd] = await db
+      .update(adPlacements)
+      .set({ status: "active", detail: "Live on X.", last_synced_at: new Date(), updated_at: new Date() })
+      .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.id, placementId)))
+      .returning();
+    return { ok: true, placement: toPlacement(upd) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Activation failed." };
+  }
+}
+
+/** Pause a live placement — stops spending. */
+export async function pausePlacement(
+  workspaceId: string,
+  placementId: string,
+): Promise<{ ok: true; placement: AdPlacement } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(adPlacements)
+    .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.id, placementId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Placement not found." };
+  if (!row.external_campaign_id) return { ok: false, error: "Nothing is live for this ad." };
+  const creds = xAdsCreds();
+  if (!creds) return { ok: false, error: "X Ads isn't connected." };
+  try {
+    await pauseXCampaign(creds, row.external_campaign_id);
+    const [upd] = await db
+      .update(adPlacements)
+      .set({ status: "paused", detail: "Paused on X.", last_synced_at: new Date(), updated_at: new Date() })
+      .where(and(eq(adPlacements.workspace_id, workspaceId), eq(adPlacements.id, placementId)))
+      .returning();
+    return { ok: true, placement: toPlacement(upd) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Pause failed." };
+  }
 }

@@ -16,10 +16,13 @@ import {
   Loader2,
   MessageCircle,
   MonitorPlay,
+  Pause,
   Pencil,
+  Play,
   Repeat2,
   Rocket,
   RotateCcw,
+  Send,
   Sparkles,
   ThumbsUp,
   Trash2,
@@ -32,16 +35,30 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
+  activateAdPlacementAction,
   createAdCampaignAction,
   deleteAdCampaignAction,
   getAdCampaignAction,
+  getAdPlacementAction,
+  getXAdsStatusAction,
   listAdCampaignsAction,
+  pauseAdPlacementAction,
+  publishAdToXAction,
   setAdCreativeStatusAction,
   setAdDestinationAction,
   suggestAdCampaignsAction,
   updateAdCreativeAction,
 } from "@/app/actions";
-import type { AdCampaign, AdCampaignIdea, AdCampaignSummary, AdCreative, AdPlatform } from "@/lib/types";
+import type {
+  AdCampaign,
+  AdCampaignIdea,
+  AdCampaignSummary,
+  AdCreative,
+  AdPlacement,
+  AdPlatform,
+  AdPublishPreview,
+  XAdsStatus,
+} from "@/lib/types";
 
 const PLATFORMS: { key: AdPlatform; label: string; hint: string }[] = [
   { key: "meta", label: "Meta", hint: "Facebook · Instagram" },
@@ -370,17 +387,193 @@ const EDIT_FIELDS: { key: keyof AdCreative; label: string; area?: boolean }[] = 
 const CHIP =
   "inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50";
 
+/** X Ads publish flow for an X creative: dry-run + setup when unconnected,
+ *  create-paused + explicit activate (spend) when connected. */
+function XPublish({ creative, dailyBudgetCents }: { creative: AdCreative; dailyBudgetCents: number }) {
+  const [placement, setPlacement] = useState<AdPlacement | null>(null);
+  const [status, setStatus] = useState<XAdsStatus | null>(null);
+  const [preview, setPreview] = useState<AdPublishPreview | null>(null);
+  const [missing, setMissing] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAdPlacementAction(creative.id).then(setPlacement);
+    getXAdsStatusAction().then(setStatus);
+  }, [creative.id]);
+
+  async function publish() {
+    setBusy(true);
+    setError(null);
+    const r = await publishAdToXAction(creative.id);
+    setBusy(false);
+    if (!("ok" in r) || !r.ok) {
+      setError("error" in r ? r.error : "Couldn't publish.");
+      return;
+    }
+    setPlacement(r.placement);
+    if (r.mode === "dry_run") {
+      setPreview(r.preview);
+      setMissing(r.missing);
+      setOpen(true);
+    } else {
+      setOpen(false);
+    }
+  }
+
+  async function activate() {
+    if (!placement) return;
+    const ok = window.confirm(
+      `This starts spending about ${dollars(dailyBudgetCents)}/day on X until you pause it. Go live now?`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    const r = await activateAdPlacementAction(placement.id);
+    setBusy(false);
+    if ("ok" in r && r.ok) setPlacement(r.placement);
+    else setError("error" in r ? r.error : "Couldn't activate.");
+  }
+
+  async function pause() {
+    if (!placement) return;
+    setBusy(true);
+    setError(null);
+    const r = await pauseAdPlacementAction(placement.id);
+    setBusy(false);
+    if ("ok" in r && r.ok) setPlacement(r.placement);
+    else setError("error" in r ? r.error : "Couldn't pause.");
+  }
+
+  const live = placement?.status === "active";
+  const paused = placement?.status === "paused";
+  const failed = placement?.status === "failed";
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-400">
+          <Send className="h-3.5 w-3.5" /> Publish to X Ads
+        </div>
+        {live && (
+          <span className="rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success">Live</span>
+        )}
+        {paused && (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+            On X · paused
+          </span>
+        )}
+        {failed && (
+          <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-600">Failed</span>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {!paused && !live && (
+          <Button size="sm" onClick={publish} disabled={busy}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {status && !status.ready ? "Preview & set up" : "Publish (paused)"}
+          </Button>
+        )}
+        {paused && (
+          <>
+            <span className="text-xs text-muted-foreground">Created on X, paused — nothing is spending.</span>
+            <Button size="sm" variant="success" onClick={activate} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              Activate
+            </Button>
+          </>
+        )}
+        {live && (
+          <>
+            <span className="text-xs text-success">
+              Live on X{placement && placement.spend_cents > 0 ? ` · ${dollars(placement.spend_cents)} spent` : ""}.
+            </span>
+            <Button size="sm" variant="secondary" onClick={pause} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
+              Pause
+            </Button>
+          </>
+        )}
+        {placement?.external_campaign_id && (
+          <a href="https://ads.x.com/" target="_blank" rel="noreferrer" className={CHIP}>
+            Open in X Ads <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      {open && preview && (
+        <div className="flex flex-col gap-2 rounded-md border border-border bg-background p-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Preview — nothing was sent</span>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close preview">
+              <X className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </div>
+          <div className="text-muted-foreground">
+            Objective <span className="font-medium text-foreground">{preview.objective}</span> · Budget{" "}
+            <span className="font-medium text-foreground">{dollars(preview.daily_budget_cents)}/day</span>
+          </div>
+          <div className="whitespace-pre-wrap rounded bg-muted/50 p-2">{preview.tweet_text}</div>
+          <ol className="ml-4 list-decimal space-y-0.5 text-muted-foreground">
+            {preview.steps.map((s, i) => (
+              <li key={i}>{s.label}</li>
+            ))}
+          </ol>
+          {missing.length > 0 && (
+            <div className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/[0.06] p-2">
+              <div className="font-semibold text-amber-700 dark:text-amber-400">To publish for real, connect X Ads</div>
+              <ol className="ml-4 mt-1 list-decimal space-y-0.5 text-muted-foreground">
+                <li>
+                  Create an app at{" "}
+                  <a
+                    href="https://developer.x.com/en/portal/dashboard"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    developer.x.com
+                  </a>{" "}
+                  and apply for Ads API access.
+                </li>
+                <li>
+                  Create and fund an ads account at{" "}
+                  <a href="https://ads.x.com/" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                    ads.x.com
+                  </a>
+                  .
+                </li>
+                <li>Add these to your environment, then redeploy:</li>
+              </ol>
+              <ul className="ml-4 mt-1 list-disc font-mono text-[11px] text-muted-foreground">
+                {missing.map((m) => (
+                  <li key={m}>{m}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreativeCard({
   creative,
   brand,
   destinationUrl,
   campaignName,
+  dailyBudgetCents,
   onChange,
 }: {
   creative: AdCreative;
   brand: string;
   destinationUrl: string;
   campaignName: string;
+  dailyBudgetCents: number;
   onChange: (c: AdCreative) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -544,30 +737,34 @@ function CreativeCard({
             </ol>
           )}
 
-          <div className="flex items-center gap-2">
-            <Input
-              value={placement}
-              onChange={(e) => setPlacement(e.target.value)}
-              placeholder="Where's it live? (optional note / campaign ID)"
-              className="h-8 text-xs"
-            />
-            <Button
-              variant={launched ? "secondary" : "success"}
-              size="sm"
-              onClick={toggleLaunched}
-              disabled={busy}
-              className="shrink-0"
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : launched ? (
-                <RotateCcw className="h-3.5 w-3.5" />
-              ) : (
-                <Rocket className="h-3.5 w-3.5" />
-              )}
-              {launched ? "Mark draft" : "Mark launched"}
-            </Button>
-          </div>
+          {creative.platform === "x" ? (
+            <XPublish creative={creative} dailyBudgetCents={dailyBudgetCents} />
+          ) : (
+            <div className="flex items-center gap-2">
+              <Input
+                value={placement}
+                onChange={(e) => setPlacement(e.target.value)}
+                placeholder="Where's it live? (optional note / campaign ID)"
+                className="h-8 text-xs"
+              />
+              <Button
+                variant={launched ? "secondary" : "success"}
+                size="sm"
+                onClick={toggleLaunched}
+                disabled={busy}
+                className="shrink-0"
+              >
+                {busy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : launched ? (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                ) : (
+                  <Rocket className="h-3.5 w-3.5" />
+                )}
+                {launched ? "Mark draft" : "Mark launched"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -913,6 +1110,7 @@ export default function AdsPage() {
                   brand={brand}
                   destinationUrl={campaign.destination_url}
                   campaignName={campaign.name}
+                  dailyBudgetCents={campaign.daily_budget_cents}
                   onChange={handleCreativeChange}
                 />
               ))}
