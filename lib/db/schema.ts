@@ -526,7 +526,9 @@ export const adCampaigns = pgTable(
     objective: text("objective").notNull().default(""),
     audience: text("audience").notNull().default(""),
     daily_budget_cents: integer("daily_budget_cents").notNull().default(0),
-    // draft (P0); later: pending_approval | live | paused.
+    // Where ad clicks should land; UTM tags are derived from it per platform.
+    destination_url: text("destination_url").notNull().default(""),
+    // draft | launched (any creative marked live). Later: pending_approval | live | paused.
     status: text("status").notNull().default("draft"),
     created_at: createdAt,
   },
@@ -555,6 +557,10 @@ export const adCreatives = pgTable(
     geo: text("geo").notNull().default(""),
     image_url: text("image_url").notNull().default(""),
     image_alt: text("image_alt").notNull().default(""),
+    // draft | launched — tracked per platform so the founder knows what's live.
+    status: text("status").notNull().default("draft"),
+    // Founder's own reference for where it went live (e.g. the platform's campaign id).
+    placement_ref: text("placement_ref").notNull().default(""),
     created_at: createdAt,
     updated_at: updatedAt,
   },

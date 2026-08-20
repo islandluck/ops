@@ -32,6 +32,8 @@ function toCreative(r: typeof adCreatives.$inferSelect): AdCreative {
     geo: r.geo,
     image_url: r.image_url,
     image_alt: r.image_alt,
+    status: r.status,
+    placement_ref: r.placement_ref,
   };
 }
 
@@ -58,6 +60,7 @@ export async function getAdCampaign(workspaceId: string, id: string): Promise<Ad
     audience: c?.audience ?? "",
     daily_budget_cents: c?.daily_budget_cents ?? 0,
     status: c?.status ?? "draft",
+    destination_url: c?.destination_url ?? "",
     creatives,
     created_at: c?.created_at ? new Date(c.created_at).toISOString() : new Date().toISOString(),
   };
@@ -152,7 +155,11 @@ export async function listAdCampaigns(workspaceId: string, limit = 30): Promise<
     .limit(limit);
   if (!camps.length) return [];
   const cr = await db
-    .select({ campaign_id: adCreatives.campaign_id, platform: adCreatives.platform })
+    .select({
+      campaign_id: adCreatives.campaign_id,
+      platform: adCreatives.platform,
+      status: adCreatives.status,
+    })
     .from(adCreatives)
     .where(
       and(
@@ -164,10 +171,12 @@ export async function listAdCampaigns(workspaceId: string, limit = 30): Promise<
       ),
     );
   const byC = new Map<string, Set<string>>();
+  const launched = new Map<string, number>();
   for (const r of cr) {
     const s = byC.get(r.campaign_id) ?? new Set<string>();
     s.add(r.platform);
     byC.set(r.campaign_id, s);
+    if (r.status === "launched") launched.set(r.campaign_id, (launched.get(r.campaign_id) ?? 0) + 1);
   }
   return camps.map((c) => ({
     id: c.id,
@@ -176,6 +185,7 @@ export async function listAdCampaigns(workspaceId: string, limit = 30): Promise<
     platforms: [...(byC.get(c.id) ?? [])].sort(
       (a, b) => PLATFORM_ORDER.indexOf(a as AdPlatform) - PLATFORM_ORDER.indexOf(b as AdPlatform),
     ) as AdPlatform[],
+    launched: launched.get(c.id) ?? 0,
     created_at: new Date(c.created_at).toISOString(),
   }));
 }
@@ -212,4 +222,60 @@ export async function updateAdCreative(
 export async function deleteAdCampaign(workspaceId: string, id: string): Promise<{ ok: true }> {
   await db.delete(adCampaigns).where(and(eq(adCampaigns.workspace_id, workspaceId), eq(adCampaigns.id, id)));
   return { ok: true };
+}
+
+/** Ensure a pasted URL has a scheme so UTM links + previews resolve. "" stays "". */
+function normalizeUrl(raw: string): string {
+  const t = raw.trim();
+  if (!t) return "";
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+}
+
+/** Set where the campaign's ad clicks should land (drives per-platform UTM links). */
+export async function setCampaignDestination(
+  workspaceId: string,
+  id: string,
+  url: string,
+): Promise<{ ok: true; destination_url: string }> {
+  const destination_url = normalizeUrl(url).slice(0, 2000);
+  await db
+    .update(adCampaigns)
+    .set({ destination_url })
+    .where(and(eq(adCampaigns.workspace_id, workspaceId), eq(adCampaigns.id, id)));
+  return { ok: true, destination_url };
+}
+
+/** Mark one platform's ad launched (or back to draft) + note where it went live. */
+export async function setCreativeStatus(
+  workspaceId: string,
+  creativeId: string,
+  status: "draft" | "launched",
+  placementRef?: string,
+): Promise<{ ok: true; campaignStatus: string } | { ok: false; error: string }> {
+  const [row] = await db
+    .select({ campaign_id: adCreatives.campaign_id })
+    .from(adCreatives)
+    .where(and(eq(adCreatives.workspace_id, workspaceId), eq(adCreatives.id, creativeId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "That ad no longer exists." };
+
+  const set: Record<string, unknown> = { status, updated_at: new Date() };
+  if (typeof placementRef === "string") set.placement_ref = placementRef.slice(0, 200);
+  await db
+    .update(adCreatives)
+    .set(set)
+    .where(and(eq(adCreatives.workspace_id, workspaceId), eq(adCreatives.id, creativeId)));
+
+  // Roll the campaign's status up: launched if any of its creatives are live.
+  const peers = await db
+    .select({ status: adCreatives.status })
+    .from(adCreatives)
+    .where(and(eq(adCreatives.workspace_id, workspaceId), eq(adCreatives.campaign_id, row.campaign_id)));
+  const campaignStatus = peers.some((p) => p.status === "launched") ? "launched" : "draft";
+  await db
+    .update(adCampaigns)
+    .set({ status: campaignStatus })
+    .where(and(eq(adCampaigns.workspace_id, workspaceId), eq(adCampaigns.id, row.campaign_id)));
+
+  return { ok: true, campaignStatus };
 }

@@ -103,6 +103,10 @@ export interface AdCreative {
   geo: string;
   image_url: string;
   image_alt: string;
+  /** draft | launched — tracked per platform. */
+  status: string;
+  /** Founder's own note for where it went live (e.g. the platform's campaign id). */
+  placement_ref: string;
 }
 
 /** A ready-to-run ad campaign the Growth agent built across platforms. */
@@ -113,6 +117,8 @@ export interface AdCampaign {
   audience: string;
   daily_budget_cents: number;
   status: string;
+  /** Where clicks should land; UTM tags are derived from it per platform. */
+  destination_url: string;
   creatives: AdCreative[];
   created_at: string;
 }
@@ -122,6 +128,8 @@ export interface AdCampaignSummary {
   name: string;
   status: string;
   platforms: AdPlatform[];
+  /** How many of this campaign's creatives are marked launched. */
+  launched: number;
   created_at: string;
 }
 

@@ -139,6 +139,8 @@ import {
   deleteAdCampaign,
   getAdCampaign,
   listAdCampaigns,
+  setCampaignDestination,
+  setCreativeStatus,
   updateAdCreative,
 } from "@/lib/agents/ads";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
@@ -2754,5 +2756,35 @@ export async function deleteAdCampaignAction(id: string) {
     return await deleteAdCampaign(ws, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the campaign." };
+  }
+}
+
+/** Set the campaign's click destination (drives per-platform UTM links). */
+export async function setAdDestinationAction(id: string, url: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setCampaignDestination(ws, id, url);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the URL." };
+  }
+}
+
+/** Mark one platform's ad launched / back to draft, with an optional placement note. */
+export async function setAdCreativeStatusAction(
+  creativeId: string,
+  status: "draft" | "launched",
+  placementRef?: string,
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setCreativeStatus(ws, creativeId, status, placementRef);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the ad." };
   }
 }
