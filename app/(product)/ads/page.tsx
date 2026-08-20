@@ -677,6 +677,110 @@ function XManualHandoff({
   );
 }
 
+/** A labeled, copy-to-clipboard field for manual paste-in handoffs. */
+function CopyField({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  async function onCopy() {
+    if (value && (await copyText(value))) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    }
+  }
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
+        <button
+          type="button"
+          onClick={onCopy}
+          disabled={!value}
+          className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline disabled:opacity-50"
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <div
+        className={cn(
+          "whitespace-pre-wrap rounded-md bg-background p-2.5 text-[13px] leading-snug",
+          mono && "break-all font-mono text-[12px]",
+        )}
+      >
+        {value || "—"}
+      </div>
+    </div>
+  );
+}
+
+/** Friction-free manual handoff for Google Search ads. No API needed. */
+function GoogleManualHandoff({
+  creative,
+  destinationUrl,
+  campaignName,
+  dailyBudgetCents,
+}: {
+  creative: AdCreative;
+  destinationUrl: string;
+  campaignName: string;
+  dailyBudgetCents: number;
+}) {
+  const [showSteps, setShowSteps] = useState(false);
+  const utm = utmUrl(destinationUrl, "google", campaignName);
+  const keywords = creative.keywords.join(", ");
+
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] p-3">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+        <Send className="h-3.5 w-3.5" /> Publish on Google Ads
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Create a Search campaign in Google Ads and paste each piece below — about two minutes, no API needed.
+      </p>
+
+      <CopyField label="Headline" value={creative.headline} />
+      <CopyField label="Description" value={creative.description} />
+      {keywords && <CopyField label="Keywords" value={keywords} />}
+      <CopyField label="Final URL" value={utm || destinationUrl} mono />
+
+      <p className="text-[11px] text-muted-foreground">
+        Google asks for 3+ headlines and 2+ descriptions per ad — add a couple more variations when you paste these in.
+      </p>
+
+      <div className="grid grid-cols-3 gap-x-3 gap-y-2 text-xs">
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Goal</div>
+          <div className="truncate font-medium">Website traffic</div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Daily budget</div>
+          <div className="truncate font-medium">{dollars(dailyBudgetCents)}/day</div>
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Location</div>
+          <div className="truncate font-medium">{creative.geo || "—"}</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        <a href="https://ads.google.com/" target="_blank" rel="noreferrer" className={CHIP}>
+          Create on Google Ads <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+        <button type="button" onClick={() => setShowSteps((v) => !v)} className={CHIP}>
+          <ListChecks className="h-3.5 w-3.5" /> Steps
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showSteps && "rotate-180")} />
+        </button>
+      </div>
+      {showSteps && (
+        <ol className="ml-4 list-decimal space-y-1 text-xs text-muted-foreground">
+          {LAUNCH.google.steps.map((s, i) => (
+            <li key={i}>{s}</li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function CreativeCard({
   creative,
   brand,
@@ -853,6 +957,13 @@ function CreativeCard({
         <div className="flex flex-col gap-2.5 border-t border-border pt-3">
           {isXManual ? (
             <XManualHandoff
+              creative={creative}
+              destinationUrl={destinationUrl}
+              campaignName={campaignName}
+              dailyBudgetCents={dailyBudgetCents}
+            />
+          ) : creative.platform === "google" ? (
+            <GoogleManualHandoff
               creative={creative}
               destinationUrl={destinationUrl}
               campaignName={campaignName}
