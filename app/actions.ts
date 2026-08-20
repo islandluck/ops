@@ -134,7 +134,14 @@ import {
   unreadBoardAlertCount,
   updateBoardMember,
 } from "@/lib/agents/boardroom";
-import type { BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
+import {
+  createAdCampaign,
+  deleteAdCampaign,
+  getAdCampaign,
+  listAdCampaigns,
+  updateAdCreative,
+} from "@/lib/agents/ads";
+import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
@@ -2667,5 +2674,85 @@ export async function saveOpportunityLocationAction(loc: {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't save location." };
+  }
+}
+
+// ── Ads Manager ─────────────────────────────────────────────────────────────
+
+/** Generate a launch-ready, multi-platform ad campaign from an objective. */
+export async function createAdCampaignAction(input: {
+  objective: string;
+  platforms: AdPlatform[];
+  budgetCents?: number;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return createAdCampaign(ws, input);
+}
+
+/** List past ad campaigns for the history rail. */
+export async function listAdCampaignsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listAdCampaigns(ws);
+  } catch {
+    return [];
+  }
+}
+
+/** Load one campaign with all its platform creatives. */
+export async function getAdCampaignAction(
+  id: string,
+): Promise<{ campaign: AdCampaign } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  try {
+    return { campaign: await getAdCampaign(ws, id) };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Couldn't load that campaign." };
+  }
+}
+
+/** Edit one creative's copy / targeting / image. */
+export async function updateAdCreativeAction(
+  id: string,
+  patch: {
+    headline?: string;
+    primary_text?: string;
+    description?: string;
+    cta?: string;
+    audience?: string;
+    geo?: string;
+    image_url?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateAdCreative(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the edit." };
+  }
+}
+
+/** Delete an ad campaign and its creatives. */
+export async function deleteAdCampaignAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteAdCampaign(ws, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the campaign." };
   }
 }

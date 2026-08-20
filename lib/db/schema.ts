@@ -511,6 +511,57 @@ export const boardDirectives = pgTable(
 );
 
 /**
+ * Ads Manager — the Growth agent turns an objective into launch-ready ad packages
+ * per platform (Meta / Google / X / LinkedIn). P0 is a campaign studio: creative +
+ * targeting + budget, no external ad-platform APIs yet (direct placement is later).
+ */
+export const adCampaigns = pgTable(
+  "ad_campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    objective: text("objective").notNull().default(""),
+    audience: text("audience").notNull().default(""),
+    daily_budget_cents: integer("daily_budget_cents").notNull().default(0),
+    // draft (P0); later: pending_approval | live | paused.
+    status: text("status").notNull().default("draft"),
+    created_at: createdAt,
+  },
+  (t) => [index("ad_campaigns_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+export const adCreatives = pgTable(
+  "ad_creatives",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    campaign_id: uuid("campaign_id")
+      .notNull()
+      .references(() => adCampaigns.id, { onDelete: "cascade" }),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // meta | google | x | linkedin.
+    platform: text("platform").notNull().default("meta"),
+    format: text("format").notNull().default(""),
+    headline: text("headline").notNull().default(""),
+    primary_text: text("primary_text").notNull().default(""),
+    description: text("description").notNull().default(""),
+    cta: text("cta").notNull().default(""),
+    keywords: jsonb("keywords").$type<string[]>(),
+    audience: text("audience").notNull().default(""),
+    geo: text("geo").notNull().default(""),
+    image_url: text("image_url").notNull().default(""),
+    image_alt: text("image_alt").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("ad_creatives_campaign_idx").on(t.campaign_id)],
+);
+
+/**
  * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
  * usage returned by every response, attributed to a workspace (null = a call made
  * outside any workspace context). Powers the operator usage report (which workspaces

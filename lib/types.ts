@@ -85,6 +85,46 @@ export interface OnboardingInput {
   boardMembers?: OnboardingBoardMember[];
 }
 
+/* -------------------------------- ads ------------------------------------ */
+
+export type AdPlatform = "meta" | "google" | "x" | "linkedin";
+
+/** One platform-specific ad the studio generated (copy + targeting + creative). */
+export interface AdCreative {
+  id: string;
+  platform: AdPlatform;
+  format: string;
+  headline: string;
+  primary_text: string;
+  description: string;
+  cta: string;
+  keywords: string[];
+  audience: string;
+  geo: string;
+  image_url: string;
+  image_alt: string;
+}
+
+/** A ready-to-run ad campaign the Growth agent built across platforms. */
+export interface AdCampaign {
+  id: string;
+  name: string;
+  objective: string;
+  audience: string;
+  daily_budget_cents: number;
+  status: string;
+  creatives: AdCreative[];
+  created_at: string;
+}
+
+export interface AdCampaignSummary {
+  id: string;
+  name: string;
+  status: string;
+  platforms: AdPlatform[];
+  created_at: string;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */
