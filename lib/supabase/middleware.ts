@@ -14,6 +14,8 @@ const PROTECTED_PREFIXES = [
   "/brief",
   "/settings",
   "/onboarding",
+  "/team",
+  "/portal",
 ];
 
 const AUTH_PAGES = ["/login", "/signup"];
@@ -54,15 +56,23 @@ export async function updateSession(request: NextRequest) {
   const isOnboarding = path.startsWith("/onboarding");
   // Onboarding state lives in the Supabase user's metadata so it's readable here
   // (getUser() returns fresh metadata) without a per-request DB round-trip.
-  const onboarded = Boolean(
-    (user?.user_metadata as { onboarded?: boolean } | undefined)?.onboarded,
-  );
+  const meta = user?.user_metadata as { onboarded?: boolean; pending_invite?: boolean } | undefined;
+  const onboarded = Boolean(meta?.onboarded);
+  const pendingInvite = Boolean(meta?.pending_invite);
 
   // Not signed in → gate protected routes.
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", path);
+    return NextResponse.redirect(url);
+  }
+
+  // A pending invitee must accept before they can go anywhere else.
+  if (user && pendingInvite && !path.startsWith("/invite") && !isAuthPage) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/invite/accept";
+    url.search = "";
     return NextResponse.redirect(url);
   }
 

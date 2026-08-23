@@ -59,13 +59,48 @@ export async function workspaceIdForUser(userId: string): Promise<string | null>
 }
 
 async function getWorkspaceId(userId: string): Promise<string | null> {
-  // tenant-scope-exempt: resolves the caller's OWN workspace by their auth user_id.
-  const rows = await db
-    .select({ id: workspaceMembers.workspace_id })
+  // tenant-scope-exempt: resolves the caller's OWN memberships by their auth user_id.
+  const memberships = await db
+    .select({ id: workspaceMembers.workspace_id, role: workspaceMembers.role })
     .from(workspaceMembers)
-    .where(eq(workspaceMembers.user_id, userId))
+    .where(eq(workspaceMembers.user_id, userId));
+  if (!memberships.length) return null;
+  // Respect an explicit active-workspace choice when it's still a membership.
+  const [prof] = await db
+    .select({ active: profiles.active_workspace_id })
+    .from(profiles)
+    .where(eq(profiles.id, userId))
     .limit(1);
-  return rows[0]?.id ?? null;
+  if (prof?.active && memberships.some((m) => m.id === prof.active)) return prof.active;
+  // Otherwise prefer an OWNED workspace — keeps existing owners' resolution identical,
+  // and means a member who later creates their own workspace lands in it by default.
+  const owned = memberships.find((m) => m.role === "owner");
+  return (owned ?? memberships[0]).id;
+}
+
+/** The caller's role in a workspace (owner | member | null if not a member). */
+export async function getUserRoleInWorkspace(userId: string, workspaceId: string): Promise<string | null> {
+  // tenant-scope-exempt: resolves the caller's OWN role by their auth user_id.
+  const [row] = await db
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.user_id, userId), eq(workspaceMembers.workspace_id, workspaceId)))
+    .limit(1);
+  return row?.role ?? null;
+}
+
+/** Every workspace the user belongs to (for the switcher + resolution). */
+export async function listMembershipsForUser(
+  userId: string,
+): Promise<{ workspace_id: string; role: string; name: string }[]> {
+  // tenant-scope-exempt: resolves the caller's OWN memberships by their auth user_id.
+  return db
+    .select({ workspace_id: workspaceMembers.workspace_id, role: workspaceMembers.role, name: workspaces.name })
+    .from(workspaceMembers)
+    .leftJoin(workspaces, eq(workspaceMembers.workspace_id, workspaces.id))
+    .where(eq(workspaceMembers.user_id, userId)) as Promise<
+    { workspace_id: string; role: string; name: string }[]
+  >;
 }
 
 /**

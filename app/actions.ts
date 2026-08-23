@@ -154,13 +154,22 @@ import {
   createTeamMember,
   deleteAssignment,
   deleteTeamMember,
+  getPortalData,
   listAssignments,
   listTeamMembers,
   updateAssignment,
+  updateMyAssignmentStatus,
   updateTeamMember,
   type AssignmentInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
+import {
+  acceptInvite,
+  acceptPendingInvite,
+  inviteTeamMember,
+  listInvites,
+  revokeInvite,
+} from "@/lib/agents/team-invites";
 import type { AssignmentStatus } from "@/lib/types";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
@@ -2966,5 +2975,86 @@ export async function deleteAssignmentAction(id: string) {
     return await deleteAssignment(ws, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the handoff." };
+  }
+}
+
+// ── Team invites (Slice 2a) ─────────────────────────────────────────────────
+
+export async function inviteTeamMemberAction(input: {
+  memberId?: string;
+  email: string;
+  profile?: TeamMemberInput;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await inviteTeamMember(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send the invite." };
+  }
+}
+
+export async function listInvitesAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listInvites(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function revokeInviteAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await revokeInvite(ws, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't revoke the invite." };
+  }
+}
+
+/** Accept an invite as the logged-in user (their email must match the invite). */
+export async function acceptInviteAction(token: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Please sign in to accept this invite." };
+  try {
+    return token
+      ? await acceptInvite(user.id, user.email ?? "", token)
+      : await acceptPendingInvite(user.id, user.email ?? "");
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't accept the invite." };
+  }
+}
+
+// ── Member portal ───────────────────────────────────────────────────────────
+
+export async function getPortalDataAction() {
+  const user = await getCurrentUser();
+  if (!user) return { member: null, assignments: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { member: null, assignments: [] };
+  try {
+    return await getPortalData(ws, user.id);
+  } catch {
+    return { member: null, assignments: [] };
+  }
+}
+
+export async function updateMyAssignmentStatusAction(id: string, status: AssignmentStatus) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateMyAssignmentStatus(ws, user.id, id, status);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update." };
   }
 }

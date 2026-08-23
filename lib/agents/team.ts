@@ -214,6 +214,53 @@ export async function deleteAssignment(workspaceId: string, id: string): Promise
   return { ok: true };
 }
 
+// ── Member portal (member-scoped reads/writes) ──────────────────────────────
+
+/** The member's own profile + assignments (scoped to who they are, not the workspace). */
+export async function getPortalData(
+  workspaceId: string,
+  userId: string,
+): Promise<{ member: TeamMember | null; assignments: TeamAssignment[] }> {
+  const [row] = await db
+    .select()
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!row) return { member: null, assignments: [] };
+  const assignments = await db
+    .select()
+    .from(teamAssignments)
+    .where(and(eq(teamAssignments.workspace_id, workspaceId), eq(teamAssignments.member_id, row.id)))
+    .orderBy(desc(teamAssignments.created_at));
+  return { member: toMember(row), assignments: assignments.map((a) => toAssignment(a, row.name)) };
+}
+
+/** A member updates the status of one of THEIR OWN assignments (ownership enforced). */
+export async function updateMyAssignmentStatus(
+  workspaceId: string,
+  userId: string,
+  assignmentId: string,
+  status: AssignmentStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [m] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!m) return { ok: false, error: "No team profile found." };
+  await db
+    .update(teamAssignments)
+    .set({ status, updated_at: new Date() })
+    .where(
+      and(
+        eq(teamAssignments.workspace_id, workspaceId),
+        eq(teamAssignments.id, assignmentId),
+        eq(teamAssignments.member_id, m.id),
+      ),
+    );
+  return { ok: true };
+}
+
 // ── AI context ──────────────────────────────────────────────────────────────
 
 const OPEN_STATUSES: AssignmentStatus[] = ["assigned", "in_progress", "blocked"];

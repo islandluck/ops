@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   CalendarClock,
+  Check,
+  Copy,
+  Link2,
   Loader2,
+  Mail,
   Pencil,
   Plus,
   Trash2,
@@ -22,7 +26,9 @@ import {
   createTeamMemberAction,
   deleteAssignmentAction,
   deleteTeamMemberAction,
+  inviteTeamMemberAction,
   listAssignmentsAction,
+  listInvitesAction,
   listTeamMembersAction,
   updateAssignmentAction,
   updateTeamMemberAction,
@@ -117,10 +123,16 @@ function MemberDialog({
   const [draft, setDraft] = useState<MemberDraft>(EMPTY_MEMBER);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sendInvite, setSendInvite] = useState(true);
+  const [result, setResult] = useState<{ accept_url: string; note?: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setError(null);
+    setResult(null);
+    setCopied(false);
+    setSendInvite(true);
     setDraft(
       member
         ? {
@@ -154,6 +166,26 @@ function MemberDialog({
       emoji: draft.emoji,
       accent: draft.accent,
     };
+
+    // New member + invite → create the profile AND send a join invite.
+    if (!member && sendInvite) {
+      if (!draft.email.trim()) {
+        setSaving(false);
+        setError("An email is required to send an invite.");
+        return;
+      }
+      const r = await inviteTeamMemberAction({ email: draft.email, profile: payload });
+      setSaving(false);
+      if ("ok" in r && r.ok) {
+        onSaved();
+        if (r.emailed) onClose();
+        else setResult({ accept_url: r.accept_url, note: r.note }); // show the link to share
+      } else {
+        setError("error" in r ? r.error : "Couldn't send the invite.");
+      }
+      return;
+    }
+
     const r = member ? await updateTeamMemberAction(member.id, payload) : await createTeamMemberAction(payload);
     setSaving(false);
     if ("ok" in r && r.ok) {
@@ -242,16 +274,61 @@ function MemberDialog({
             </div>
           </div>
         </div>
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <div className="mt-1 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={saving}>
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {member ? "Save" : "Add member"}
-          </Button>
-        </div>
+        {!member && !result && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={sendInvite}
+              onChange={(e) => setSendInvite(e.target.checked)}
+              className="h-4 w-4"
+            />
+            <Mail className="h-4 w-4 text-muted-foreground" />
+            Email them an invite to join the workspace
+          </label>
+        )}
+
+        {result ? (
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+            <p className="text-sm text-muted-foreground">
+              {result.note ?? "Invite created — share this link so they can join:"}
+            </p>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={result.accept_url} className="text-xs" onFocus={(e) => e.target.select()} />
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(result.accept_url);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1400);
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+              >
+                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={onClose}>Done</Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+            <div className="mt-1 flex justify-end gap-2">
+              <Button variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={save} disabled={saving}>
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {member ? "Save" : sendInvite ? "Send invite" : "Add member"}
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </Dialog>
   );
@@ -364,7 +441,9 @@ export default function TeamPage() {
   const [view, setView] = useState<"roster" | "board">("roster");
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
+  const [invites, setInvites] = useState<{ id: string; member_id: string; accept_url: string }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const [memberDialog, setMemberDialog] = useState<{ open: boolean; member: TeamMember | null }>({
     open: false,
@@ -373,10 +452,33 @@ export default function TeamPage() {
   const [handoffOpen, setHandoffOpen] = useState(false);
 
   async function refresh() {
-    const [m, a] = await Promise.all([listTeamMembersAction(), listAssignmentsAction()]);
+    const [m, a, inv] = await Promise.all([
+      listTeamMembersAction(),
+      listAssignmentsAction(),
+      listInvitesAction(),
+    ]);
     setMembers(m);
     setAssignments(a);
+    setInvites(inv);
     setLoading(false);
+  }
+
+  const inviteByMember = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const i of invites) map.set(i.member_id, i.accept_url);
+    return map;
+  }, [invites]);
+
+  async function copyInviteLink(memberId: string) {
+    const url = inviteByMember.get(memberId);
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedId(memberId);
+      setTimeout(() => setCopiedId(null), 1400);
+    } catch {
+      /* ignore */
+    }
   }
 
   useEffect(() => {
@@ -462,7 +564,14 @@ export default function TeamPage() {
                   <div className="flex items-start gap-3">
                     <Avatar member={m} />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate font-semibold">{m.name}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-semibold">{m.name}</span>
+                        {m.status === "invited" && (
+                          <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                            Invited
+                          </span>
+                        )}
+                      </div>
                       <div className="truncate text-sm text-muted-foreground">{m.role_title || "—"}</div>
                     </div>
                     <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
@@ -484,9 +593,22 @@ export default function TeamPage() {
                       ))}
                     </div>
                   )}
-                  <div className="mt-auto flex items-center justify-between border-t border-border pt-2 text-xs text-muted-foreground">
-                    <span>{open > 0 ? `${open} open handoff${open === 1 ? "" : "s"}` : "No open handoffs"}</span>
-                    {m.email && <span className="truncate">{m.email}</span>}
+                  <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                    <span className="truncate">
+                      {open > 0 ? `${open} open handoff${open === 1 ? "" : "s"}` : "No open handoffs"}
+                    </span>
+                    {m.status === "invited" && inviteByMember.has(m.id) ? (
+                      <button
+                        type="button"
+                        onClick={() => copyInviteLink(m.id)}
+                        className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
+                      >
+                        {copiedId === m.id ? <Check className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
+                        {copiedId === m.id ? "Copied" : "Invite link"}
+                      </button>
+                    ) : (
+                      m.email && <span className="truncate">{m.email}</span>
+                    )}
                   </div>
                 </Card>
               );

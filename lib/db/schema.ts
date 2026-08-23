@@ -78,6 +78,9 @@ export const profiles = pgTable("profiles", {
   id: uuid("id").primaryKey(), // == auth.users.id
   email: text("email").notNull(),
   full_name: text("full_name").notNull().default(""),
+  // The workspace the user is currently viewing. Null → resolve to their owned
+  // (or first) membership. Lets one user belong to several workspaces + switch.
+  active_workspace_id: uuid("active_workspace_id"),
   created_at: createdAt,
 });
 
@@ -668,6 +671,34 @@ export const teamAssignments = pgTable(
     index("team_assignments_ws_idx").on(t.workspace_id, t.created_at),
     index("team_assignments_member_idx").on(t.member_id),
   ],
+);
+
+/**
+ * Team Room — a pending invitation for someone to join the workspace as a member.
+ * The owner enters their profile + email; a Supabase invite email is sent; on
+ * accept, a workspace_members row (role=member) is created + team_members.user_id
+ * is bound. status: pending | accepted | revoked.
+ */
+export const teamInvites = pgTable(
+  "team_invites",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    member_id: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: text("role").notNull().default("member"),
+    token: text("token").notNull(),
+    status: text("status").notNull().default("pending"),
+    invited_by: uuid("invited_by"),
+    expires_at: timestamp("expires_at", { withTimezone: true }),
+    accepted_at: timestamp("accepted_at", { withTimezone: true }),
+    created_at: createdAt,
+  },
+  (t) => [index("team_invites_ws_idx").on(t.workspace_id), uniqueIndex("team_invites_token_uniq").on(t.token)],
 );
 
 /**
