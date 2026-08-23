@@ -30,6 +30,7 @@ import {
   Target,
   Telescope,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { Logo } from "@/components/brand";
 import { CATEGORY_ICONS } from "@/components/badges";
@@ -48,6 +49,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
       { href: "/approvals", label: "Approval Center", icon: SquareKanban },
       { href: "/executive", label: "Executive", icon: Compass },
       { href: "/boardroom", label: "Boardroom", icon: Gavel },
+      { href: "/team", label: "Team", icon: UsersRound },
       { href: "/command-center", label: "Command Center", icon: ListChecks },
       { href: "/email", label: "Email Manager", icon: Mail },
       { href: "/notes", label: "Notes", icon: NotebookPen },

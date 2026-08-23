@@ -15,6 +15,7 @@ import {
   executiveMemory,
 } from "@/lib/db/schema";
 import { createPlannedTask, getPlanningContext } from "@/lib/db/queries";
+import { getTeamContext } from "@/lib/agents/team";
 import { createProject } from "@/lib/agents/project";
 import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
@@ -161,6 +162,8 @@ async function buildBoardContext(workspaceId: string, question: string): Promise
   if (brief.ideal_customer_profile) parts.push(`Ideal customer: ${brief.ideal_customer_profile}`);
   if (brief.company_context) parts.push(`Company understanding (Deep Dive): ${brief.company_context.slice(0, 1500)}`);
   if (brief.crm_context) parts.push(`Pipeline / CRM: ${brief.crm_context.slice(0, 800)}`);
+  const teamContext = await getTeamContext(workspaceId).catch(() => "");
+  if (teamContext) parts.push(`The team (capacity + who owns what):\n${teamContext}`);
 
   if (kpis.length) {
     parts.push(

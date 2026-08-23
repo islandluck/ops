@@ -18,6 +18,7 @@ import {
   tasks,
 } from "@/lib/db/schema";
 import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
+import { getTeamContext } from "@/lib/agents/team";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import { getCalendarSnapshot, formatEventWhen } from "@/lib/integrations/google";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
@@ -128,7 +129,7 @@ function goalLines(goals: GoalRow[], mv: Record<GoalMetric, number>): { focus: s
 async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<string> {
   const { brief } = await getPlanningContext(workspaceId);
 
-  const [goals, memory, activeProjects, taskRows, mv] = await Promise.all([
+  const [goals, memory, activeProjects, taskRows, mv, teamContext] = await Promise.all([
     db
       .select()
       .from(companyGoals)
@@ -148,6 +149,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
       .from(tasks)
       .where(eq(tasks.workspace_id, workspaceId)),
     computeMetricValues(workspaceId),
+    getTeamContext(workspaceId),
   ]);
   const gl = goalLines(goals, mv);
 
@@ -164,6 +166,9 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
       : "",
     brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
     brief.calendar_context ? `\nSCHEDULE: ${brief.calendar_context}` : "",
+    teamContext
+      ? `\nTEAM (the people you can hand work to — factor their roles, skills, and current handoffs into any plan or delegation):\n${teamContext}`
+      : "",
     "",
     "You have a complete, live view of the business. Ground EVERY claim in the data below — never invent numbers.",
     "",

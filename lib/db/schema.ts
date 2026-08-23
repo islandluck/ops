@@ -607,6 +607,70 @@ export const adPlacements = pgTable(
 );
 
 /**
+ * Team Room — a person on the owner's team. Shares the workspace so the Executive
+ * and Boardroom can reason about them in business context. `user_id` is bound when
+ * the member accepts an invite + signs up (Slice 2); null = profile-only for now.
+ * status: active | inactive | invited (invited reserved for the login flow).
+ */
+export const teamMembers = pgTable(
+  "team_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    user_id: uuid("user_id"),
+    name: text("name").notNull().default(""),
+    email: text("email").notNull().default(""),
+    role_title: text("role_title").notNull().default(""),
+    // What they do — read by the Executive/Boardroom as team context.
+    description: text("description").notNull().default(""),
+    skills: text("skills").array().notNull().default([]),
+    // Stored as text (MM-DD or YYYY-MM-DD) to avoid timezone drift on a date-only value.
+    birthday: text("birthday").notNull().default(""),
+    start_date: text("start_date").notNull().default(""),
+    timezone: text("timezone").notNull().default(""),
+    emoji: text("emoji").notNull().default(""),
+    accent: text("accent").notNull().default("indigo"),
+    status: text("status").notNull().default("active"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_members_ws_idx").on(t.workspace_id)],
+);
+
+/**
+ * Team Room — a handoff of work to a team member. Optionally links to an existing
+ * project/task/note (ref_type + ref_id); null ref = a standalone handoff created in
+ * the Team room. status: assigned | in_progress | blocked | done.
+ */
+export const teamAssignments = pgTable(
+  "team_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    member_id: uuid("member_id")
+      .notNull()
+      .references(() => teamMembers.id, { onDelete: "cascade" }),
+    // project | task | note | null (standalone).
+    ref_type: text("ref_type"),
+    ref_id: uuid("ref_id"),
+    title: text("title").notNull().default(""),
+    handoff_note: text("handoff_note").notNull().default(""),
+    status: text("status").notNull().default("assigned"),
+    deadline: timestamp("deadline", { withTimezone: true }),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("team_assignments_ws_idx").on(t.workspace_id, t.created_at),
+    index("team_assignments_member_idx").on(t.member_id),
+  ],
+);
+
+/**
  * One row per Claude (Anthropic) API call — the AI usage meter. Records the token
  * usage returned by every response, attributed to a workspace (null = a call made
  * outside any workspace context). Powers the operator usage report (which workspaces

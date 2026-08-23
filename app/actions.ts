@@ -149,6 +149,19 @@ import {
   updateAdCreative,
   xAdsStatus,
 } from "@/lib/agents/ads";
+import {
+  createAssignment,
+  createTeamMember,
+  deleteAssignment,
+  deleteTeamMember,
+  listAssignments,
+  listTeamMembers,
+  updateAssignment,
+  updateTeamMember,
+  type AssignmentInput,
+  type TeamMemberInput,
+} from "@/lib/agents/team";
+import type { AssignmentStatus } from "@/lib/types";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
@@ -2852,5 +2865,106 @@ export async function setAdCreativeStatusAction(
     return await setCreativeStatus(ws, creativeId, status, placementRef);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the ad." };
+  }
+}
+
+// ── Team Room ───────────────────────────────────────────────────────────────
+
+export async function listTeamMembersAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listTeamMembers(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createTeamMemberAction(input: TeamMemberInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createTeamMember(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the member." };
+  }
+}
+
+export async function updateTeamMemberAction(id: string, patch: Partial<TeamMemberInput>) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateTeamMember(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the member." };
+  }
+}
+
+export async function deleteTeamMemberAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteTeamMember(ws, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't remove the member." };
+  }
+}
+
+export async function listAssignmentsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listAssignments(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createAssignmentAction(input: AssignmentInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createAssignment(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the handoff." };
+  }
+}
+
+export async function updateAssignmentAction(
+  id: string,
+  patch: { status?: AssignmentStatus; title?: string; handoff_note?: string; deadline?: string | null },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateAssignment(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the handoff." };
+  }
+}
+
+export async function deleteAssignmentAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteAssignment(ws, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the handoff." };
   }
 }

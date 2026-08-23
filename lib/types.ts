@@ -180,6 +180,45 @@ export interface AdPublishPreview {
   steps: AdPublishStep[];
 }
 
+/* -------------------------------- team ----------------------------------- */
+
+export type TeamMemberStatus = "active" | "inactive" | "invited";
+
+/** A person on the owner's team — a profile the Executive/Boardroom can reason about. */
+export interface TeamMember {
+  id: string;
+  name: string;
+  email: string;
+  role_title: string;
+  description: string;
+  skills: string[];
+  birthday: string;
+  start_date: string;
+  timezone: string;
+  emoji: string;
+  accent: string;
+  status: TeamMemberStatus;
+  created_at: string;
+}
+
+export type AssignmentStatus = "assigned" | "in_progress" | "blocked" | "done";
+export type AssignmentRefType = "project" | "task" | "note";
+
+/** A handoff of work to a team member (optionally linked to a project/task/note). */
+export interface TeamAssignment {
+  id: string;
+  member_id: string;
+  /** Denormalized member name for display. */
+  member_name: string;
+  ref_type: AssignmentRefType | null;
+  ref_id: string | null;
+  title: string;
+  handoff_note: string;
+  status: AssignmentStatus;
+  deadline: string | null;
+  created_at: string;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */
