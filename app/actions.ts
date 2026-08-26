@@ -176,7 +176,6 @@ import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirec
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
-  pushGoalToTasks,
   saveCommandCenterDoc,
   sendGoalsToDeepDive,
   sendGoalsToExecutive,
@@ -3112,15 +3111,23 @@ export async function setTaskPriorityAction(taskId: string, priority: Priority) 
   }
 }
 
-/** Push a Command Center daily-goal item onto the Approval Center as a task. */
-export async function pushGoalToApprovalCenterAction(text: string) {
+/** Hand a Command Center daily-goal item to the Executive agent to take on. */
+export async function pushGoalToExecutiveAction(text: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  const clean = text.trim();
+  if (!clean) return { ok: false as const, error: "Nothing to send." };
   try {
-    return await pushGoalToTasks(ws, text, displayName(user));
+    // Send it into the Executive conversation as a request; the Executive replies
+    // (and can act via its tools). The reply is persisted + visible in /executive.
+    await sendExecutiveMessage(
+      ws,
+      `From my Command Center daily plan — please help me get this done, or take it on: "${clean.slice(0, 500)}"`,
+    );
+    return { ok: true as const };
   } catch (e) {
-    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't push the goal." };
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send to the Executive." };
   }
 }

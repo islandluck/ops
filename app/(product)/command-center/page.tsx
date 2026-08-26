@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import {
   getCommandCenterAction,
-  pushGoalToApprovalCenterAction,
+  pushGoalToExecutiveAction,
   saveCommandCenterAction,
   sendGoalsToDeepDiveAction,
   sendGoalsToExecutiveAction,
@@ -25,11 +25,12 @@ import type {
 } from "@/lib/types";
 
 type ColKey = "monthly" | "weekly" | "daily" | "parking";
+// Parking Lot removed from the grid to give the timeline columns more room; the
+// underlying `parking` field is retained on the data model so nothing is lost.
 const COLUMNS: { key: ColKey; label: string }[] = [
   { key: "monthly", label: "Monthly Goals" },
   { key: "weekly", label: "Weekly Goals" },
   { key: "daily", label: "Daily Goals" },
-  { key: "parking", label: "Parking Lot" },
 ];
 
 const HORIZONS: { key: keyof CommandCenterHorizons; label: string; hint: string; border: string; text: string }[] = [
@@ -115,9 +116,9 @@ export default function CommandCenterPage() {
   const setHorizon = (key: keyof CommandCenterHorizons, items: GoalItem[]) =>
     mutate((d) => ({ ...d, horizons: { ...d.horizons, [key]: items } }));
 
-  // Push a daily goal onto the Approval Center as a task an agent can pick up.
+  // Hand a daily goal to the Executive agent to take on.
   async function handlePush(text: string): Promise<boolean> {
-    const r = await pushGoalToApprovalCenterAction(text);
+    const r = await pushGoalToExecutiveAction(text);
     return "ok" in r && r.ok;
   }
 
@@ -421,7 +422,7 @@ function PeriodRow({
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
-      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
         {COLUMNS.map((c) => (
           <div key={c.key} className="rounded-lg border border-border bg-card p-2.5">
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
@@ -553,7 +554,7 @@ function BulletList({
             {onPush && it.text.trim() && (
               <button
                 onClick={() => push(it.id, it.text)}
-                title="Push to Approval Center"
+                title="Send to Executive"
                 className="rounded p-0.5 text-muted-foreground hover:bg-primary/10 hover:text-primary"
               >
                 {pushingId === it.id ? (

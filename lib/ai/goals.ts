@@ -10,7 +10,8 @@ import type { GoalSuggestion, GoalTarget } from "@/lib/types";
  */
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
-const TARGETS: GoalTarget[] = ["monthly", "weekly", "daily", "parking", "year", "future", "moonshot"];
+// "parking" intentionally omitted — the Parking Lot column was removed from the UI.
+const TARGETS: GoalTarget[] = ["monthly", "weekly", "daily", "year", "future", "moonshot"];
 
 export async function proposeGoals(input: {
   company: string;
