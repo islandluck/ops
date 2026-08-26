@@ -29,6 +29,20 @@ function inline(escaped: string): string {
   return s;
 }
 
+/** A GFM table separator row, e.g. `|----|----|` or `| :-- | --: |`. */
+function isTableSeparator(s: string): boolean {
+  const t = s.trim();
+  return t.includes("-") && /^\|?[\s:|-]*-[\s:|-]*\|?$/.test(t);
+}
+
+/** Split a table row into trimmed cells, dropping the outer pipes. */
+function splitTableRow(s: string): string[] {
+  let t = s.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((c) => c.trim());
+}
+
 /** Convert a Markdown string into a clean, safe HTML fragment. */
 export function markdownToHtml(md: string): string {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
@@ -104,6 +118,29 @@ export function markdownToHtml(md: string): string {
         i++;
       }
       out.push(`<ol>${items.join("")}</ol>`);
+      continue;
+    }
+
+    // GFM table: a header row (with pipes) + a separator row + body rows.
+    if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1].trim())) {
+      flushPara();
+      const header = splitTableRow(trimmed);
+      i += 2; // consume the header + separator rows
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) {
+        rows.push(splitTableRow(lines[i].trim()));
+        i++;
+      }
+      const cols = header.length;
+      const thead = `<thead><tr>${header.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
+      const tbody = `<tbody>${rows
+        .map((r) => {
+          // Pad/truncate each row to the header's column count so cells align.
+          const cells = Array.from({ length: cols }, (_, idx) => r[idx] ?? "");
+          return `<tr>${cells.map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`;
+        })
+        .join("")}</tbody>`;
+      out.push(`<div class="md-table-wrap"><table>${thead}${tbody}</table></div>`);
       continue;
     }
 

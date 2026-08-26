@@ -263,3 +263,34 @@
   border-top: 1px solid currentColor;
   opacity: 0.15;
 }
+/* GFM tables (e.g. the Executive's "plan my day" schedule). The wrapper scrolls
+   horizontally so a wide table never breaks the chat bubble's layout. */
+.prose-chat .md-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  border-radius: 8px;
+}
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.prose-chat th,
+.prose-chat td {
+  padding: 0.42em 0.6em;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.16);
+}
+.prose-chat th + th,
+.prose-chat td + td {
+  border-left: 1px solid rgba(127, 127, 127, 0.12);
+}
+.prose-chat thead th {
+  font-weight: 700;
+  background: rgba(127, 127, 127, 0.09);
+}
+.prose-chat tbody tr:last-child td {
+  border-bottom: 0;
+}
