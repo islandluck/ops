@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, commandCenter, executiveMemory, projects } from "@/lib/db/schema";
-import { getPlanningContext } from "@/lib/db/queries";
+import { createPlannedTask, getPlanningContext } from "@/lib/db/queries";
 import { runWithUsage } from "@/lib/ai/usage";
 import { proposeGoals } from "@/lib/ai/goals";
 import { startDeepDive } from "@/lib/agents/deepdive";
@@ -17,6 +17,39 @@ import type { CommandCenterDoc, GoalItem, GoalSuggestion } from "@/lib/types";
  */
 
 const MEMORY_MARKER = "📋 Command Center goals";
+
+/**
+ * Push a single daily-goal item onto the Approval Center as a task an agent can
+ * pick up. Lightweight — the item's text becomes the title; the Executive's
+ * "Plan my day" triage assigns priority/grouping later.
+ */
+export async function pushGoalToTasks(
+  workspaceId: string,
+  text: string,
+  actorName: string,
+): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> {
+  const title = text.trim();
+  if (!title) return { ok: false, error: "Nothing to push." };
+  try {
+    const taskId = await createPlannedTask(
+      workspaceId,
+      {
+        title: title.slice(0, 200),
+        category: "admin",
+        affected_systems: [],
+        risk_level: "low",
+        requires_approval: true,
+        rationale: "Pushed from the Command Center daily goals.",
+        draft: "",
+        needs_connection: [],
+      },
+      { name: actorName || "You" },
+    );
+    return { ok: true, taskId };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't push to the Approval Center." };
+  }
+}
 
 /** A fresh doc for a workspace that hasn't started one — one empty month to write into. */
 export function emptyCommandCenterDoc(): CommandCenterDoc {

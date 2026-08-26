@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import {
   getCommandCenterAction,
+  pushGoalToApprovalCenterAction,
   saveCommandCenterAction,
   sendGoalsToDeepDiveAction,
   sendGoalsToExecutiveAction,
@@ -113,6 +114,12 @@ export default function CommandCenterPage() {
     mutate((d) => ({ ...d, periods: d.periods.filter((p) => p.id !== periodId) }));
   const setHorizon = (key: keyof CommandCenterHorizons, items: GoalItem[]) =>
     mutate((d) => ({ ...d, horizons: { ...d.horizons, [key]: items } }));
+
+  // Push a daily goal onto the Approval Center as a task an agent can pick up.
+  async function handlePush(text: string): Promise<boolean> {
+    const r = await pushGoalToApprovalCenterAction(text);
+    return "ok" in r && r.ok;
+  }
 
   // Flush the debounced save so on-command actions read the latest goals.
   async function flushSave() {
@@ -345,6 +352,7 @@ export default function CommandCenterPage() {
                   onLabel={(l) => setLabel(p.id, l)}
                   onItems={(col, items) => setItems(p.id, col, items)}
                   onRemove={() => removePeriod(p.id)}
+                  onPush={handlePush}
                 />
               ))}
               <Button size="sm" variant="outline" onClick={addPeriod}>
@@ -388,11 +396,13 @@ function PeriodRow({
   onLabel,
   onItems,
   onRemove,
+  onPush,
 }: {
   period: GoalPeriod;
   onLabel: (label: string) => void;
   onItems: (col: ColKey, items: GoalItem[]) => void;
   onRemove: () => void;
+  onPush?: (text: string) => Promise<boolean>;
 }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3">
@@ -417,7 +427,11 @@ function PeriodRow({
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
               {c.label}
             </p>
-            <BulletList items={period[c.key]} onChange={(items) => onItems(c.key, items)} />
+            <BulletList
+              items={period[c.key]}
+              onChange={(items) => onItems(c.key, items)}
+              onPush={c.key === "daily" ? onPush : undefined}
+            />
           </div>
         ))}
       </div>
@@ -426,9 +440,30 @@ function PeriodRow({
 }
 
 /** The reusable bullet editor: checkbox → strikethrough, inline auto-grow text, add/delete, one indent level. */
-function BulletList({ items, onChange }: { items: GoalItem[]; onChange: (items: GoalItem[]) => void }) {
+function BulletList({
+  items,
+  onChange,
+  onPush,
+}: {
+  items: GoalItem[];
+  onChange: (items: GoalItem[]) => void;
+  onPush?: (text: string) => Promise<boolean>;
+}) {
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [pushingId, setPushingId] = useState<string | null>(null);
+  const [pushedId, setPushedId] = useState<string | null>(null);
   const refs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
+
+  async function push(id: string, text: string) {
+    if (!onPush || !text.trim() || pushingId) return;
+    setPushingId(id);
+    const ok = await onPush(text);
+    setPushingId(null);
+    if (ok) {
+      setPushedId(id);
+      setTimeout(() => setPushedId((cur) => (cur === id ? null : cur)), 1600);
+    }
+  }
 
   useEffect(() => {
     if (!focusId) return;
@@ -509,7 +544,27 @@ function BulletList({ items, onChange }: { items: GoalItem[]; onChange: (items: 
               it.done && "text-muted-foreground line-through",
             )}
           />
-          <div className="flex shrink-0 items-center gap-0.5 pt-0.5 opacity-0 transition group-hover/item:opacity-100">
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-0.5 pt-0.5 transition group-hover/item:opacity-100",
+              pushedId === it.id ? "opacity-100" : "opacity-0",
+            )}
+          >
+            {onPush && it.text.trim() && (
+              <button
+                onClick={() => push(it.id, it.text)}
+                title="Push to Approval Center"
+                className="rounded p-0.5 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+              >
+                {pushingId === it.id ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : pushedId === it.id ? (
+                  <Check className="h-3.5 w-3.5 text-success" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+              </button>
+            )}
             <button
               onClick={() => update(it.id, { indent: it.indent === 1 ? 0 : 1 })}
               title={it.indent === 1 ? "Outdent" : "Indent"}

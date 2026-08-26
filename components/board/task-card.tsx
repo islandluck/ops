@@ -7,6 +7,7 @@ import {
   ArchiveRestore,
   CalendarClock,
   CheckCircle2,
+  Clock,
   Layers,
   Loader2,
   MessageSquareDashed,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { CategoryIcon } from "@/components/badges";
 import { cn } from "@/lib/cn";
-import { CATEGORY_META, RISK_META } from "@/lib/constants";
+import { CATEGORY_META, PRIORITY_META, RISK_META } from "@/lib/constants";
 import { dueLabel } from "@/lib/format";
 import { useStore } from "@/lib/store";
 import type { Task } from "@/lib/types";
@@ -151,6 +152,17 @@ export function TaskCard({
               {task.proposed_actions}
             </span>
           )}
+          {(task.priority === "high" || task.priority === "urgent") && (
+            <span
+              className={cn(
+                "rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                PRIORITY_META[task.priority].tag,
+              )}
+              title={`${PRIORITY_META[task.priority].label} priority`}
+            >
+              {PRIORITY_META[task.priority].label}
+            </span>
+          )}
           <span className={cn("h-2 w-2 rounded-full", RISK_META[task.risk_level].dot)} title={RISK_META[task.risk_level].label} />
         </span>
       </div>
@@ -164,6 +176,19 @@ export function TaskCard({
       <p className="mt-1 line-clamp-2 text-[12px] leading-snug text-muted-foreground">
         {task.rationale}
       </p>
+
+      {/* Executive plan meta (set by "Plan my day") */}
+      {(task.plan_group || task.suggested_time) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+          {task.plan_group && <span className="rounded bg-muted px-1.5 py-0.5">{task.plan_group}</span>}
+          {task.suggested_time && (
+            <span className="inline-flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              {task.suggested_time}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Execution state strip */}
       {executing && (

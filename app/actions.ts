@@ -170,11 +170,13 @@ import {
   listInvites,
   revokeInvite,
 } from "@/lib/agents/team-invites";
-import type { AssignmentStatus } from "@/lib/types";
+import { clearPlan, getLatestPlan, planApprovalCenter, setTaskPriority } from "@/lib/agents/task-plan";
+import type { AssignmentStatus, Priority } from "@/lib/types";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
   getCommandCenterDoc,
+  pushGoalToTasks,
   saveCommandCenterDoc,
   sendGoalsToDeepDive,
   sendGoalsToExecutive,
@@ -3056,5 +3058,69 @@ export async function updateMyAssignmentStatusAction(id: string, status: Assignm
     return await updateMyAssignmentStatus(ws, user.id, id, status);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update." };
+  }
+}
+
+// ── Approval Center triage ("Plan my day") ──────────────────────────────────
+
+export async function planApprovalCenterAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await planApprovalCenter(ws);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't build the plan." };
+  }
+}
+
+export async function getTaskPlanAction() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getLatestPlan(ws);
+  } catch {
+    return null;
+  }
+}
+
+export async function clearTaskPlanAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    await clearPlan(ws);
+    return { ok: true as const };
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function setTaskPriorityAction(taskId: string, priority: Priority) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setTaskPriority(ws, taskId, priority);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't set priority." };
+  }
+}
+
+/** Push a Command Center daily-goal item onto the Approval Center as a task. */
+export async function pushGoalToApprovalCenterAction(text: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await pushGoalToTasks(ws, text, displayName(user));
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't push the goal." };
   }
 }

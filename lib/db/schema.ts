@@ -221,9 +221,37 @@ export const tasks = pgTable("tasks", {
   /** Archived tasks are hidden from the board (kept for history) — used to clear
    *  out done/handled tasks so columns don't pile up. */
   archived: boolean("archived").notNull().default(false),
+  /** Executive triage output (null until "Plan my day" runs): the group label a
+   *  task was batched into, its rank in the plan, and a human-readable suggested
+   *  time block (guidance only — never auto-executes). */
+  plan_group: text("plan_group"),
+  plan_rank: integer("plan_rank"),
+  suggested_time: text("suggested_time"),
   created_at: createdAt,
   updated_at: updatedAt,
 });
+
+/**
+ * The latest Executive triage of the Approval Center — an ordered, grouped plan
+ * of action over the open tasks. One current plan per workspace (latest by date).
+ */
+export const taskPlans = pgTable(
+  "task_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    summary: text("summary").notNull().default(""),
+    groups: jsonb("groups")
+      .$type<{ name: string; note: string; priority: string; task_ids: string[] }[]>()
+      .notNull()
+      .default([]),
+    task_count: integer("task_count").notNull().default(0),
+    created_at: createdAt,
+  },
+  (t) => [index("task_plans_ws_idx").on(t.workspace_id, t.created_at)],
+);
 
 export const taskAssets = pgTable("task_assets", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -52,6 +52,8 @@ export interface PlannedTask {
   /** Integration names the task needs (exact workspace integration names). */
   affected_systems: string[];
   risk_level: RiskLevel;
+  /** How urgent this is. Omitted → "medium" (Executive triage refines it later). */
+  priority?: Priority;
   requires_approval: boolean;
   rationale: string;
   /** Ready-to-use content the owner reviews (email, doc, page, etc.). */
@@ -400,10 +402,31 @@ export interface Task {
   impact_score: number; // 0..100, used for sorting
   /** Hidden from the board when true (kept for history) — archived to declutter. */
   archived?: boolean;
+  /** Executive triage output (null until "Plan my day" runs): batch label, order
+   *  in the plan, and a human-readable suggested time block (guidance only). */
+  plan_group?: string | null;
+  plan_rank?: number | null;
+  suggested_time?: string | null;
   created_at: string;
   updated_at: string;
   /** Denormalised for convenience in the prototype store. */
   assets: TaskAsset[];
+}
+
+/** One batch in an Executive plan of action over the Approval Center. */
+export interface TaskPlanGroup {
+  name: string;
+  note: string;
+  priority: Priority;
+  task_ids: string[];
+}
+
+/** The latest Executive triage of the open tasks — an ordered, grouped plan. */
+export interface TaskPlan {
+  summary: string;
+  groups: TaskPlanGroup[];
+  task_count: number;
+  created_at: string;
 }
 
 /** An image attached to a post/task. Binary lives in Supabase Storage. */

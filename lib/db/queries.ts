@@ -362,6 +362,9 @@ async function readBundle(
     proposed_actions: t.proposed_actions,
     impact_score: t.impact_score,
     archived: t.archived,
+    plan_group: t.plan_group,
+    plan_rank: t.plan_rank,
+    suggested_time: t.suggested_time,
     created_at: iso(t.created_at),
     updated_at: iso(t.updated_at),
     assets: (assetsByTask.get(t.id) ?? []).map((a) => ({
@@ -1437,7 +1440,7 @@ export async function createPlannedTask(
     rationale: planned.rationale,
     status: "ready",
     risk_level: planned.risk_level,
-    priority: "medium",
+    priority: planned.priority ?? "medium",
     due_at: null,
     agent_id: match?.id ?? null,
     created_by_type: "human",
