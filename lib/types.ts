@@ -908,6 +908,15 @@ export interface RecipientCandidate {
 }
 
 /** An AI-drafted outbound email awaiting the founder's review + one-click send. */
+/** A file attached to an outbound email draft (binary lives in Supabase Storage). */
+export interface OutboundAttachment {
+  id: string;
+  name: string;
+  path: string;
+  mime: string;
+  size: number;
+}
+
 export interface OutboundDraft {
   id: string;
   intent: string;
@@ -919,6 +928,7 @@ export interface OutboundDraft {
   bcc: string;
   subject: string;
   body: string;
+  attachments: OutboundAttachment[];
   status: OutboundDraftStatus;
   error: string;
   scheduled_at: string | null;

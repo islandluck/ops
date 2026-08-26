@@ -1,5 +1,6 @@
 import "server-only";
 
+import crypto from "node:crypto";
 import { getValidAccessToken } from "./tokens";
 
 /** Google API calls (Gmail send, Calendar events) with an OAuth access token. */
@@ -48,23 +49,61 @@ function encodeEmailHeader(value: string): string {
 
 export async function sendGmail(
   accessToken: string,
-  msg: { to: string; subject: string; body: string; cc?: string; bcc?: string; threadId?: string; inReplyTo?: string },
+  msg: {
+    to: string;
+    subject: string;
+    body: string;
+    cc?: string;
+    bcc?: string;
+    threadId?: string;
+    inReplyTo?: string;
+    attachments?: { filename: string; mime: string; bytes: Buffer }[];
+  },
 ): Promise<{ id: string }> {
+  // Shared headers. Cc is delivered + visible; Bcc is delivered but Gmail strips
+  // the header from the recipients' copies (blind).
   const headers = [`To: ${msg.to}`];
-  // Cc is delivered + visible; Bcc is delivered but Gmail strips the header from
-  // the recipients' copies (blind).
   if (msg.cc?.trim()) headers.push(`Cc: ${msg.cc.trim()}`);
   if (msg.bcc?.trim()) headers.push(`Bcc: ${msg.bcc.trim()}`);
-  headers.push(
-    `Subject: ${encodeEmailHeader(msg.subject)}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "MIME-Version: 1.0",
-  );
+  headers.push(`Subject: ${encodeEmailHeader(msg.subject)}`, "MIME-Version: 1.0");
   // Threading: link the reply to the original message so it lands in-thread.
   if (msg.inReplyTo) {
     headers.push(`In-Reply-To: ${msg.inReplyTo}`, `References: ${msg.inReplyTo}`);
   }
-  const raw = base64url([...headers, "", msg.body].join("\r\n"));
+
+  const attachments = msg.attachments ?? [];
+  let mimeMessage: string;
+  if (attachments.length === 0) {
+    mimeMessage = [...headers, "Content-Type: text/plain; charset=UTF-8", "", msg.body].join("\r\n");
+  } else {
+    // multipart/mixed: the text body, then each attachment base64-encoded.
+    const boundary = `mixed_${crypto.randomBytes(12).toString("hex")}`;
+    const parts: string[] = [
+      ...headers,
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "",
+      msg.body,
+    ];
+    for (const a of attachments) {
+      const name = a.filename.replace(/["\r\n]/g, "").slice(0, 255) || "attachment";
+      const b64 = a.bytes.toString("base64").replace(/(.{76})/g, "$1\r\n");
+      parts.push(
+        `--${boundary}`,
+        `Content-Type: ${a.mime || "application/octet-stream"}; name="${name}"`,
+        "Content-Transfer-Encoding: base64",
+        `Content-Disposition: attachment; filename="${name}"`,
+        "",
+        b64,
+      );
+    }
+    parts.push(`--${boundary}--`);
+    mimeMessage = parts.join("\r\n");
+  }
+
+  const raw = base64url(mimeMessage);
   const payload: Record<string, string> = { raw };
   if (msg.threadId) payload.threadId = msg.threadId;
 

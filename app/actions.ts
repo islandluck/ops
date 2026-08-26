@@ -49,7 +49,14 @@ import {
   updateTaskAssetContent,
   workspaceIdForUser,
 } from "@/lib/db/queries";
-import { deleteImageAt, IMAGE_MIME_TYPES, MAX_IMAGE_BYTES, uploadImageBytes } from "@/lib/media/storage";
+import {
+  deleteImageAt,
+  IMAGE_MIME_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  MAX_IMAGE_BYTES,
+  uploadAttachmentBytes,
+  uploadImageBytes,
+} from "@/lib/media/storage";
 import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
@@ -102,12 +109,14 @@ import {
 } from "@/lib/agents/email-manager";
 import {
   bulkSendOutboundDrafts,
+  addOutboundAttachment,
   composeOutboundDrafts,
   discardOutboundDraft,
   flushDueOutboundDrafts,
   listOutboundDrafts,
   refineOutboundDraft,
   regenerateOutboundDraft,
+  removeOutboundAttachment,
   scheduleOutboundDraft,
   sendOutboundDraft,
   unscheduleOutboundDraft,
@@ -3142,5 +3151,37 @@ export async function routeDailyGoalAction(text: string) {
     return { ok: true as const, label: "Sent to Executive", href: "/executive" };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't route the goal." };
+  }
+}
+
+// ── Email attachments ───────────────────────────────────────────────────────
+
+export async function uploadOutboundAttachmentAction(draftId: string, formData: FormData) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false as const, error: "No file provided." };
+  if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false as const, error: "File is too large (max 15 MB)." };
+  try {
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const mime = file.type || "application/octet-stream";
+    const { path } = await uploadAttachmentBytes(ws, randomUUID(), bytes, mime, file.name);
+    return await addOutboundAttachment(ws, draftId, { name: file.name, path, mime, size: file.size });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Upload failed." };
+  }
+}
+
+export async function removeOutboundAttachmentAction(draftId: string, attachmentId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await removeOutboundAttachment(ws, draftId, attachmentId);
+  } catch {
+    return { ok: false as const };
   }
 }

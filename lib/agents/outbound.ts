@@ -7,10 +7,17 @@ import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema"
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { sendGmail } from "@/lib/integrations/google";
 import { executionKilled } from "@/lib/integrations/guardrails";
+import { deleteAttachmentAt, getAttachmentBytes } from "@/lib/media/storage";
 import { runWithUsage } from "@/lib/ai/usage";
 import { composeOutbound, refineOutbound } from "@/lib/ai/compose";
 import { resolveRecipientCandidates } from "./recipient";
-import type { OutboundDraft, OutboundDraftStatus, RecipientCandidate, RecipientSource } from "@/lib/types";
+import type {
+  OutboundAttachment,
+  OutboundDraft,
+  OutboundDraftStatus,
+  RecipientCandidate,
+  RecipientSource,
+} from "@/lib/types";
 
 /**
  * The Email Manager's AI Outbound Composer. Turns short natural-language asks
@@ -74,6 +81,7 @@ function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
     bcc: r.bcc,
     subject: r.subject,
     body: r.body,
+    attachments: (r.attachments ?? []) as OutboundAttachment[],
     status: r.status as OutboundDraftStatus,
     error: r.error,
     scheduled_at: r.scheduled_at ? iso(r.scheduled_at) : null,
@@ -197,12 +205,26 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
   const token = await getValidAccessToken(row.workspace_id, "Gmail");
   if (!token) return markFailed("Gmail isn't connected.");
   try {
+    // Pull each attachment's bytes from storage; a missing file is skipped, not fatal.
+    const atts = ((row.attachments ?? []) as OutboundAttachment[]).slice(0, 10);
+    const loaded = await Promise.all(
+      atts.map(async (a) => {
+        try {
+          const { bytes } = await getAttachmentBytes(a.path);
+          return { filename: a.name, mime: a.mime, bytes };
+        } catch {
+          return null;
+        }
+      }),
+    );
+    const attachments = loaded.filter((a): a is NonNullable<typeof a> => Boolean(a));
     await sendGmail(token, {
       to,
       cc: row.cc || undefined,
       bcc: row.bcc || undefined,
       subject: row.subject || "(no subject)",
       body: row.body,
+      attachments: attachments.length ? attachments : undefined,
     });
   } catch (e) {
     return markFailed(e instanceof Error ? e.message : "Send failed.");
@@ -222,6 +244,56 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
     summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
     created_at: now,
   });
+  return { ok: true };
+}
+
+/** Attach an already-uploaded file (storage path) to a draft. Max 10 per draft. */
+export async function addOutboundAttachment(
+  workspaceId: string,
+  draftId: string,
+  att: { name: string; path: string; mime: string; size: number },
+): Promise<{ ok: true; attachment: OutboundAttachment } | { ok: false; error: string }> {
+  const [row] = await db
+    .select({ attachments: outboundDrafts.attachments })
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Draft not found." };
+  const current = (row.attachments ?? []) as OutboundAttachment[];
+  if (current.length >= 10) return { ok: false, error: "That's the max of 10 attachments." };
+  const attachment: OutboundAttachment = {
+    id: randomUUID(),
+    name: att.name.slice(0, 255) || "attachment",
+    path: att.path,
+    mime: att.mime,
+    size: att.size,
+  };
+  await db
+    .update(outboundDrafts)
+    .set({ attachments: [...current, attachment], updated_at: new Date() })
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)));
+  return { ok: true, attachment };
+}
+
+/** Remove an attachment from a draft and delete the stored file (best-effort). */
+export async function removeOutboundAttachment(
+  workspaceId: string,
+  draftId: string,
+  attachmentId: string,
+): Promise<{ ok: true }> {
+  const [row] = await db
+    .select({ attachments: outboundDrafts.attachments })
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)))
+    .limit(1);
+  if (!row) return { ok: true };
+  const current = (row.attachments ?? []) as OutboundAttachment[];
+  const gone = current.find((a) => a.id === attachmentId);
+  await db
+    .update(outboundDrafts)
+    .set({ attachments: current.filter((a) => a.id !== attachmentId), updated_at: new Date() })
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)));
+  if (gone) await deleteAttachmentAt(gone.path);
   return { ok: true };
 }
 

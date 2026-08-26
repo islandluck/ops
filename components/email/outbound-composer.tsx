@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ChevronDown, Clock, Loader2, RotateCcw, Send, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { useEffect, useState, type ChangeEvent } from "react";
+import { ChevronDown, Clock, Loader2, Paperclip, RotateCcw, Send, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
@@ -13,12 +13,20 @@ import {
   listOutboundDraftsAction,
   refineOutboundDraftAction,
   regenerateOutboundDraftAction,
+  removeOutboundAttachmentAction,
   scheduleOutboundDraftAction,
   sendOutboundDraftAction,
   unscheduleOutboundDraftAction,
   updateOutboundDraftAction,
+  uploadOutboundAttachmentAction,
 } from "@/app/actions";
-import type { OutboundDraft, RecipientCandidate, RecipientSource } from "@/lib/types";
+import type { OutboundAttachment, OutboundDraft, RecipientCandidate, RecipientSource } from "@/lib/types";
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
@@ -152,6 +160,24 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
   async function persist(id: string, patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string }) {
     await updateOutboundDraftAction(id, patch);
     if (patch.to_email !== undefined) patchLocal(id, { recipient_source: "manual" });
+  }
+
+  async function attachFile(id: string, file: File): Promise<string | null> {
+    const fd = new FormData();
+    fd.set("file", file);
+    const r = await uploadOutboundAttachmentAction(id, fd);
+    if ("ok" in r && r.ok && "attachment" in r) {
+      const cur = drafts.find((d) => d.id === id)?.attachments ?? [];
+      patchLocal(id, { attachments: [...cur, r.attachment] });
+      return null;
+    }
+    return "error" in r ? r.error : "Upload failed.";
+  }
+
+  async function removeAttachment(id: string, attId: string) {
+    const cur = drafts.find((d) => d.id === id)?.attachments ?? [];
+    patchLocal(id, { attachments: cur.filter((a) => a.id !== attId) });
+    await removeOutboundAttachmentAction(id, attId);
   }
 
   async function schedule(id: string, whenISO: string) {
@@ -311,6 +337,8 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
                 onUnschedule={() => unschedule(d.id)}
                 onSend={() => send(d.id)}
                 onDiscard={() => discard(d.id)}
+                onAttach={(file) => attachFile(d.id, file)}
+                onRemoveAttachment={(attId) => removeAttachment(d.id, attId)}
               />
             ))}
           </div>
@@ -333,6 +361,8 @@ function DraftCard({
   onUnschedule,
   onSend,
   onDiscard,
+  onAttach,
+  onRemoveAttachment,
 }: {
   draft: OutboundDraft;
   busy: boolean;
@@ -346,7 +376,22 @@ function DraftCard({
   onUnschedule: () => void;
   onSend: () => void;
   onDiscard: () => void;
+  onAttach: (file: File) => Promise<string | null>;
+  onRemoveAttachment: (attId: string) => void;
 }) {
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState("");
+
+  async function onFilePicked(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setAttaching(true);
+    setAttachError("");
+    const err = await onAttach(file);
+    setAttaching(false);
+    if (err) setAttachError(err);
+  }
   const [pickerOpen, setPickerOpen] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
   const [custom, setCustom] = useState("");
@@ -478,6 +523,34 @@ function DraftCard({
           </div>
         )}
       </div>
+
+      {/* Attachments */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {draft.attachments.map((a: OutboundAttachment) => (
+          <span
+            key={a.id}
+            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2 py-1 text-[11px]"
+          >
+            <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="truncate">{a.name}</span>
+            <span className="shrink-0 text-muted-foreground">{fmtBytes(a.size)}</span>
+            <button
+              type="button"
+              onClick={() => onRemoveAttachment(a.id)}
+              className="shrink-0 text-muted-foreground hover:text-red-600"
+              aria-label="Remove attachment"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+          {attaching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />}
+          {attaching ? "Uploading…" : "Attach"}
+          <input type="file" className="hidden" onChange={onFilePicked} disabled={attaching} />
+        </label>
+      </div>
+      {attachError && <p className="mt-1 text-[11px] text-red-600">{attachError}</p>}
 
       {/* Refine toolbar */}
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

@@ -381,6 +381,11 @@ export const outboundDrafts = pgTable(
     bcc: text("bcc").notNull().default(""),
     subject: text("subject").notNull().default(""),
     body: text("body").notNull().default(""),
+    // Files attached to the email (stored in Supabase Storage; included on send).
+    attachments: jsonb("attachments")
+      .$type<{ id: string; name: string; path: string; mime: string; size: number }[]>()
+      .notNull()
+      .default([]),
     // Lifecycle: draft | sending | sent | failed.
     status: text("status").notNull().default("draft"),
     error: text("error").notNull().default(""),

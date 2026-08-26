@@ -74,3 +74,52 @@ export async function deleteImageAt(path: string): Promise<void> {
     /* best-effort — the metadata row is the source of truth */
   }
 }
+
+/* --------------------------- email attachments --------------------------- */
+
+// A separate PRIVATE bucket — attachments can be any file type (docs, PDFs) and
+// shouldn't be world-readable; we fetch the bytes server-side to send.
+const ATTACH_BUCKET = "email-attachments";
+export const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024; // 15 MB
+
+async function ensureAttachBucket(): Promise<void> {
+  const supa = serviceClient();
+  const { data } = await supa.storage.listBuckets();
+  if (!data?.some((b) => b.name === ATTACH_BUCKET)) {
+    await supa.storage.createBucket(ATTACH_BUCKET, { public: false, fileSizeLimit: "20MB" });
+  }
+}
+
+/** Upload an email attachment (any type). Returns the storage path (private). */
+export async function uploadAttachmentBytes(
+  workspaceId: string,
+  id: string,
+  bytes: Buffer,
+  mime: string,
+  filename: string,
+): Promise<{ path: string }> {
+  await ensureAttachBucket();
+  const supa = serviceClient();
+  const ext = (filename.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 10) || "bin";
+  const path = `${workspaceId}/${id}.${ext}`;
+  const { error } = await supa.storage.from(ATTACH_BUCKET).upload(path, bytes, { contentType: mime, upsert: true });
+  if (error) throw new Error(`Attachment upload failed: ${error.message}`);
+  return { path };
+}
+
+/** Download an attachment's bytes (server-side, to include on send). */
+export async function getAttachmentBytes(path: string): Promise<{ bytes: Buffer; mime: string }> {
+  const supa = serviceClient();
+  const { data, error } = await supa.storage.from(ATTACH_BUCKET).download(path);
+  if (error || !data) throw new Error(`Attachment download failed: ${error?.message ?? "not found"}`);
+  return { bytes: Buffer.from(await data.arrayBuffer()), mime: data.type || "application/octet-stream" };
+}
+
+/** Remove a stored attachment (best-effort). */
+export async function deleteAttachmentAt(path: string): Promise<void> {
+  try {
+    await serviceClient().storage.from(ATTACH_BUCKET).remove([path]);
+  } catch {
+    /* best-effort */
+  }
+}
