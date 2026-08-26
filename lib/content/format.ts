@@ -49,10 +49,18 @@ export function markdownToHtml(md: string): string {
   const out: string[] = [];
   let i = 0;
   let para: string[] = [];
+  // Running number for an ordered list, kept alive across explanation paragraphs
+  // between items so a list broken up by prose still counts 1, 2, 3… even when the
+  // model types "1." for every item. Reset to null on a section break.
+  let olRun: number | null = null;
 
   const flushPara = () => {
     if (para.length) {
-      out.push(`<p>${inline(escapeHtml(para.join(" ").trim()))}</p>`);
+      const text = para.join(" ").trim();
+      // A whole paragraph that is just one bold span is a section label
+      // (e.g. "**BATCH 2: …**") — it ends the current ordered-list run.
+      if (/^\*\*[^*]+\*\*$/.test(text)) olRun = null;
+      out.push(`<p>${inline(escapeHtml(text))}</p>`);
       para = [];
     }
   };
@@ -70,6 +78,7 @@ export function markdownToHtml(md: string): string {
     // Horizontal rule.
     if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       flushPara();
+      olRun = null;
       out.push("<hr />");
       i++;
       continue;
@@ -79,6 +88,7 @@ export function markdownToHtml(md: string): string {
     const h = trimmed.match(/^(#{1,6})\s+(.*)$/);
     if (h) {
       flushPara();
+      olRun = null;
       const level = Math.min(h[1].length, 6);
       out.push(`<h${level}>${inline(escapeHtml(h[2].trim()))}</h${level}>`);
       i++;
@@ -88,6 +98,7 @@ export function markdownToHtml(md: string): string {
     // Blockquote (one or more consecutive `>` lines).
     if (/^>\s?/.test(trimmed)) {
       flushPara();
+      olRun = null;
       const quote: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
         quote.push(lines[i].trim().replace(/^>\s?/, ""));
@@ -100,6 +111,7 @@ export function markdownToHtml(md: string): string {
     // Unordered list.
     if (/^[-*]\s+/.test(trimmed)) {
       flushPara();
+      olRun = null;
       const items: string[] = [];
       while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
         items.push(`<li>${inline(escapeHtml(lines[i].trim().replace(/^[-*]\s+/, "")))}</li>`);
@@ -109,21 +121,33 @@ export function markdownToHtml(md: string): string {
       continue;
     }
 
-    // Ordered list.
+    // Ordered list. Uses a running counter (olRun) that survives explanation
+    // paragraphs between items, so a list broken up by prose still counts 1, 2,
+    // 3… even when the model types "1." for every item. The counter resets on a
+    // section break (heading, hr, bold-only label, other list, table), so grouped
+    // "batch" plans restart at 1 per group.
     if (/^\d+[.)]\s+/.test(trimmed)) {
       flushPara();
+      if (olRun === null) {
+        const typed = parseInt(trimmed.match(/^(\d+)/)?.[1] ?? "1", 10);
+        olRun = Number.isFinite(typed) ? typed : 1;
+      }
+      const start = olRun;
       const items: string[] = [];
       while (i < lines.length && /^\d+[.)]\s+/.test(lines[i].trim())) {
         items.push(`<li>${inline(escapeHtml(lines[i].trim().replace(/^\d+[.)]\s+/, "")))}</li>`);
+        olRun += 1;
         i++;
       }
-      out.push(`<ol>${items.join("")}</ol>`);
+      const startAttr = start !== 1 ? ` start="${start}"` : "";
+      out.push(`<ol${startAttr}>${items.join("")}</ol>`);
       continue;
     }
 
     // GFM table: a header row (with pipes) + a separator row + body rows.
     if (trimmed.includes("|") && i + 1 < lines.length && isTableSeparator(lines[i + 1].trim())) {
       flushPara();
+      olRun = null;
       const header = splitTableRow(trimmed);
       i += 2; // consume the header + separator rows
       const rows: string[][] = [];
