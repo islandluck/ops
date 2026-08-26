@@ -6,6 +6,71 @@ commit hashes), the decisions behind it, and any follow-ups.
 
 ---
 
+## 2026-08-25
+
+Focus: **Team Room** — introducing a *second kind of user*. Shipped the
+owner-side foundation (Slice 1) and the invite-and-join flow with a restricted
+member portal (Slice 2a). Also completed the **Ads Manager** track.
+
+### ⚠️ FOLLOW-UP REQUIRED — Supabase keys/config before Team invites work
+
+Team invites use **Supabase native invites** (`admin.auth.admin.inviteUserByEmail`).
+Until the deployed environment has all of the below, "Send invite" still creates
+the invite but falls back to a **shareable accept link** instead of emailing:
+
+- [ ] `SUPABASE_SERVICE_ROLE_KEY` set in Vercel
+- [ ] `NEXT_PUBLIC_APP_URL` = the deployed URL (drives the accept link)
+- [ ] Supabase → Auth → **URL Configuration** → add `<app-url>/invite/accept` to allowed redirect URLs
+- [ ] Supabase → Auth → **SMTP** configured (built-in email is heavily rate-limited)
+
+### Shipped
+
+#### Team Room — Slice 1: roster + handoffs + AI team-awareness — `082e2ed`
+- Owner-side foundation, no member logins yet. `team_members` (profile the AI
+  reads: name/role/description/skills/birthday/emoji) + `team_assignments`
+  (handoffs: optional ref to a project/task/note, status, deadline). Both
+  workspace-scoped (migration `0043`).
+- `getTeamContext()` (roster + open handoffs) injected into the **Executive**
+  system prompt and the **Boardroom** context, so both reason about the team.
+- `/team` page: Roster (member cards + add/edit) + Handoffs board (4 status
+  columns). Nav entry under Executive/Boardroom.
+
+#### Team Room — Slice 2a: invite → join workspace → member portal — `c4d75a1`
+- **Core model decision:** a person can belong to MANY workspaces (member of
+  one, owner of their own). An email is **not** tied to a single workspace.
+  `migration 0044`: `team_invites` (token/email/status/expiry) +
+  `profiles.active_workspace_id`.
+- **Owner-safe auth change (high blast radius):** `getWorkspaceId` now fetches
+  all memberships, respects `active_workspace_id`, else **prefers an owned
+  membership** — so existing owner login resolves identically. Members resolve
+  to the owner's workspace and are gated to `/portal` by the
+  `app/(product)/layout.tsx` server gate (redirect kept OUTSIDE the try/catch so
+  it isn't swallowed). Middleware forces `pending_invite` users to
+  `/invite/accept`; `/team` + `/portal` added to protected prefixes.
+- Invite engine (`lib/agents/team-invites.ts`): `inviteUserByEmail` with a
+  fallback accept link when the email already has an account (the multi-workspace
+  case); `acceptInvite`/`acceptPendingInvite` verify auth-email == invite-email,
+  bind membership + activate workspace + clear the pending flag. Member portal
+  `/portal` (its own shell, not the owner app) shows the member's own
+  assignments (member-scoped reads/writes).
+- **Follow-up:** owner server actions still resolve a member to the owner's
+  workspace — member data-scoping currently relies on the layout gate + the
+  member-scoped portal actions. Per-action role checks / Supabase RLS is a
+  hardening pass to do before inviting anyone outside a trusted circle.
+
+#### Ads Manager — full track — `14dbab8` `650badf` `422d1ee` `1e543c3` `81bd213` `aeff05d`
+- P0 Campaign Studio (objective → native ad packages per platform, previews +
+  inline edit), P1 Launch Kit (per-platform UTM links, launch/status tracking,
+  CSV export), Growth→Ads "Suggest campaigns" from the business strategy.
+- Real **X Ads** deployment path (OAuth 1.0a signing verified against Twitter's
+  published vector; paused-by-default; dry-run until `X_ADS_*` env set), then —
+  since X Ads API needs a paid business account — pivoted to **friction-free
+  manual handoffs** for X and Google (copy-ready ad + settings + deep link),
+  which work today with a normal ad account. Meta/Google/LinkedIn direct
+  placement deferred.
+
+---
+
 ## 2026-08-12
 
 Focus: **incident response** — root-caused and stopped a runaway background
