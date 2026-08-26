@@ -534,8 +534,13 @@ function EmptyState({ onPick }: { onPick: (t: string) => void }) {
   );
 }
 
+// Read/"thinking" tools whose raw output must never render as green action
+// bubbles — even on messages saved before the tools were marked silent.
+const SILENT_ACTION_TOOLS = new Set(["research", "search_inbox", "lookup_person"]);
+
 function MessageBubble({ message, agentName }: { message: ExecMessage; agentName: string }) {
   const isUser = message.role === "user";
+  const shownActions = (message.actions ?? []).filter((a) => !SILENT_ACTION_TOOLS.has(a.tool));
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div className={cn("max-w-[85%] space-y-2", isUser ? "items-end" : "items-start")}>
@@ -553,9 +558,9 @@ function MessageBubble({ message, agentName }: { message: ExecMessage; agentName
             dangerouslySetInnerHTML={{ __html: markdownToHtml(message.content) }}
           />
         )}
-        {message.actions?.length > 0 && (
+        {shownActions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {message.actions.map((a, i) =>
+            {shownActions.map((a, i) =>
               a.href ? (
                 <Link
                   key={i}
