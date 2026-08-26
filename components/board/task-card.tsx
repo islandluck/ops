@@ -7,7 +7,6 @@ import {
   ArchiveRestore,
   CalendarClock,
   CheckCircle2,
-  Clock,
   Layers,
   Loader2,
   MessageSquareDashed,
@@ -177,18 +176,6 @@ export function TaskCard({
         {task.rationale}
       </p>
 
-      {/* Executive plan meta (set by "Plan my day") */}
-      {(task.plan_group || task.suggested_time) && (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-          {task.plan_group && <span className="rounded bg-muted px-1.5 py-0.5">{task.plan_group}</span>}
-          {task.suggested_time && (
-            <span className="inline-flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {task.suggested_time}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* Execution state strip */}
       {executing && (

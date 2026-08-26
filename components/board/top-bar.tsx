@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Archive,
   ArrowUpDown,
@@ -10,6 +11,7 @@ import {
   Plus,
   Rows3,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -40,6 +42,7 @@ const DUE_OPTIONS = [
 export function TopBar() {
   const { state, filters, setFilters, resetFilters, bulkArchiveTasks, bulkDeleteTasks } = useStore();
   const [createOpen, setCreateOpen] = useState(false);
+  const router = useRouter();
 
   const ready = state ? countReady(state.tasks) : 0;
 
@@ -306,6 +309,12 @@ export function TopBar() {
           <Archive className="h-4 w-4" />
           <span className="hidden sm:inline">Archived</span>
         </button>
+
+        {/* Plan my day — hand the open tasks to the Executive to sequence */}
+        <Button size="sm" variant="secondary" onClick={() => router.push("/executive?plan=day")}>
+          <Sparkles className="h-4 w-4" />
+          <span className="hidden sm:inline">Plan my day</span>
+        </Button>
 
         {/* Create */}
         <Button size="sm" onClick={() => setCreateOpen(true)}>

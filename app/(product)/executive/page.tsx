@@ -287,6 +287,22 @@ export default function ExecutivePage() {
     void send(composed);
   }, [input, attachment, sending, send]);
 
+  // "Plan my day" (from the Approval Center) opens this chat with ?plan=day and
+  // auto-sends a planning prompt once — the Executive reads the open tasks + lays
+  // out the day. The URL is cleaned so a refresh doesn't re-fire it.
+  const planFiredRef = useRef(false);
+  useEffect(() => {
+    if (planFiredRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("plan") === "day") {
+      planFiredRef.current = true;
+      window.history.replaceState(null, "", "/executive");
+      void send(
+        "Plan my day. Look at all my open Approval Center tasks, group similar work together, and lay out the exact sequence to tackle them today — what to do first, what to batch, quick wins vs. the high-priority items, and what I should hand off to an agent. Keep it tight and actionable.",
+      );
+    }
+  }, [send]);
+
   const agentName = bundle?.agentName ?? "Executive Agent";
   const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
   const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;

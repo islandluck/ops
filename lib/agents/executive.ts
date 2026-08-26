@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { runWithUsage } from "@/lib/ai/usage";
 import { db } from "@/lib/db";
 import {
@@ -206,6 +206,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- EMAIL + PEOPLE: you have HubSpot + Gmail access. When a task names someone (e.g. 'Tim K'), use lookup_person to figure out who they are and their email — don't ask the founder to tell you. When something calls for an email, use draft_email: it lands in the Email Manager as a DRAFT the founder reviews and sends — you NEVER send email yourself. Use search_inbox (read-only) to ground a reply in the real thread.",
     "- When the founder HANDS you a task (e.g. from their daily plan), ACT on it: resolve the people, draft the email, kick off the project — take the obvious next step and report what you did. Only ask a question when you're genuinely blocked on something you can't look up yourself.",
     "- You CAN access the live internet with the `research` tool — use it for anything current (competitor moves, market news, a company or person, recent events). Never say you don't have internet access; look it up and cite what you find.",
+    "- PLANNING THE DAY: when the founder asks you to plan their day (or triage/sequence their tasks), call list_open_tasks FIRST to see what's actually open, then give a tight, decisive plan — group similar work into batches (e.g. all the emails together), order by priority + logical sequence, call out the quick wins, note what should be handed to an agent, and give a rough timeline. Keep it scannable (short groups + a one-line 'start here'), never a wall of text.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -446,6 +447,44 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't complete the research." };
+        }
+      },
+    },
+    {
+      silent: true,
+      definition: {
+        name: "list_open_tasks",
+        description:
+          "List the founder's OPEN tasks in the Approval Center (not done or archived). Use this to plan their day, sequence work, batch similar tasks, or decide what to hand to agents. Returns each task's title, category, status, risk, and priority.",
+        input_schema: { type: "object", properties: {}, required: [] },
+      },
+      run: async () => {
+        try {
+          const rows = await db
+            .select({
+              title: tasks.title,
+              category: tasks.category,
+              status: tasks.status,
+              risk_level: tasks.risk_level,
+              priority: tasks.priority,
+            })
+            .from(tasks)
+            .where(
+              and(
+                eq(tasks.workspace_id, workspaceId),
+                eq(tasks.archived, false),
+                inArray(tasks.status, ["new", "ready", "changes_requested"]),
+              ),
+            )
+            .orderBy(desc(tasks.created_at))
+            .limit(60);
+          if (!rows.length) return { summary: "There are no open tasks in the Approval Center right now." };
+          const lines = rows.map(
+            (t) => `- [${t.status}] (${t.category}) ${t.title} — risk ${t.risk_level}, priority ${t.priority}`,
+          );
+          return { summary: `Open Approval Center tasks (${rows.length}):\n${lines.join("\n")}` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't read the open tasks." };
         }
       },
     },
