@@ -29,6 +29,7 @@ import {
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { resolveRecipientCandidates } from "@/lib/agents/recipient";
 import { composeOutboundDrafts } from "@/lib/agents/outbound";
+import { researchTopics } from "@/lib/ai/research";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
@@ -203,6 +204,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- Use your tools proactively but sensibly: when the founder sets a goal or ambition, log_company_goal. When you learn something durable about the business, their strategy, or their preferences, remember it. When they decide to kick off an initiative, create_project (or create_growth_campaign for audience growth) — these become draft plans they approve, so it's safe to start them.",
     "- EMAIL + PEOPLE: you have HubSpot + Gmail access. When a task names someone (e.g. 'Tim K'), use lookup_person to figure out who they are and their email — don't ask the founder to tell you. When something calls for an email, use draft_email: it lands in the Email Manager as a DRAFT the founder reviews and sends — you NEVER send email yourself. Use search_inbox (read-only) to ground a reply in the real thread.",
     "- When the founder HANDS you a task (e.g. from their daily plan), ACT on it: resolve the people, draft the email, kick off the project — take the obvious next step and report what you did. Only ask a question when you're genuinely blocked on something you can't look up yourself.",
+    "- You CAN access the live internet with the `research` tool — use it for anything current (competitor moves, market news, a company or person, recent events). Never say you don't have internet access; look it up and cite what you find.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -410,6 +412,36 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't draft the email." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "research",
+        description:
+          "Look something up on the live internet (recent news + web) when you need current information you don't already have — competitors, market moves, a person/company, prices, what happened recently. Returns a synthesized answer with sources. Use it instead of guessing or saying you can't access the internet.",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "What to research, phrased as a search query or question" } },
+          required: ["query"],
+        },
+      },
+      run: async (input) => {
+        const query = str(input.query).trim();
+        if (!query) return { summary: "No research query given." };
+        try {
+          const res = await researchTopics(query);
+          if (!res) return { summary: "Live web research isn't set up yet (no search key configured)." };
+          if (!res.answer && !res.sources.length) return { summary: `Nothing solid came back for "${query}".` };
+          const cites = res.sources
+            .slice(0, 4)
+            .map((s) => `- ${s.title || s.url} (${s.url})`)
+            .join("\n");
+          return {
+            summary: `${res.answer || "Here's what I found."}${cites ? `\n\nSources:\n${cites}` : ""}`.slice(0, 2000),
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't complete the research." };
         }
       },
     },
