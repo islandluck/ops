@@ -20,7 +20,15 @@ import {
 import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
 import { getTeamContext } from "@/lib/agents/team";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
-import { getCalendarSnapshot, formatEventWhen } from "@/lib/integrations/google";
+import {
+  getCalendarSnapshot,
+  formatEventWhen,
+  getMessageMeta,
+  listInboxMessages,
+} from "@/lib/integrations/google";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { resolveRecipientCandidates } from "@/lib/agents/recipient";
+import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
@@ -193,6 +201,8 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- Keep everything laddered to THIS MONTH'S FOCUS. When the founder is deciding what to do, connect it to whether it moves the month's goal; if they're drifting off-pace, name it and propose the single highest-leverage next move. Help them set a clear monthly focus if none exists.",
     "- Keep replies tight — a few short paragraphs at most. Lead with the answer.",
     "- Use your tools proactively but sensibly: when the founder sets a goal or ambition, log_company_goal. When you learn something durable about the business, their strategy, or their preferences, remember it. When they decide to kick off an initiative, create_project (or create_growth_campaign for audience growth) — these become draft plans they approve, so it's safe to start them.",
+    "- EMAIL + PEOPLE: you have HubSpot + Gmail access. When a task names someone (e.g. 'Tim K'), use lookup_person to figure out who they are and their email — don't ask the founder to tell you. When something calls for an email, use draft_email: it lands in the Email Manager as a DRAFT the founder reviews and sends — you NEVER send email yourself. Use search_inbox (read-only) to ground a reply in the real thread.",
+    "- When the founder HANDS you a task (e.g. from their daily plan), ACT on it: resolve the people, draft the email, kick off the project — take the obvious next step and report what you did. Only ask a question when you're genuinely blocked on something you can't look up yourself.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -316,6 +326,91 @@ function buildTools(workspaceId: string): ExecTool[] {
         });
         if (!res.ok) return { summary: `Couldn't create the campaign: ${res.error}` };
         return { summary: "Drafted a growth campaign. It's in Projects awaiting your approval.", href: "/projects" };
+      },
+    },
+    {
+      definition: {
+        name: "lookup_person",
+        description:
+          "Figure out WHO a person is and their email, from the CRM (HubSpot) then the founder's Gmail history. Use this whenever a task names someone (e.g. 'Tim K') before drafting an email or planning outreach — resolve them first, don't ask the founder.",
+        input_schema: {
+          type: "object",
+          properties: { name: { type: "string", description: "The person's name as written in the task" } },
+          required: ["name"],
+        },
+      },
+      run: async (input) => {
+        const name = str(input.name).trim();
+        if (!name) return { summary: "No name given to look up." };
+        try {
+          const { candidates } = await resolveRecipientCandidates(workspaceId, name);
+          if (!candidates.length) return { summary: `Couldn't find "${name}" in HubSpot or recent email.` };
+          const lines = candidates
+            .slice(0, 4)
+            .map((c) => `${c.name || name} <${c.email}>${c.context ? ` — ${c.context}` : ""} (via ${c.source})`);
+          return { summary: `Found for "${name}": ${lines.join("; ")}.` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : `Couldn't look up "${name}".` };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "search_inbox",
+        description:
+          "Read-only search of the founder's Gmail to ground your thinking in real threads (e.g. find the last message from a client before drafting a reply). Returns sender, subject, and date only. Use Gmail search syntax in the query (from:, subject:, newer_than:2w, etc.).",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "Gmail search query" } },
+          required: ["query"],
+        },
+      },
+      run: async (input) => {
+        const query = str(input.query).trim();
+        if (!query) return { summary: "No search query given." };
+        try {
+          const token = await getValidAccessToken(workspaceId, "Gmail");
+          if (!token) return { summary: "Gmail isn't connected, so I can't read the inbox." };
+          const ids = await listInboxMessages(token, { query, max: 5 });
+          if (!ids.length) return { summary: `No emails matched "${query}".` };
+          const metas = await Promise.all(ids.map((m) => getMessageMeta(token, m.id).catch(() => null)));
+          const lines = metas
+            .filter((m): m is NonNullable<typeof m> => Boolean(m))
+            .map((m) => `• ${m.from} — "${m.subject}" (${m.date})`);
+          return { summary: `Top matches for "${query}":\n${lines.join("\n")}` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't search the inbox." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "draft_email",
+        description:
+          "Draft an email for the founder to review — it lands in the Email Manager as a DRAFT and is NEVER sent automatically. Always use this instead of claiming to email someone: resolve the recipient (lookup_person if unsure), then draft. The founder reviews + sends from the Email Manager.",
+        input_schema: {
+          type: "object",
+          properties: {
+            to: { type: "string", description: "Recipient name or email (e.g. 'Tim K' or tim@acme.com)" },
+            about: { type: "string", description: "What the email should say / accomplish" },
+          },
+          required: ["to", "about"],
+        },
+      },
+      run: async (input) => {
+        const to = str(input.to).trim();
+        const about = str(input.about).trim();
+        if (!to || !about) return { summary: "I need both who it's to and what it's about to draft an email." };
+        try {
+          const res = await composeOutboundDrafts(workspaceId, [`Email ${to} — ${about}`]);
+          if (!res.ok) return { summary: `Couldn't draft the email: ${res.error}` };
+          return {
+            summary: `Drafted an email to ${to}. It's in the Email Manager as a draft — review and send it there.`,
+            href: "/email",
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't draft the email." };
+        }
       },
     },
   ];

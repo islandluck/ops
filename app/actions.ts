@@ -3111,8 +3111,16 @@ export async function setTaskPriorityAction(taskId: string, priority: Priority) 
   }
 }
 
-/** Hand a Command Center daily-goal item to the Executive agent to take on. */
-export async function pushGoalToExecutiveAction(text: string) {
+/** Email intent: obvious "email/reply/message someone" phrasings. Borderline
+ *  cases fall through to the Executive, which can still draft via its tools. */
+const EMAIL_INTENT = /\b(e-?mails?|reply to|respond to|follow[- ]?up with|send (?:an? )?(?:note|message|update|reminder|invite|email)? ?to)\b/i;
+
+/**
+ * Route a Command Center daily-goal item by intent: email tasks are drafted into
+ * the Email Manager (recipient resolved via HubSpot/Gmail); everything else goes
+ * to the Executive, which now has the tools to act on it.
+ */
+export async function routeDailyGoalAction(text: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
@@ -3120,14 +3128,19 @@ export async function pushGoalToExecutiveAction(text: string) {
   const clean = text.trim();
   if (!clean) return { ok: false as const, error: "Nothing to send." };
   try {
-    // Send it into the Executive conversation as a request; the Executive replies
-    // (and can act via its tools). The reply is persisted + visible in /executive.
+    if (EMAIL_INTENT.test(clean)) {
+      const r = await composeOutboundDrafts(ws, [clean.slice(0, 500)]);
+      if (!r.ok) return { ok: false as const, error: r.error };
+      return { ok: true as const, label: "Drafted in Email Manager", href: "/email" };
+    }
+    // The Executive now has lookup_person / search_inbox / draft_email + is told
+    // to act; the reply + any draft show in /executive and /email.
     await sendExecutiveMessage(
       ws,
-      `From my Command Center daily plan — please help me get this done, or take it on: "${clean.slice(0, 500)}"`,
+      `From my Command Center daily plan — take this on: "${clean.slice(0, 500)}". Resolve anyone named, draft any emails into the Email Manager, and take the next concrete step.`,
     );
-    return { ok: true as const };
+    return { ok: true as const, label: "Sent to Executive", href: "/executive" };
   } catch (e) {
-    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send to the Executive." };
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't route the goal." };
   }
 }

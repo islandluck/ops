@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import {
   getCommandCenterAction,
-  pushGoalToExecutiveAction,
+  routeDailyGoalAction,
   saveCommandCenterAction,
   sendGoalsToDeepDiveAction,
   sendGoalsToExecutiveAction,
@@ -116,10 +116,10 @@ export default function CommandCenterPage() {
   const setHorizon = (key: keyof CommandCenterHorizons, items: GoalItem[]) =>
     mutate((d) => ({ ...d, horizons: { ...d.horizons, [key]: items } }));
 
-  // Hand a daily goal to the Executive agent to take on.
-  async function handlePush(text: string): Promise<boolean> {
-    const r = await pushGoalToExecutiveAction(text);
-    return "ok" in r && r.ok;
+  // Route a daily goal: email tasks → Email Manager draft, else → Executive.
+  async function handlePush(text: string): Promise<{ ok: boolean; label?: string }> {
+    const r = await routeDailyGoalAction(text);
+    return "ok" in r && r.ok ? { ok: true, label: r.label } : { ok: false };
   }
 
   // Flush the debounced save so on-command actions read the latest goals.
@@ -403,7 +403,7 @@ function PeriodRow({
   onLabel: (label: string) => void;
   onItems: (col: ColKey, items: GoalItem[]) => void;
   onRemove: () => void;
-  onPush?: (text: string) => Promise<boolean>;
+  onPush?: (text: string) => Promise<{ ok: boolean; label?: string }>;
 }) {
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3">
@@ -448,21 +448,23 @@ function BulletList({
 }: {
   items: GoalItem[];
   onChange: (items: GoalItem[]) => void;
-  onPush?: (text: string) => Promise<boolean>;
+  onPush?: (text: string) => Promise<{ ok: boolean; label?: string }>;
 }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   const [pushingId, setPushingId] = useState<string | null>(null);
   const [pushedId, setPushedId] = useState<string | null>(null);
+  const [pushedLabel, setPushedLabel] = useState<string>("");
   const refs = useRef<Map<string, HTMLTextAreaElement>>(new Map());
 
   async function push(id: string, text: string) {
     if (!onPush || !text.trim() || pushingId) return;
     setPushingId(id);
-    const ok = await onPush(text);
+    const r = await onPush(text);
     setPushingId(null);
-    if (ok) {
+    if (r.ok) {
       setPushedId(id);
-      setTimeout(() => setPushedId((cur) => (cur === id ? null : cur)), 1600);
+      setPushedLabel(r.label ?? "Sent");
+      setTimeout(() => setPushedId((cur) => (cur === id ? null : cur)), 2400);
     }
   }
 
@@ -551,6 +553,9 @@ function BulletList({
               pushedId === it.id ? "opacity-100" : "opacity-0",
             )}
           >
+            {pushedId === it.id && pushedLabel && (
+              <span className="mr-1 whitespace-nowrap text-[10px] font-medium text-success">{pushedLabel}</span>
+            )}
             {onPush && it.text.trim() && (
               <button
                 onClick={() => push(it.id, it.text)}
