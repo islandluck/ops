@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import {
   activityEvents,
   agents,
+  businessBriefs,
   companyGoals,
   executiveBriefs,
   executiveMemory,
@@ -1091,7 +1092,7 @@ export async function updateInvestorUpdate(
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
   // prettier-ignore
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, planning] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, [brief]] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -1118,12 +1119,19 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     listBriefs(workspaceId, 30),
     computeMetricValues(workspaceId),
     listInvestorUpdates(workspaceId, 120),
-    getPlanningContext(workspaceId),
+    // Just the company name — a cheap 1-row read. (Do NOT pull getPlanningContext
+    // here: it fires live HubSpot + Google Calendar API calls the page doesn't need,
+    // which dominated the Executive page's load time.)
+    db
+      .select({ company_name: businessBriefs.company_name })
+      .from(businessBriefs)
+      .where(eq(businessBriefs.workspace_id, workspaceId))
+      .limit(1),
   ]);
 
   return {
     agentName: execAgent?.name ?? "Executive Agent",
-    companyName: planning.brief.company_name,
+    companyName: brief?.company_name ?? "",
     messages: messages.map(toMsg),
     memory: memory.map(toMem),
     goals: goals.map((g) => toGoal(g, metricValues)),

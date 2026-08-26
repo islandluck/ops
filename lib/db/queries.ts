@@ -65,7 +65,10 @@ async function getWorkspaceId(userId: string): Promise<string | null> {
     .from(workspaceMembers)
     .where(eq(workspaceMembers.user_id, userId));
   if (!memberships.length) return null;
-  // Respect an explicit active-workspace choice when it's still a membership.
+  // Fast path: a user with a single workspace (the common case — a solo owner)
+  // needs no active-workspace lookup. Saves a DB round trip on EVERY server action.
+  if (memberships.length === 1) return memberships[0].id;
+  // Multi-workspace: respect an explicit active-workspace choice when it's still a membership.
   const [prof] = await db
     .select({ active: profiles.active_workspace_id })
     .from(profiles)
