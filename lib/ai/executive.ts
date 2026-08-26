@@ -31,6 +31,10 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 export interface ExecTool {
   definition: Anthropic.Tool;
   run: (input: Record<string, unknown>) => Promise<{ summary: string; href?: string }>;
+  /** Silent tools feed their result back to the model but are NOT rendered as
+   *  action bubbles in the chat — for read/"thinking" tools (research, lookup,
+   *  inbox search) whose raw output would just clutter the conversation. */
+  silent?: boolean;
 }
 
 export interface ExecReplyResult {
@@ -87,7 +91,8 @@ export async function executiveReply(opts: {
         try {
           const r = await tool.run((block.input ?? {}) as Record<string, unknown>);
           resultText = r.summary;
-          actions.push({ tool: block.name, summary: r.summary, href: r.href });
+          // Silent tools (research/lookup/inbox) feed the model but don't render.
+          if (!tool.silent) actions.push({ tool: block.name, summary: r.summary, href: r.href });
         } catch (e) {
           resultText = `Error: ${e instanceof Error ? e.message : "the tool failed"}`;
         }

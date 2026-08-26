@@ -331,6 +331,7 @@ function buildTools(workspaceId: string): ExecTool[] {
       },
     },
     {
+      silent: true,
       definition: {
         name: "lookup_person",
         description:
@@ -357,6 +358,7 @@ function buildTools(workspaceId: string): ExecTool[] {
       },
     },
     {
+      silent: true,
       definition: {
         name: "search_inbox",
         description:
@@ -416,6 +418,7 @@ function buildTools(workspaceId: string): ExecTool[] {
       },
     },
     {
+      silent: true,
       definition: {
         name: "research",
         description:
