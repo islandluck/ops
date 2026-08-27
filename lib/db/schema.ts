@@ -669,6 +669,12 @@ export const teamMembers = pgTable(
     emoji: text("emoji").notNull().default(""),
     accent: text("accent").notNull().default("indigo"),
     status: text("status").notNull().default("active"),
+    // Phase 1 org hierarchy: in-team rank + who they report to. manager_id points
+    // to another team_members.id (no DB FK — app enforces validity); null = reports
+    // to the owner. Both sit INSIDE the "member" access tier — the owner/member wall
+    // in workspace_members is unchanged.
+    team_role: text("team_role").$type<"manager" | "contributor">().notNull().default("contributor"),
+    manager_id: uuid("manager_id"),
     created_at: createdAt,
     updated_at: updatedAt,
   },

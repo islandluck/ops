@@ -164,8 +164,10 @@ import {
   deleteAssignment,
   deleteTeamMember,
   getPortalData,
+  getWorkspaceRole,
   listAssignments,
   listTeamMembers,
+  setMemberOrg,
   updateAssignment,
   updateMyAssignmentStatus,
   updateTeamMember,
@@ -2937,6 +2939,24 @@ export async function deleteTeamMemberAction(id: string) {
   }
 }
 
+/** Set a member's in-team role and/or manager. Owner-only — this is the hierarchy wall. */
+export async function setTeamMemberOrgAction(
+  id: string,
+  patch: { team_role?: "manager" | "contributor"; manager_id?: string | null },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner") return { ok: false as const, error: "Only the workspace owner can change roles." };
+  try {
+    return await setMemberOrg(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the role." };
+  }
+}
+
 export async function listAssignmentsAction() {
   const user = await getCurrentUser();
   if (!user) return [];
@@ -3047,13 +3067,13 @@ export async function acceptInviteAction(token: string) {
 
 export async function getPortalDataAction() {
   const user = await getCurrentUser();
-  if (!user) return { member: null, assignments: [] };
+  if (!user) return { member: null, assignments: [], reports: [] };
   const ws = await workspaceIdForUser(user.id);
-  if (!ws) return { member: null, assignments: [] };
+  if (!ws) return { member: null, assignments: [], reports: [] };
   try {
     return await getPortalData(ws, user.id);
   } catch {
-    return { member: null, assignments: [] };
+    return { member: null, assignments: [], reports: [] };
   }
 }
 

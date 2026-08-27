@@ -3,15 +3,15 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { teamAssignments, teamMembers } from "@/lib/db/schema";
-import type { AssignmentStatus, TeamAssignment, TeamMember } from "@/lib/types";
+import { teamAssignments, teamMembers, workspaceMembers } from "@/lib/db/schema";
+import type { AssignmentStatus, TeamAssignment, TeamMember, TeamRole, WorkspaceRole } from "@/lib/types";
 
 /**
  * Team Room engine (Slice 1 — owner side). Roster + profiles + handoffs, plus a
  * team-context summary the Executive/Boardroom read. No member logins yet (Slice 2).
  */
 
-function toMember(r: typeof teamMembers.$inferSelect): TeamMember {
+function toMember(r: typeof teamMembers.$inferSelect, managerName: string | null = null): TeamMember {
   return {
     id: r.id,
     name: r.name,
@@ -25,6 +25,9 @@ function toMember(r: typeof teamMembers.$inferSelect): TeamMember {
     emoji: r.emoji,
     accent: r.accent,
     status: r.status as TeamMember["status"],
+    team_role: (r.team_role ?? "contributor") as TeamRole,
+    manager_id: r.manager_id ?? null,
+    manager_name: managerName,
     created_at: new Date(r.created_at).toISOString(),
   };
 }
@@ -35,7 +38,8 @@ export async function listTeamMembers(workspaceId: string): Promise<TeamMember[]
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId))
     .orderBy(desc(teamMembers.created_at));
-  return rows.map(toMember);
+  const nameById = new Map(rows.map((r) => [r.id, r.name]));
+  return rows.map((r) => toMember(r, r.manager_id ? nameById.get(r.manager_id) ?? null : null));
 }
 
 export interface TeamMemberInput {
@@ -50,6 +54,8 @@ export interface TeamMemberInput {
   emoji?: string;
   accent?: string;
   status?: TeamMember["status"];
+  /** Initial in-team rank. Manager/report wiring is edited later via setMemberOrg. */
+  team_role?: TeamRole;
 }
 
 export async function createTeamMember(
@@ -75,6 +81,8 @@ export async function createTeamMember(
       emoji: (input.emoji ?? "").slice(0, 8),
       accent: (input.accent ?? "indigo").slice(0, 20),
       status: input.status ?? "active",
+      team_role: input.team_role === "manager" ? "manager" : "contributor",
+      manager_id: null,
       created_at: now,
       updated_at: now,
     })
@@ -110,9 +118,102 @@ export async function updateTeamMember(
 }
 
 export async function deleteTeamMember(workspaceId: string, id: string): Promise<{ ok: true }> {
+  // Detach anyone who reported to this person (manager_id has no DB FK), then delete.
   // Assignments cascade via the member FK.
+  await db
+    .update(teamMembers)
+    .set({ manager_id: null, updated_at: new Date() })
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.manager_id, id)));
   await db.delete(teamMembers).where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, id)));
   return { ok: true };
+}
+
+// ── Org hierarchy (Phase 1) ──────────────────────────────────────────────────
+
+/**
+ * Set a member's in-team rank and/or who they report to. Keeps a clean two-level
+ * tree: managers report to the owner (manager_id null); only contributors carry a
+ * manager_id, and only to an actual manager. Demoting a manager detaches its reports.
+ * This is the privileged hierarchy op — gate it to the owner at the action layer.
+ */
+export async function setMemberOrg(
+  workspaceId: string,
+  memberId: string,
+  patch: { team_role?: TeamRole; manager_id?: string | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [target] = await db
+    .select()
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, memberId)))
+    .limit(1);
+  if (!target) return { ok: false, error: "That team member no longer exists." };
+
+  const nextRole: TeamRole =
+    patch.team_role === "manager" || patch.team_role === "contributor" ? patch.team_role : (target.team_role as TeamRole);
+
+  const set: Record<string, unknown> = { updated_at: new Date(), team_role: nextRole };
+
+  if (nextRole === "manager") {
+    // Managers report to the owner.
+    set.manager_id = null;
+  } else {
+    // Contributor: keep the current manager unless the patch changes it.
+    let mid: string | null = patch.manager_id !== undefined ? patch.manager_id || null : target.manager_id ?? null;
+    if (mid) {
+      if (mid === memberId) return { ok: false, error: "Someone can't report to themselves." };
+      const [mgr] = await db
+        .select({ role: teamMembers.team_role })
+        .from(teamMembers)
+        .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, mid)))
+        .limit(1);
+      if (!mgr) return { ok: false, error: "That manager no longer exists." };
+      if (mgr.role !== "manager") return { ok: false, error: "Reports can only be assigned to a manager." };
+    }
+    set.manager_id = mid;
+  }
+
+  await db
+    .update(teamMembers)
+    .set(set)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, memberId)));
+
+  // If they're no longer a manager, detach anyone who reported to them.
+  if (nextRole !== "manager") {
+    await db
+      .update(teamMembers)
+      .set({ manager_id: null, updated_at: new Date() })
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.manager_id, memberId)));
+  }
+  return { ok: true };
+}
+
+/**
+ * The viewer's effective role across the whole workspace: owner (from
+ * workspace_members) trumps everything; otherwise their in-team rank.
+ */
+export async function getWorkspaceRole(workspaceId: string, userId: string): Promise<WorkspaceRole> {
+  const [wm] = await db
+    .select({ role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspace_id, workspaceId), eq(workspaceMembers.user_id, userId)))
+    .limit(1);
+  if (wm?.role === "owner") return "owner";
+  const [tm] = await db
+    .select({ role: teamMembers.team_role })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  return tm?.role === "manager" ? "manager" : "contributor";
+}
+
+/** A manager's direct reports (the members whose manager_id is this member). */
+export async function getDirectReports(workspaceId: string, managerMemberId: string): Promise<TeamMember[]> {
+  const rows = await db
+    .select()
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.manager_id, managerMemberId)))
+    .orderBy(desc(teamMembers.created_at));
+  return rows.map((r) => toMember(r));
 }
 
 // ── Assignments (handoffs) ──────────────────────────────────────────────────
@@ -220,19 +321,35 @@ export async function deleteAssignment(workspaceId: string, id: string): Promise
 export async function getPortalData(
   workspaceId: string,
   userId: string,
-): Promise<{ member: TeamMember | null; assignments: TeamAssignment[] }> {
+): Promise<{ member: TeamMember | null; assignments: TeamAssignment[]; reports: TeamMember[] }> {
   const [row] = await db
     .select()
     .from(teamMembers)
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
-  if (!row) return { member: null, assignments: [] };
+  if (!row) return { member: null, assignments: [], reports: [] };
   const assignments = await db
     .select()
     .from(teamAssignments)
     .where(and(eq(teamAssignments.workspace_id, workspaceId), eq(teamAssignments.member_id, row.id)))
     .orderBy(desc(teamAssignments.created_at));
-  return { member: toMember(row), assignments: assignments.map((a) => toAssignment(a, row.name)) };
+  // Resolve the manager's name for display.
+  let managerName: string | null = null;
+  if (row.manager_id) {
+    const [mgr] = await db
+      .select({ name: teamMembers.name })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, row.manager_id)))
+      .limit(1);
+    managerName = mgr?.name ?? null;
+  }
+  // A manager also sees their direct reports (read-only in Phase 1; delegation lands in Phase 2).
+  const reports = row.team_role === "manager" ? await getDirectReports(workspaceId, row.id) : [];
+  return {
+    member: toMember(row, managerName),
+    assignments: assignments.map((a) => toAssignment(a, row.name)),
+    reports,
+  };
 }
 
 /** A member updates the status of one of THEIR OWN assignments (ownership enforced). */

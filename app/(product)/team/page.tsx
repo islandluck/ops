@@ -30,10 +30,11 @@ import {
   listAssignmentsAction,
   listInvitesAction,
   listTeamMembersAction,
+  setTeamMemberOrgAction,
   updateAssignmentAction,
   updateTeamMemberAction,
 } from "@/app/actions";
-import type { AssignmentStatus, TeamAssignment, TeamMember } from "@/lib/types";
+import type { AssignmentStatus, TeamAssignment, TeamMember, TeamRole } from "@/lib/types";
 
 const ACCENTS = ["indigo", "sky", "emerald", "amber", "rose", "violet", "slate"] as const;
 const ACCENT_BG: Record<string, string> = {
@@ -96,6 +97,8 @@ type MemberDraft = {
   birthday: string;
   emoji: string;
   accent: string;
+  team_role: TeamRole;
+  manager_id: string;
 };
 
 const EMPTY_MEMBER: MemberDraft = {
@@ -107,19 +110,27 @@ const EMPTY_MEMBER: MemberDraft = {
   birthday: "",
   emoji: "",
   accent: "indigo",
+  team_role: "contributor",
+  manager_id: "",
 };
 
 function MemberDialog({
   open,
   member,
+  allMembers,
   onClose,
   onSaved,
 }: {
   open: boolean;
   member: TeamMember | null;
+  allMembers: TeamMember[];
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const managers = useMemo(
+    () => allMembers.filter((mm) => mm.team_role === "manager" && mm.id !== member?.id),
+    [allMembers, member],
+  );
   const [draft, setDraft] = useState<MemberDraft>(EMPTY_MEMBER);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +155,8 @@ function MemberDialog({
             birthday: member.birthday,
             emoji: member.emoji,
             accent: member.accent || "indigo",
+            team_role: member.team_role,
+            manager_id: member.manager_id ?? "",
           }
         : EMPTY_MEMBER,
     );
@@ -186,7 +199,29 @@ function MemberDialog({
       return;
     }
 
-    const r = member ? await updateTeamMemberAction(member.id, payload) : await createTeamMemberAction(payload);
+    if (member) {
+      // Save the profile, then the org role/manager (owner-gated on the server).
+      const r = await updateTeamMemberAction(member.id, payload);
+      if (!("ok" in r) || !r.ok) {
+        setSaving(false);
+        setError("error" in r ? r.error : "Couldn't save.");
+        return;
+      }
+      const orgRes = await setTeamMemberOrgAction(member.id, {
+        team_role: draft.team_role,
+        manager_id: draft.team_role === "manager" ? null : draft.manager_id || null,
+      });
+      setSaving(false);
+      if (!("ok" in orgRes) || !orgRes.ok) {
+        setError("error" in orgRes ? orgRes.error : "Saved the profile, but couldn't update the role.");
+        return;
+      }
+      onSaved();
+      onClose();
+      return;
+    }
+
+    const r = await createTeamMemberAction(payload);
     setSaving(false);
     if ("ok" in r && r.ok) {
       onSaved();
@@ -274,6 +309,34 @@ function MemberDialog({
             </div>
           </div>
         </div>
+        {member && (
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <div>
+              <Label>Team role</Label>
+              <Segmented
+                options={[
+                  { value: "contributor", label: "Contributor" },
+                  { value: "manager", label: "Manager" },
+                ]}
+                value={draft.team_role}
+                onChange={(v) => setDraft({ ...draft, team_role: v as TeamRole })}
+              />
+            </div>
+            {draft.team_role === "contributor" && (
+              <div>
+                <Label>Reports to</Label>
+                <Select value={draft.manager_id} onChange={(e) => setDraft({ ...draft, manager_id: e.target.value })}>
+                  <option value="">Owner (you)</option>
+                  {managers.map((mm) => (
+                    <option key={mm.id} value={mm.id}>
+                      {mm.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+          </div>
+        )}
         {!member && !result && (
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <input
@@ -566,6 +629,11 @@ export default function TeamPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate font-semibold">{m.name}</span>
+                        {m.team_role === "manager" && (
+                          <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            Manager
+                          </span>
+                        )}
                         {m.status === "invited" && (
                           <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
                             Invited
@@ -573,6 +641,9 @@ export default function TeamPage() {
                         )}
                       </div>
                       <div className="truncate text-sm text-muted-foreground">{m.role_title || "—"}</div>
+                      {m.manager_name && (
+                        <div className="truncate text-xs text-muted-foreground">↳ reports to {m.manager_name}</div>
+                      )}
                     </div>
                     <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
                       <Button variant="ghost" size="icon" onClick={() => setMemberDialog({ open: true, member: m })}>
@@ -673,6 +744,7 @@ export default function TeamPage() {
       <MemberDialog
         open={memberDialog.open}
         member={memberDialog.member}
+        allMembers={members}
         onClose={() => setMemberDialog({ open: false, member: null })}
         onSaved={refresh}
       />

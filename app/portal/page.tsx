@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, CheckCircle2, Loader2 } from "lucide-react";
+import { CalendarClock, CheckCircle2, Loader2, Users } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Select } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
@@ -26,12 +26,14 @@ function fmtDate(iso: string): string {
 export default function PortalPage() {
   const [member, setMember] = useState<TeamMember | null>(null);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
+  const [reports, setReports] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     getPortalDataAction().then((d) => {
       setMember(d.member);
       setAssignments(d.assignments);
+      setReports(d.reports);
       setLoading(false);
     });
   }, []);
@@ -55,12 +57,18 @@ export default function PortalPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {member ? `Hi, ${member.name.split(" ")[0]}` : "Your work"}
-        </h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {member ? `Hi, ${member.name.split(" ")[0]}` : "Your work"}
+          </h1>
+          {member?.team_role === "manager" && (
+            <span className="rounded-full bg-primary/12 px-2 py-0.5 text-xs font-semibold text-primary">Manager</span>
+          )}
+        </div>
         <p className="mt-0.5 text-sm text-muted-foreground">
           {member?.role_title ? `${member.role_title} · ` : ""}
           {open.length > 0 ? `${open.length} open item${open.length === 1 ? "" : "s"}` : "You're all caught up 🎉"}
+          {member?.manager_name ? ` · Reports to ${member.manager_name}` : ""}
         </p>
       </div>
 
@@ -97,6 +105,28 @@ export default function PortalPage() {
               )}
             </Card>
           ))}
+        </div>
+      )}
+
+      {reports.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <Users className="h-4 w-4 text-muted-foreground" /> Your team
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {reports.map((r) => (
+              <Card key={r.id} className="flex items-center gap-3 p-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold">
+                  {r.emoji || r.name.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{r.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{r.role_title || "—"}</div>
+                </div>
+              </Card>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">Delegating work to your team arrives in the next update.</p>
         </div>
       )}
     </div>
