@@ -6,7 +6,7 @@
  * bundle-load time and passed to the client for display.
  */
 
-export type ProviderKey = "google" | "hubspot" | "stripe" | "notion" | "x" | "zoom";
+export type ProviderKey = "google" | "hubspot" | "stripe" | "notion" | "x" | "zoom" | "slack";
 
 export interface ProviderDef {
   key: ProviderKey;
@@ -28,6 +28,8 @@ export interface ProviderDef {
   jsonTokenBody?: boolean;
   /** Requires PKCE (S256 code challenge/verifier) — X/Twitter OAuth 2.0. */
   pkce?: boolean;
+  /** Separator for the scope list in the authorize URL. Default space; Slack wants ",". */
+  scopeSeparator?: string;
   /** Extra params appended to the authorize URL (e.g. Notion's owner=user). */
   authorizeParams?: Record<string, string>;
   /** What approving a task does, in plain English (shown in the UI). */
@@ -134,6 +136,22 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     clientSecretEnv: "ZOOM_CLIENT_SECRET",
     basicAuth: true, // Zoom's token endpoint expects HTTP Basic client auth.
     actionLabel: "Schedule Zoom meetings",
+  },
+  slack: {
+    key: "slack",
+    label: "Slack",
+    integrationNames: ["Slack"],
+    auth: "oauth",
+    authorizeUrl: "https://slack.com/oauth/v2/authorize",
+    tokenUrl: "https://slack.com/api/oauth.v2.access",
+    // Bot scopes: post messages (chat:write), post to public channels without
+    // being invited (chat:write.public), and resolve channel names → IDs
+    // (channels:read). Client creds go in the token-request body (no Basic auth).
+    scopes: ["chat:write", "chat:write.public", "channels:read"],
+    scopeSeparator: ",", // Slack wants a comma-separated scope list.
+    clientIdEnv: "SLACK_CLIENT_ID",
+    clientSecretEnv: "SLACK_CLIENT_SECRET",
+    actionLabel: "Post updates & alerts to your Slack",
   },
 };
 

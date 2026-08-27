@@ -42,7 +42,7 @@ export function buildAuthorizeUrl(
     response_type: "code",
     state,
   });
-  if (provider.scopes?.length) params.set("scope", provider.scopes.join(" "));
+  if (provider.scopes?.length) params.set("scope", provider.scopes.join(provider.scopeSeparator ?? " "));
   if (provider.offlineAccess) {
     // Google: request a refresh_token and force the consent screen.
     params.set("access_type", "offline");
@@ -109,6 +109,18 @@ export async function exchangeCodeForTokens(
     throw new Error(
       String(json.error_description || json.message || json.error || "Token exchange failed"),
     );
+  }
+  if (provider.key === "slack") {
+    // Slack's oauth.v2.access returns HTTP 200 with { ok:false, error } on
+    // failure, puts the bot token at the top level, and names the workspace
+    // under `team`. Bot tokens don't expire (no refresh/expiry to persist).
+    if (!json.ok) throw new Error(String(json.error || "slack_oauth_failed"));
+    const team = json.team as { name?: string } | undefined;
+    return {
+      access: String(json.access_token),
+      scope: json.scope ? String(json.scope) : undefined,
+      account: team?.name ? String(team.name) : undefined,
+    };
   }
   return {
     access: String(json.access_token),

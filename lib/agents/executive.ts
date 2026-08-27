@@ -29,6 +29,7 @@ import {
   listInboxMessages,
 } from "@/lib/integrations/google";
 import { createZoomMeeting } from "@/lib/integrations/zoom";
+import { notifySlack } from "@/lib/integrations/slack";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { resolveRecipientCandidates } from "@/lib/agents/recipient";
 import { composeOutboundDrafts } from "@/lib/agents/outbound";
@@ -210,6 +211,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- You CAN access the live internet with the `research` tool — use it for anything current (competitor moves, market news, a company or person, recent events). Never say you don't have internet access; look it up and cite what you find.",
     "- PLANNING THE DAY: when the founder asks you to plan their day (or triage/sequence their tasks), call list_open_tasks FIRST to see what's actually open, then give a tight, decisive plan — group similar work into batches (e.g. all the emails together), order by priority + logical sequence, call out the quick wins, note what should be handed to an agent, and give a rough timeline. Keep it scannable (short groups + a one-line 'start here'), never a wall of text.",
     "- SCHEDULING: when the founder wants to meet someone, use schedule_meeting — it books the Zoom, adds it to their calendar, and drafts the invite in the Email Manager (never sends). Compute start_time as a full ISO 8601 timestamp from their words + today's date, and pass their timezone.",
+    "- SLACK: when the founder wants to share an update, announcement, or note with their team, use post_to_slack — it posts to their connected Slack. Only post what they clearly want shared; don't send routine chatter or your own commentary there.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -579,6 +581,41 @@ function buildTools(workspaceId: string): ExecTool[] {
         };
       },
     },
+    {
+      definition: {
+        name: "post_to_slack",
+        description:
+          "Post a message to the founder's connected Slack. Use when they want to share an update, announcement, or note with the team (e.g. 'tell the team we hit 20 customers', 'post this to Slack'). Posts to the workspace's default channel unless they name a specific one.",
+        input_schema: {
+          type: "object",
+          properties: {
+            message: { type: "string", description: "The message text to post" },
+            channel: {
+              type: "string",
+              description: "Channel name or ID to post to (optional; defaults to the workspace channel)",
+            },
+          },
+          required: ["message"],
+        },
+      },
+      run: async (input) => {
+        const message = str(input.message).trim();
+        if (!message) return { summary: "Nothing to post — give me the message." };
+        const channel = str(input.channel).trim() || undefined;
+        const res = await notifySlack(workspaceId, message, channel);
+        if (res.skipped) {
+          return {
+            summary: "Slack isn't connected yet — connect it in Integrations to post messages.",
+            href: "/integrations",
+          };
+        }
+        if (!res.ok) {
+          return { summary: `Couldn't post to Slack: ${res.error ?? "unknown error"}.`, href: "/integrations" };
+        }
+        const preview = message.length > 80 ? `${message.slice(0, 80)}…` : message;
+        return { summary: `Posted to Slack${channel ? ` (#${channel.replace(/^#/, "")})` : ""}: "${preview}"` };
+      },
+    },
   ];
 }
 
@@ -805,6 +842,17 @@ async function _generateDailyBrief(
   const id = uid();
   const now = new Date();
   await db.insert(executiveBriefs).values({ id, workspace_id: workspaceId, kind, content, created_at: now });
+  // Best-effort Slack ping that the brief landed (no-op if Slack isn't connected).
+  const nextUp = content.next.slice(0, 3).map((n) => `• ${n}`).join("\n");
+  const slackText = [
+    `📋 *Your ${kind} brief is ready.*`,
+    content.headline,
+    nextUp ? `\n*What needs you:*\n${nextUp}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 1200);
+  await notifySlack(workspaceId, slackText);
   return { ok: true, brief: { id, kind, content, created_at: iso(now) } };
 }
 
