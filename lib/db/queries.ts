@@ -236,6 +236,34 @@ async function readBundle(
   const [wsRow] = wsRows;
   const [briefRow] = briefRows;
 
+  // Backfill integration rows added to the catalog after this workspace was
+  // seeded (Zoom, Slack), so newly-supported integrations show up + can store
+  // tokens without a re-seed. Cheap: only inserts the first time each is missing.
+  const CATALOG_BACKFILL: { name: string; provider: string }[] = [
+    { name: "Zoom", provider: "Zoom" },
+    { name: "Slack", provider: "Slack" },
+  ];
+  const haveNames = new Set(integrationRows.map((r) => r.name));
+  const toAdd = CATALOG_BACKFILL.filter((c) => !haveNames.has(c.name));
+  if (toAdd.length) {
+    const inserted = await db
+      .insert(integrations)
+      .values(
+        toAdd.map((c) => ({
+          id: uid(),
+          workspace_id: wsId,
+          name: c.name,
+          provider: c.provider,
+          category: "other" as const,
+          connected: false,
+          permission_mode: "approval" as const,
+          optional: true,
+        })),
+      )
+      .returning();
+    integrationRows.push(...inserted);
+  }
+
   const taskRows = await db.select().from(tasks).where(eq(tasks.workspace_id, wsId));
   const taskIds = taskRows.map((t) => t.id);
   const taskIdSet = new Set(taskIds);

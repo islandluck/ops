@@ -6,7 +6,7 @@
  * bundle-load time and passed to the client for display.
  */
 
-export type ProviderKey = "google" | "hubspot" | "stripe" | "notion" | "x";
+export type ProviderKey = "google" | "hubspot" | "stripe" | "notion" | "x" | "zoom";
 
 export interface ProviderDef {
   key: ProviderKey;
@@ -119,6 +119,21 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
     basicAuth: true,
     pkce: true,
     actionLabel: "Publish approved posts to X",
+  },
+  zoom: {
+    key: "zoom",
+    label: "Zoom",
+    integrationNames: ["Zoom"],
+    auth: "oauth",
+    authorizeUrl: "https://zoom.us/oauth/authorize",
+    tokenUrl: "https://zoom.us/oauth/token",
+    // Create meetings on the connected user's account. Classic scope; if your Zoom
+    // app uses granular scopes, enable "meeting:write:meeting" on it instead.
+    scopes: ["meeting:write"],
+    clientIdEnv: "ZOOM_CLIENT_ID",
+    clientSecretEnv: "ZOOM_CLIENT_SECRET",
+    basicAuth: true, // Zoom's token endpoint expects HTTP Basic client auth.
+    actionLabel: "Schedule Zoom meetings",
   },
 };
 

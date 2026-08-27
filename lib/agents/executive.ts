@@ -22,11 +22,13 @@ import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queri
 import { getTeamContext } from "@/lib/agents/team";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import {
+  createCalendarEvent,
   getCalendarSnapshot,
   formatEventWhen,
   getMessageMeta,
   listInboxMessages,
 } from "@/lib/integrations/google";
+import { createZoomMeeting } from "@/lib/integrations/zoom";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { resolveRecipientCandidates } from "@/lib/agents/recipient";
 import { composeOutboundDrafts } from "@/lib/agents/outbound";
@@ -207,6 +209,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- When the founder HANDS you a task (e.g. from their daily plan), ACT on it: resolve the people, draft the email, kick off the project — take the obvious next step and report what you did. Only ask a question when you're genuinely blocked on something you can't look up yourself.",
     "- You CAN access the live internet with the `research` tool — use it for anything current (competitor moves, market news, a company or person, recent events). Never say you don't have internet access; look it up and cite what you find.",
     "- PLANNING THE DAY: when the founder asks you to plan their day (or triage/sequence their tasks), call list_open_tasks FIRST to see what's actually open, then give a tight, decisive plan — group similar work into batches (e.g. all the emails together), order by priority + logical sequence, call out the quick wins, note what should be handed to an agent, and give a rough timeline. Keep it scannable (short groups + a one-line 'start here'), never a wall of text.",
+    "- SCHEDULING: when the founder wants to meet someone, use schedule_meeting — it books the Zoom, adds it to their calendar, and drafts the invite in the Email Manager (never sends). Compute start_time as a full ISO 8601 timestamp from their words + today's date, and pass their timezone.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -486,6 +489,94 @@ function buildTools(workspaceId: string): ExecTool[] {
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't read the open tasks." };
         }
+      },
+    },
+    {
+      definition: {
+        name: "schedule_meeting",
+        description:
+          "Schedule a Zoom meeting with someone. Resolves who they are, creates the Zoom meeting, adds it to the founder's Google Calendar, and DRAFTS the invite email (with the join link) in the Email Manager for review — it never sends. Give start_time as a full ISO 8601 timestamp you compute from the founder's words + today's date, plus their timezone.",
+        input_schema: {
+          type: "object",
+          properties: {
+            with: { type: "string", description: "Who to meet — a name (resolved via CRM/Gmail) or an email address" },
+            topic: { type: "string", description: "Meeting topic / title" },
+            start_time: { type: "string", description: "ISO 8601 start, e.g. 2026-08-27T14:00:00-04:00" },
+            duration_min: { type: "number", description: "Length in minutes (default 30)" },
+            timezone: { type: "string", description: "IANA timezone, e.g. America/New_York" },
+          },
+          required: ["with", "topic", "start_time"],
+        },
+      },
+      run: async (input) => {
+        const withWho = str(input.with).trim();
+        const topic = str(input.topic).trim() || "Meeting";
+        const startStr = str(input.start_time).trim();
+        const dur = num(input.duration_min, 30);
+        const tz = str(input.timezone).trim() || undefined;
+        if (!withWho || !startStr) return { summary: "I need who to meet and a start time to schedule." };
+        const start = new Date(startStr);
+        if (Number.isNaN(start.getTime())) return { summary: `I couldn't read the start time "${startStr}".` };
+        const startISO = start.toISOString();
+        const endISO = new Date(start.getTime() + dur * 60000).toISOString();
+
+        const zoomToken = await getValidAccessToken(workspaceId, "Zoom");
+        if (!zoomToken) {
+          return { summary: "Zoom isn't connected yet — connect it in Integrations to schedule meetings.", href: "/integrations" };
+        }
+        let meeting;
+        try {
+          meeting = await createZoomMeeting(zoomToken, { topic, startTime: startISO, durationMin: dur, timezone: tz });
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't create the Zoom meeting." };
+        }
+
+        // Resolve the attendee's email (best-effort — for the calendar invite + email).
+        let attendeeEmail = "";
+        try {
+          const { primary } = await resolveRecipientCandidates(workspaceId, withWho);
+          attendeeEmail = primary.email || "";
+        } catch {
+          /* ignore */
+        }
+
+        // Add to Google Calendar (best-effort; same Google connection as Gmail).
+        let calAdded = false;
+        const gToken = await getValidAccessToken(workspaceId, "Google Calendar");
+        if (gToken) {
+          try {
+            await createCalendarEvent(gToken, {
+              summary: topic,
+              description: `Zoom meeting.\nJoin: ${meeting.join_url}${meeting.password ? `\nPasscode: ${meeting.password}` : ""}`,
+              startISO,
+              endISO,
+              attendees: attendeeEmail ? [attendeeEmail] : undefined,
+            });
+            calAdded = true;
+          } catch {
+            /* ignore — the meeting + draft still stand */
+          }
+        }
+
+        // Draft the invite email in the Email Manager (never sends).
+        let drafted = false;
+        try {
+          const whenText = tz ? `${startISO} (${tz})` : startISO;
+          await composeOutboundDrafts(workspaceId, [
+            `Email ${withWho} to invite them to a Zoom meeting "${topic}" at ${whenText}. Include the join link ${meeting.join_url}${meeting.password ? ` (passcode ${meeting.password})` : ""}.`,
+          ]);
+          drafted = true;
+        } catch {
+          /* ignore */
+        }
+
+        const bits = ["Zoom created"];
+        if (calAdded) bits.push("added to your calendar");
+        if (drafted) bits.push("invite drafted in the Email Manager");
+        return {
+          summary: `Scheduled "${topic}" with ${withWho} — ${bits.join(", ")}. Join: ${meeting.join_url}`,
+          href: drafted ? "/email" : "/integrations",
+        };
       },
     },
   ];

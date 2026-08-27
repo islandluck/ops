@@ -318,6 +318,15 @@ export function createSeedState(now: number): AppState {
       permission_mode: "approval",
       optional: true,
     },
+    {
+      id: "int_zoom",
+      name: "Zoom",
+      provider: "Zoom",
+      category: "other",
+      connected: false,
+      permission_mode: "approval",
+      optional: true,
+    },
   ];
 
   const tasks: Task[] = [
