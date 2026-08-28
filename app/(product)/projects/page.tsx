@@ -141,6 +141,15 @@ export default function ProjectsPage() {
     void reload();
   }, []);
 
+  // Deep-link from the Team board: /projects?open=<id> opens that project's drawer.
+  useEffect(() => {
+    const openId = new URLSearchParams(window.location.search).get("open");
+    if (openId) {
+      setSelectedId(openId);
+      window.history.replaceState(null, "", "/projects");
+    }
+  }, []);
+
   const selected = projects.find((p) => p.id === selectedId) ?? null;
 
   return (

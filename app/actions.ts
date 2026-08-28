@@ -211,6 +211,7 @@ import {
   getProjectPacket,
   healStuckProjectTasks,
   listAssignedProjects,
+  listAssignedProjectsForOwner,
   memberOwnsAsset,
   memberOwnsTask,
   type ProjectPacket,
@@ -3046,6 +3047,21 @@ export async function assignProjectToMemberAction(
     return await assignProjectToMember(ws, projectId, opts);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't assign the project." };
+  }
+}
+
+/** Owner tracking board: every assigned AI project with live progress. Owner-only. */
+export async function getAssignedProjectsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner") return [];
+  try {
+    return await listAssignedProjectsForOwner(ws);
+  } catch {
+    return [];
   }
 }
 

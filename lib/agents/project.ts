@@ -697,6 +697,16 @@ async function memberIdForUser(workspaceId: string, userId: string): Promise<str
   return m?.id ?? null;
 }
 
+/** Every assigned AI project in the workspace (owner tracking board), with progress. */
+export async function listAssignedProjectsForOwner(workspaceId: string): Promise<Project[]> {
+  const rows = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), isNotNull(projects.assigned_member_id)))
+    .orderBy(desc(projects.created_at));
+  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
+}
+
 /** The full AI projects assigned to the member behind `userId` (with progress). */
 export async function listAssignedProjects(workspaceId: string, userId: string): Promise<Project[]> {
   const memberId = await memberIdForUser(workspaceId, userId);

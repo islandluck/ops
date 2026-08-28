@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
+  ArrowUpRight,
   CalendarClock,
   Check,
   Copy,
-  FolderKanban,
   Link2,
   Loader2,
   Mail,
@@ -30,6 +31,7 @@ import {
   deleteAssignmentAction,
   deleteHumanProjectAction,
   deleteTeamMemberAction,
+  getAssignedProjectsAction,
   inviteTeamMemberAction,
   listAssignmentsAction,
   listHumanProjectsAction,
@@ -44,6 +46,7 @@ import type {
   AssignmentStatus,
   HumanProject,
   HumanProjectStatus,
+  Project,
   TeamAssignment,
   TeamMember,
   TeamRole,
@@ -661,13 +664,108 @@ function HumanProjectDialog({
   );
 }
 
+// ── Board cards ──────────────────────────────────────────────────────────────
+
+function aiStatusLabel(s: Project["status"]): string {
+  return s === "planning"
+    ? "Plan review"
+    : s === "active"
+      ? "In progress"
+      : s === "done"
+        ? "Complete"
+        : s === "blocked"
+          ? "Blocked"
+          : "Cancelled";
+}
+
+/** An assigned AI project on the board — live progress; click opens it in Projects. */
+function AssignedProjectCard({ project, onOpen }: { project: Project; onOpen: () => void }) {
+  const prog = project.progress ?? { total: 0, done: 0 };
+  const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
+  const phases = project.plan.phases.length;
+  return (
+    <button
+      onClick={onOpen}
+      className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-3 text-left shadow-sm transition hover:border-primary/40"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{project.title}</span>
+          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+            <Sparkles className="h-2.5 w-2.5" /> AI
+          </span>
+        </div>
+        <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 transition group-hover:opacity-100" />
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-[10px] tabular-nums text-muted-foreground">
+          {prog.done}/{prog.total}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>{aiStatusLabel(project.status)}</span>
+        {project.status === "active" && phases > 0 && (
+          <span>
+            Phase {Math.min(project.current_phase + 1, phases)}/{phases}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/** A manual team project on the board. */
+function TeamHumanProjectCard({
+  project,
+  onEdit,
+  onDelete,
+}: {
+  project: HumanProject;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-3 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <span className="truncate text-sm font-medium">{project.title}</span>
+        <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit}>
+            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onDelete}>
+            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
+        </div>
+      </div>
+      <div className="flex items-center justify-between text-[11px]">
+        <span className={cn("font-semibold uppercase tracking-wide", PROJECT_STATUS_TINT[project.status])}>
+          {PROJECT_STATUS_LABEL[project.status]}
+        </span>
+        <span className="text-muted-foreground">
+          {project.open_tasks}/{project.total_tasks} tasks
+        </span>
+      </div>
+      {project.deadline && (
+        <div className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+          <CalendarClock className="h-3 w-3" /> Due {fmtDate(project.deadline)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function TeamPage() {
+  const router = useRouter();
   const [view, setView] = useState<"roster" | "projects" | "board">("roster");
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
   const [projects, setProjects] = useState<HumanProject[]>([]);
+  const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [invites, setInvites] = useState<{ id: string; member_id: string; accept_url: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -683,16 +781,18 @@ export default function TeamPage() {
   });
 
   async function refresh() {
-    const [m, a, inv, p] = await Promise.all([
+    const [m, a, inv, p, ap] = await Promise.all([
       listTeamMembersAction(),
       listAssignmentsAction(),
       listInvitesAction(),
       listHumanProjectsAction(),
+      getAssignedProjectsAction(),
     ]);
     setMembers(m);
     setAssignments(a);
     setInvites(inv);
     setProjects(p);
+    setAssignedProjects(ap);
     setLoading(false);
   }
 
@@ -761,7 +861,7 @@ export default function TeamPage() {
             <Segmented
               options={[
                 { value: "roster", label: "Roster" },
-                { value: "projects", label: "Projects" },
+                { value: "projects", label: "Board" },
                 { value: "board", label: "Handoffs" },
               ]}
               value={view}
@@ -867,65 +967,83 @@ export default function TeamPage() {
             })}
           </div>
         ) : view === "projects" ? (
-          projects.length === 0 ? (
-            <div className="mt-10 flex flex-col items-center gap-3 text-center text-muted-foreground">
-              <FolderKanban className="h-10 w-10 opacity-40" />
-              <p className="max-w-sm text-sm">
-                Human projects are work your team owns — created here, or handed off from an AI project in Projects.
-                Assign a lead and a manager, then delegate the tasks.
-              </p>
-              <Button onClick={() => setProjectDialog({ open: true, project: null })}>
-                <Plus className="h-4 w-4" /> New project
-              </Button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((p) => (
-                <Card key={p.id} className="group flex flex-col gap-2 p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate font-semibold">{p.title}</span>
-                        {p.source === "ai_handoff" && (
-                          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                            <Sparkles className="h-2.5 w-2.5" /> From AI
-                          </span>
-                        )}
+          <div className="flex flex-col gap-6">
+            <p className="text-xs text-muted-foreground">
+              Every project your team is running — assigned AI projects (live progress) and manual team projects —
+              grouped by who owns it. Click an AI project to open it.
+            </p>
+            {members
+              .filter((m) => m.status !== "inactive")
+              .map((m) => {
+                const ai = assignedProjects.filter((p) => p.assigned_member_id === m.id);
+                const human = projects.filter((hp) => hp.lead_member_id === m.id || hp.manager_member_id === m.id);
+                const count = ai.length + human.length;
+                return (
+                  <div key={m.id} className="flex flex-col gap-2.5">
+                    <div className="flex items-center gap-2">
+                      <Avatar member={m} size="sm" />
+                      <span className="font-semibold">{m.name}</span>
+                      {m.team_role === "manager" && (
+                        <span className="rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                          Manager
+                        </span>
+                      )}
+                      <span className="text-xs text-muted-foreground">
+                        · {count} project{count === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    {count === 0 ? (
+                      <p className="pl-1 text-xs text-muted-foreground">Nothing assigned yet.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {ai.map((p) => (
+                          <AssignedProjectCard
+                            key={p.id}
+                            project={p}
+                            onOpen={() => router.push(`/projects?open=${p.id}`)}
+                          />
+                        ))}
+                        {human.map((hp) => (
+                          <TeamHumanProjectCard
+                            key={hp.id}
+                            project={hp}
+                            onEdit={() => setProjectDialog({ open: true, project: hp })}
+                            onDelete={() => removeProject(hp)}
+                          />
+                        ))}
                       </div>
-                      <div className={cn("mt-0.5 text-[11px] font-semibold uppercase tracking-wide", PROJECT_STATUS_TINT[p.status])}>
-                        {PROJECT_STATUS_LABEL[p.status]}
-                      </div>
-                    </div>
-                    <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
-                      <Button variant="ghost" size="icon" onClick={() => setProjectDialog({ open: true, project: p })}>
-                        <Pencil className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => removeProject(p)}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    </div>
-                  </div>
-                  {p.summary && <p className="line-clamp-3 text-sm text-muted-foreground">{p.summary}</p>}
-                  <div className="mt-auto flex flex-col gap-1 border-t border-border pt-2 text-xs text-muted-foreground">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="truncate">
-                        Lead: <span className="text-foreground">{p.lead_name ?? "You"}</span>
-                        {p.manager_name ? ` · Mgr: ${p.manager_name}` : ""}
-                      </span>
-                      <span className="shrink-0">
-                        {p.open_tasks}/{p.total_tasks} tasks
-                      </span>
-                    </div>
-                    {p.deadline && (
-                      <span className="inline-flex items-center gap-1">
-                        <CalendarClock className="h-3 w-3" /> Due {fmtDate(p.deadline)}
-                      </span>
                     )}
                   </div>
-                </Card>
-              ))}
-            </div>
-          )
+                );
+              })}
+            {(() => {
+              const ownerRun = projects.filter((hp) => !hp.lead_member_id && !hp.manager_member_id);
+              if (!ownerRun.length) return null;
+              return (
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                      —
+                    </div>
+                    <span className="font-semibold">Owner-run</span>
+                    <span className="text-xs text-muted-foreground">
+                      · {ownerRun.length} project{ownerRun.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {ownerRun.map((hp) => (
+                      <TeamHumanProjectCard
+                        key={hp.id}
+                        project={hp}
+                        onEdit={() => setProjectDialog({ open: true, project: hp })}
+                        onDelete={() => removeProject(hp)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {STATUSES.map((col) => (
