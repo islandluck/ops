@@ -197,6 +197,7 @@ import {
   type TeamGoalInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
+import { getTeamAssistantHistory, sendTeamAssistantMessage } from "@/lib/agents/team-assistant";
 import {
   acceptInvite,
   acceptPendingInvite,
@@ -3363,6 +3364,32 @@ export async function sendChatMessageAction(channelId: string, body: string) {
     return await sendChatMessage(ws, user.id, channelId, body, displayName(user));
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send." };
+  }
+}
+
+// ── Team Assistant (Phase 6, Haiku) ──────────────────────────────────────────
+
+export async function getTeamAssistantHistoryAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await getTeamAssistantHistory(ws, user.id);
+  } catch {
+    return [];
+  }
+}
+
+export async function sendTeamAssistantMessageAction(text: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await sendTeamAssistantMessage(ws, user.id, text);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "The assistant couldn't respond." };
   }
 }
 

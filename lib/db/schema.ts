@@ -824,6 +824,23 @@ export const chatMessages = pgTable(
   (t) => [index("chat_messages_channel_idx").on(t.workspace_id, t.channel_id, t.created_at)],
 );
 
+/** Team Room Phase 6 — a message in a member's private Team Assistant conversation
+ *  (per member, keyed by user_id). The assistant runs on Haiku, scoped to team data. */
+export const teamAssistantMessages = pgTable(
+  "team_assistant_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    user_id: uuid("user_id").notNull(),
+    role: text("role").$type<"user" | "assistant">().notNull().default("user"),
+    content: text("content").notNull().default(""),
+    created_at: createdAt,
+  },
+  (t) => [index("team_assistant_msgs_idx").on(t.workspace_id, t.user_id, t.created_at)],
+);
+
 /**
  * Team Room — a pending invitation for someone to join the workspace as a member.
  * The owner enters their profile + email; a Supabase invite email is sent; on

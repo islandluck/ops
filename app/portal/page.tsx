@@ -36,6 +36,7 @@ import { AssignedProjectView } from "./assigned-project";
 import { GoalsSection } from "./goals-section";
 import { DocsView } from "@/components/team/docs-view";
 import { ChatView } from "@/components/team/chat-view";
+import { AssistantView } from "./assistant-view";
 
 const STATUSES: { key: AssignmentStatus; label: string }[] = [
   { key: "assigned", label: "To do" },
@@ -170,7 +171,7 @@ export default function PortalPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberProjectDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [tab, setTab] = useState<"work" | "chat">("work");
+  const [tab, setTab] = useState<"work" | "chat" | "assistant">("work");
 
   async function load() {
     const [d, ap] = await Promise.all([getPortalDataAction(), getMyAssignedProjectsAction()]);
@@ -266,7 +267,7 @@ export default function PortalPage() {
       </div>
 
       <div className="flex gap-1">
-        {(["work", "chat"] as const).map((t) => (
+        {(["work", "chat", "assistant"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -275,13 +276,15 @@ export default function PortalPage() {
               tab === t ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {t === "work" ? "My work" : "Chat"}
+            {t === "work" ? "My work" : t === "chat" ? "Chat" : "Assistant"}
           </button>
         ))}
       </div>
 
       {tab === "chat" ? (
         <ChatView canManage={member?.team_role === "manager"} />
+      ) : tab === "assistant" ? (
+        <AssistantView />
       ) : (
         <>
           <GoalsSection isManager={member?.team_role === "manager"} reports={reports} />

@@ -308,6 +308,14 @@ export interface ChatMessage {
   created_at: string;
 }
 
+/** A message in a member's Team Assistant (Haiku) conversation. */
+export interface TeamAssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */
