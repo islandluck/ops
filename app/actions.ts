@@ -186,6 +186,12 @@ import {
   clearTeamDriveFolder,
   browseTeamDrive,
   type DriveBrowse,
+  listNotionMeetingPages,
+  previewNotionMeeting,
+  importNotionMeeting,
+  type MeetingImportInput,
+  type MeetingPreview,
+  type NotionMeetingPage,
   getPortalData,
   getWorkspaceRole,
   isProjectAssignedToMember,
@@ -3491,6 +3497,49 @@ export async function deleteTeamMeetingAction(id: string) {
     return await deleteTeamMeeting(ws, user.id, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the meeting." };
+  }
+}
+
+// ── Import a meeting from Notion (Team Meetings) ──────────────────────────────
+
+export async function listNotionMeetingPagesAction(): Promise<{
+  connected: boolean;
+  pages: NotionMeetingPage[];
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { connected: false, pages: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { connected: false, pages: [] };
+  try {
+    return await listNotionMeetingPages(ws, user.id);
+  } catch {
+    return { connected: false, pages: [], error: "Couldn't list Notion pages." };
+  }
+}
+
+export async function previewNotionMeetingAction(pageId: string, pageTitle?: string): Promise<MeetingPreview> {
+  const empty: MeetingPreview = { ok: false, title: "", date: null, summary: "", notes: "", attendee_ids: [], actions: [] };
+  const user = await getCurrentUser();
+  if (!user) return { ...empty, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ...empty, error: "No workspace." };
+  try {
+    return await previewNotionMeeting(ws, user.id, pageId, pageTitle);
+  } catch (e) {
+    return { ...empty, error: e instanceof Error ? e.message : "Couldn't read that meeting." };
+  }
+}
+
+export async function importNotionMeetingAction(input: MeetingImportInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await importNotionMeeting(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't import the meeting." };
   }
 }
 

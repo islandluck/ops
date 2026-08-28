@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, Loader2, NotebookPen, Plus, Trash2 } from "lucide-react";
+import { CalendarDays, FileText, Loader2, NotebookPen, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -10,10 +10,29 @@ import { cn } from "@/lib/cn";
 import {
   createTeamMeetingAction,
   deleteTeamMeetingAction,
+  importNotionMeetingAction,
+  listNotionMeetingPagesAction,
   listTeamMeetingsAction,
+  previewNotionMeetingAction,
   updateTeamMeetingAction,
 } from "@/app/actions";
 import type { TeamMeeting, TeamMember } from "@/lib/types";
+
+type NotionPage = Awaited<ReturnType<typeof listNotionMeetingPagesAction>>["pages"][number];
+type ActionRow = {
+  title: string;
+  detail: string;
+  owner_name: string | null;
+  member_id: string | null;
+  due: string | null;
+  include: boolean;
+};
+
+/** Pull the trailing 32-hex page id out of a Notion page URL (or accept a raw id). */
+function parseNotionPageId(input: string): string | null {
+  const runs = input.replace(/[^0-9a-fA-F]/g, " ").match(/[0-9a-fA-F]{32}/g);
+  return runs ? runs[runs.length - 1] : null;
+}
 
 function fmtDate(iso: string): string {
   try {
@@ -133,7 +152,7 @@ function MeetingDialog({
             placeholder={"Discussion, decisions, and action items per person."}
           />
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Tip: jot action items per person — turning them into tasks automatically is coming next.
+            Tip: to auto-create tasks from action items, use “Import from Notion” instead of typing notes here.
           </p>
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -151,10 +170,330 @@ function MeetingDialog({
   );
 }
 
+function NotionImportDialog({
+  open,
+  members,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  members: TeamMember[];
+  onClose: () => void;
+  onImported: () => void;
+}) {
+  const [step, setStep] = useState<"pick" | "review">("pick");
+  const [loadingPages, setLoadingPages] = useState(false);
+  const [connected, setConnected] = useState(true);
+  const [pages, setPages] = useState<NotionPage[]>([]);
+  const [pageErr, setPageErr] = useState<string | null>(null);
+  const [manualUrl, setManualUrl] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Review-step state (the confirmed, editable meeting).
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+  const [rows, setRows] = useState<ActionRow[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setStep("pick");
+    setManualUrl("");
+    setErr(null);
+    setPageErr(null);
+    setTitle("");
+    setDate("");
+    setNotes("");
+    setAttendeeIds([]);
+    setRows([]);
+    void loadPages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  async function loadPages() {
+    setLoadingPages(true);
+    const r = await listNotionMeetingPagesAction();
+    setConnected(r.connected);
+    setPages(r.pages);
+    setPageErr(r.error ?? null);
+    setLoadingPages(false);
+  }
+
+  async function analyze(pageId: string, pageTitle?: string) {
+    setAnalyzing(true);
+    setErr(null);
+    const p = await previewNotionMeetingAction(pageId, pageTitle);
+    setAnalyzing(false);
+    if (!p.ok) {
+      setErr(p.error ?? "Couldn't read that meeting.");
+      return;
+    }
+    setTitle(p.title);
+    setDate(p.date ?? new Date().toISOString().slice(0, 10));
+    setNotes(p.summary ? `${p.summary}\n\n${p.notes}` : p.notes);
+    setAttendeeIds(p.attendee_ids);
+    setRows(p.actions.map((a) => ({ ...a, include: true })));
+    setStep("review");
+  }
+
+  function analyzeManual() {
+    const id = parseNotionPageId(manualUrl);
+    if (!id) {
+      setErr("Paste a valid Notion page link.");
+      return;
+    }
+    void analyze(id);
+  }
+
+  function patchRow(i: number, patch: Partial<ActionRow>) {
+    setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+
+  async function doImport() {
+    if (!title.trim()) {
+      setErr("Give the meeting a title.");
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    const r = await importNotionMeetingAction({
+      title,
+      meeting_date: new Date(date || new Date().toISOString().slice(0, 10)).toISOString(),
+      notes,
+      attendee_ids: attendeeIds,
+      actions: rows
+        .filter((row) => row.include && row.title.trim())
+        .map((row) => ({ title: row.title, detail: row.detail, member_id: row.member_id, deadline: row.due })),
+    });
+    setSaving(false);
+    if ("ok" in r && r.ok) {
+      onImported();
+      onClose();
+    } else {
+      setErr("error" in r ? r.error : "Couldn't import the meeting.");
+    }
+  }
+
+  const assignedCount = rows.filter((r) => r.include && r.member_id).length;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={step === "pick" ? "Import a meeting from Notion" : "Review & assign"}
+      className={step === "review" ? "max-w-2xl" : undefined}
+    >
+      {step === "pick" ? (
+        <div className="flex flex-col gap-3">
+          {analyzing ? (
+            <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <p className="text-sm">Reading the meeting and pulling out action items…</p>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Pull a meeting transcript from Notion. We&apos;ll structure it, then you confirm who attended and assign
+                the action items as tasks.
+              </p>
+
+              {!connected ? (
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                  Notion isn&apos;t connected.{" "}
+                  <a href="/integrations" className="font-medium text-primary underline">
+                    Connect it in Integrations
+                  </a>{" "}
+                  and share your meeting-notes page with the Operator integration.
+                </div>
+              ) : (
+                <>
+                  <div className="flex gap-2">
+                    <Input
+                      value={manualUrl}
+                      onChange={(e) => setManualUrl(e.target.value)}
+                      placeholder="Paste a Notion page link"
+                      className="text-sm"
+                    />
+                    <Button onClick={analyzeManual} disabled={!manualUrl.trim()}>
+                      Analyze
+                    </Button>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Recent Notion pages
+                    </div>
+                    {loadingPages ? (
+                      <div className="flex justify-center py-6 text-muted-foreground">
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      </div>
+                    ) : pages.length === 0 ? (
+                      <p className="py-2 text-xs text-muted-foreground">
+                        No pages found. In Notion, share your meeting-notes page with the Operator integration.
+                      </p>
+                    ) : (
+                      <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
+                        {pages.map((pg) => (
+                          <button
+                            key={pg.id}
+                            onClick={() => analyze(pg.id, pg.title)}
+                            className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-sm transition last:border-b-0 hover:bg-accent"
+                          >
+                            <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                            <span className="min-w-0 flex-1 truncate">{pg.title}</span>
+                            {pg.last_edited && (
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                {fmtDate(pg.last_edited)}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+              {(err || pageErr) && <p className="text-sm text-red-600">{err || pageErr}</p>}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto pr-1">
+          <div className="grid grid-cols-[1fr_auto] gap-3">
+            <div>
+              <Label>Title *</Label>
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+            <div>
+              <Label>Date</Label>
+              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <Label>Attendees</Label>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {members.map((m) => {
+                const on = attendeeIds.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() =>
+                      setAttendeeIds((prev) => (on ? prev.filter((x) => x !== m.id) : [...prev, m.id]))
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs transition",
+                      on
+                        ? "border-primary bg-primary/12 text-primary"
+                        : "border-border text-muted-foreground hover:border-foreground",
+                    )}
+                  >
+                    {m.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <Label>Action items</Label>
+              <span className="text-[11px] text-muted-foreground">
+                {assignedCount} will be assigned as task{assignedCount === 1 ? "" : "s"}
+              </span>
+            </div>
+            {rows.length === 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">No action items were found in this meeting.</p>
+            ) : (
+              <div className="mt-1 flex flex-col gap-2">
+                {rows.map((row, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      "rounded-lg border border-border p-2 transition",
+                      !row.include && "opacity-50",
+                    )}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={row.include}
+                        onChange={(e) => patchRow(i, { include: e.target.checked })}
+                        className="mt-1.5 h-4 w-4 shrink-0 accent-primary"
+                      />
+                      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                        <Input
+                          value={row.title}
+                          onChange={(e) => patchRow(i, { title: e.target.value })}
+                          className="text-sm"
+                        />
+                        {row.detail && (
+                          <p className="line-clamp-2 text-[11px] text-muted-foreground">{row.detail}</p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={row.member_id ?? ""}
+                            onChange={(e) => patchRow(i, { member_id: e.target.value || null })}
+                            className="rounded-lg border border-border bg-card px-2 py-1 text-xs"
+                          >
+                            <option value="">Unassigned</option>
+                            {members.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                          <Input
+                            type="date"
+                            value={row.due ?? ""}
+                            onChange={(e) => patchRow(i, { due: e.target.value || null })}
+                            className="w-auto text-xs"
+                          />
+                          {row.owner_name && !row.member_id && (
+                            <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                              said: {row.owner_name}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label>Notes</Label>
+            <Textarea rows={6} value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+
+          {err && <p className="text-sm text-red-600">{err}</p>}
+
+          <div className="flex items-center justify-between gap-2">
+            <Button variant="ghost" onClick={() => setStep("pick")}>
+              Back
+            </Button>
+            <Button onClick={doImport} disabled={saving}>
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              Import meeting{assignedCount > 0 ? ` + ${assignedCount} task${assignedCount === 1 ? "" : "s"}` : ""}
+            </Button>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
 export function MeetingsView({ canManage, members }: { canManage: boolean; members: TeamMember[] }) {
   const [meetings, setMeetings] = useState<TeamMeeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<{ open: boolean; meeting: TeamMeeting | null }>({ open: false, meeting: null });
+  const [importing, setImporting] = useState(false);
 
   async function refresh() {
     setMeetings(await listTeamMeetingsAction());
@@ -174,12 +513,17 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Notes from your meetings. (Auto-creating tasks from action items is coming in a later pass.)
+          Notes from your meetings. Import a transcript from Notion to turn action items into assigned tasks.
         </p>
         {canManage && (
-          <Button size="sm" onClick={() => setDialog({ open: true, meeting: null })}>
-            <Plus className="h-4 w-4" /> New meeting
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button size="sm" variant="secondary" onClick={() => setImporting(true)}>
+              <Sparkles className="h-4 w-4" /> Import from Notion
+            </Button>
+            <Button size="sm" onClick={() => setDialog({ open: true, meeting: null })}>
+              <Plus className="h-4 w-4" /> New meeting
+            </Button>
+          </div>
         )}
       </div>
 
@@ -229,6 +573,13 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
         canManage={canManage}
         onClose={() => setDialog({ open: false, meeting: null })}
         onSaved={refresh}
+      />
+
+      <NotionImportDialog
+        open={importing}
+        members={members}
+        onClose={() => setImporting(false)}
+        onImported={refresh}
       />
     </div>
   );

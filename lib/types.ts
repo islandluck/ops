@@ -215,7 +215,7 @@ export interface TeamMember {
 }
 
 export type AssignmentStatus = "assigned" | "in_progress" | "blocked" | "done";
-export type AssignmentRefType = "project" | "task" | "note";
+export type AssignmentRefType = "project" | "task" | "note" | "meeting";
 
 /** A handoff/task assigned to a team member (optionally inside a human project). */
 export interface TeamAssignment {

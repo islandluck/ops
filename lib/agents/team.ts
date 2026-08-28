@@ -20,6 +20,9 @@ import {
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { getDriveMeta, isWithinDriveFolder, listDriveFolder, type DriveEntry } from "@/lib/integrations/google";
+import { getNotionPageContent, searchNotionPages } from "@/lib/integrations/notion";
+import { extractMeeting, type MeetingExtraction } from "@/lib/ai/meeting-extract";
+import { runWithUsage } from "@/lib/ai/usage";
 import type {
   AssignmentStatus,
   CalendarItem,
@@ -1462,7 +1465,7 @@ export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem
     .slice(0, 100);
 }
 
-// ── Meetings (notes now; action-items → tasks in a later pass) ────────────────
+// ── Meetings (manual notes + Notion import → assigned tasks, see below) ───────
 
 function toMeeting(r: typeof teamMeetings.$inferSelect, nameById: Map<string, string>): TeamMeeting {
   const ids = (r.attendee_ids ?? []) as string[];
@@ -1574,6 +1577,199 @@ export async function deleteTeamMeeting(
   }
   await db.delete(teamMeetings).where(and(eq(teamMeetings.workspace_id, workspaceId), eq(teamMeetings.id, id)));
   return { ok: true };
+}
+
+// ── Import a meeting from Notion → tasks ─────────────────────────────────────
+// We use Notion AI to transcribe meetings; this pulls a transcript page, has the
+// LLM (Haiku) structure it, and the manager confirms participants + assigns the
+// action items as team tasks. Read-only against Notion — nothing is written back.
+
+/** Case-insensitive match of a spoken name to a roster member (exact → first-name). */
+function matchMemberByName(name: string, members: { id: string; name: string }[]): string | null {
+  const n = name.toLowerCase().trim();
+  if (!n) return null;
+  const exact = members.find((m) => m.name.toLowerCase() === n);
+  if (exact) return exact.id;
+  const first = n.split(/\s+/)[0];
+  const byFirst = members.find((m) => {
+    const mn = m.name.toLowerCase();
+    return mn.split(/\s+/)[0] === first || mn === n;
+  });
+  return byFirst?.id ?? null;
+}
+
+export interface NotionMeetingPage {
+  id: string;
+  title: string;
+  url: string;
+  last_edited: string;
+}
+
+/** Recently-edited Notion pages the integration can read (owner/manager only). */
+export async function listNotionMeetingPages(
+  workspaceId: string,
+  userId: string,
+): Promise<{ connected: boolean; pages: NotionMeetingPage[]; error?: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { connected: false, pages: [], error: "Only owners and managers can import meetings." };
+  }
+  const token = await getValidAccessToken(workspaceId, "Notion");
+  if (!token) return { connected: false, pages: [] };
+  try {
+    const pages = await searchNotionPages(token, 20);
+    return { connected: true, pages };
+  } catch {
+    return { connected: true, pages: [], error: "Couldn't reach Notion. Reconnect it in Integrations." };
+  }
+}
+
+export interface MeetingPreviewAction {
+  title: string;
+  detail: string;
+  /** Owner name as written in the notes (for display); null if unassigned. */
+  owner_name: string | null;
+  /** Roster member the owner name resolved to (pre-fills the assignee); null if no match. */
+  member_id: string | null;
+  due: string | null;
+}
+
+export interface MeetingPreview {
+  ok: boolean;
+  error?: string;
+  title: string;
+  date: string | null;
+  summary: string;
+  /** The pulled transcript (best-effort plain text). */
+  notes: string;
+  /** Roster members matched from the detected participants (pre-fills attendees). */
+  attendee_ids: string[];
+  actions: MeetingPreviewAction[];
+}
+
+/** Pull a Notion page and structure it into an editable meeting preview. */
+export async function previewNotionMeeting(
+  workspaceId: string,
+  userId: string,
+  pageId: string,
+  pageTitle?: string,
+): Promise<MeetingPreview> {
+  const empty: MeetingPreview = { ok: false, title: "", date: null, summary: "", notes: "", attendee_ids: [], actions: [] };
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ...empty, error: "Only owners and managers can import meetings." };
+  }
+  const id = (pageId ?? "").trim();
+  if (!id) return { ...empty, error: "Pick a Notion page." };
+  const token = await getValidAccessToken(workspaceId, "Notion");
+  if (!token) return { ...empty, error: "Notion isn't connected. Connect it in Integrations first." };
+
+  let notes = "";
+  try {
+    notes = await getNotionPageContent(token, id);
+  } catch {
+    return { ...empty, error: "Couldn't read that Notion page. Make sure it's shared with the Operator integration." };
+  }
+  if (!notes.trim()) {
+    return { ...empty, error: "That Notion page looks empty — is the transcript on the page itself?" };
+  }
+
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+
+  const titleHint = (pageTitle ?? "").trim() || "Meeting";
+  let extraction: MeetingExtraction | null = null;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    extraction = await runWithUsage(workspaceId, "notion-meeting-extract", () =>
+      extractMeeting({ title: titleHint, text: notes }, memberRows.map((m) => m.name), today),
+    );
+  } catch (e) {
+    return { ...empty, notes, error: e instanceof Error ? e.message : "Couldn't analyze the meeting." };
+  }
+  if (!extraction) return { ...empty, notes, error: "Couldn't extract anything from that page." };
+
+  const attendee_ids = Array.from(
+    new Set(
+      extraction.participants
+        .map((p) => matchMemberByName(p, memberRows))
+        .filter((x): x is string => !!x),
+    ),
+  );
+  const actions: MeetingPreviewAction[] = extraction.actions.map((a) => ({
+    title: a.title,
+    detail: a.detail,
+    owner_name: a.owner,
+    member_id: a.owner ? matchMemberByName(a.owner, memberRows) : null,
+    due: a.due,
+  }));
+
+  return {
+    ok: true,
+    title: extraction.title || titleHint,
+    date: extraction.date,
+    summary: extraction.summary,
+    notes,
+    attendee_ids,
+    actions,
+  };
+}
+
+export interface MeetingImportInput {
+  title: string;
+  meeting_date: string;
+  notes: string;
+  attendee_ids: string[];
+  actions: { title: string; detail: string; member_id: string | null; deadline: string | null }[];
+}
+
+/** Persist the confirmed meeting + create a team task for each assigned action item. */
+export async function importNotionMeeting(
+  workspaceId: string,
+  userId: string,
+  input: MeetingImportInput,
+): Promise<{ ok: true; meeting: TeamMeeting; assignments: number } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can import meetings." };
+  }
+
+  const created = await createTeamMeeting(workspaceId, userId, {
+    title: input.title,
+    meeting_date: input.meeting_date,
+    notes: input.notes,
+    attendee_ids: input.attendee_ids,
+  });
+  if (!created.ok) return created;
+
+  // The importer's member id — recorded as the delegator on each resulting task.
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+
+  let assignments = 0;
+  for (const a of input.actions) {
+    if (!a.member_id || !a.title.trim()) continue;
+    const note = a.detail?.trim()
+      ? `${a.detail.trim()}\n\nFrom meeting: ${created.meeting.title}`
+      : `From meeting: ${created.meeting.title}`;
+    const r = await createAssignment(workspaceId, {
+      member_id: a.member_id,
+      title: a.title,
+      handoff_note: note,
+      deadline: a.deadline ?? null,
+      ref_type: "meeting",
+      ref_id: created.meeting.id,
+      created_by_member_id: me?.id ?? null,
+    });
+    if (r.ok) assignments++;
+  }
+
+  return { ok: true, meeting: created.meeting, assignments };
 }
 
 // ── Team settings + shared Google Drive folder ───────────────────────────────
