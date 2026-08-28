@@ -568,10 +568,35 @@ export interface Project {
   /** Index of the phase currently being worked (0-based). */
   current_phase: number;
   created_by_type: CreatedByType;
+  /** Team Room: the member this whole project is assigned to (null = owner-run). */
+  assigned_member_id: string | null;
+  assigned_manager_id: string | null;
   created_at: string;
   updated_at: string;
   /** Denormalised progress, assembled at load. */
   progress?: { total: number; done: number };
+}
+
+/** A task inside an assigned project, as a team member sees it in their portal. */
+export interface MemberProjectTask {
+  id: string;
+  title: string;
+  description: string;
+  category: Category;
+  status: TaskStatus;
+  approval_status: ApprovalStatus;
+  execution_status: ExecutionStatus;
+  requires_approval: boolean;
+  project_phase: number | null;
+  step_kind: "deliverable" | "action" | "page" | null;
+  /** The drafted deliverable (first task asset), if any. */
+  deliverable: { id: string; title: string; content: string } | null;
+}
+
+/** An assigned project + its tasks, scoped to the member it's assigned to. */
+export interface MemberProjectDetail {
+  project: Project;
+  tasks: MemberProjectTask[];
 }
 
 /* --------------------------- pages & commerce ---------------------------- */

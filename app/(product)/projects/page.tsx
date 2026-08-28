@@ -40,7 +40,7 @@ import {
   getCampaignDataAction,
   getProjectPacketAction,
   getProjectsAction,
-  handoffAiProjectToHumansAction,
+  assignProjectToMemberAction,
   listTeamMembersAction,
 } from "@/app/actions";
 import { escapeHtml, markdownToHtml } from "@/lib/content/format";
@@ -539,74 +539,72 @@ function NewCampaignDrawer({
   );
 }
 
-/** Owner action: project an AI project into the team plane through the sanitized
- *  gate. Only the title/summary/deadline cross — never the plan or agent context. */
-function HandoffToTeamPanel({ projectId }: { projectId: string }) {
+/** Owner action: assign this FULL project to a team member — plan, phases, and
+ *  agent execution move into their portal, where they approve each deliverable.
+ *  The intelligence surfaces (Executive, KPIs, CRM, inbox) stay owner-only. */
+function AssignToTeamPanel({ project, onChanged }: { project: Project; onChanged: () => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<TeamMember[]>([]);
-  const [lead, setLead] = useState("");
-  const [manager, setManager] = useState("");
-  const [deadline, setDeadline] = useState("");
+  const [member, setMember] = useState(project.assigned_member_id ?? "");
+  const [manager, setManager] = useState(project.assigned_manager_id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [done, setDone] = useState<string | null>(null);
 
   const managers = members.filter((m) => m.team_role === "manager");
+  const assignedName = members.find((m) => m.id === project.assigned_member_id)?.name ?? null;
 
   async function openPanel() {
     setOpen(true);
     setError("");
+    setMember(project.assigned_member_id ?? "");
+    setManager(project.assigned_manager_id ?? "");
     if (!members.length) setMembers(await listTeamMembersAction());
   }
 
   async function submit() {
     setBusy(true);
     setError("");
-    const res = await handoffAiProjectToHumansAction(projectId, {
-      lead_member_id: lead || null,
-      manager_member_id: manager || null,
-      deadline: deadline || null,
+    const res = await assignProjectToMemberAction(project.id, {
+      member_id: member || null,
+      manager_id: member ? manager || null : null,
     });
     setBusy(false);
     if ("ok" in res && res.ok) {
-      const leadName = members.find((m) => m.id === lead)?.name ?? "your team";
-      setDone(`Handed off to ${leadName}. It's now a human project in Team.`);
       setOpen(false);
+      await onChanged();
     } else {
-      setError("error" in res ? res.error : "Couldn't hand off the project.");
+      setError("error" in res ? res.error : "Couldn't assign the project.");
     }
-  }
-
-  if (done) {
-    return (
-      <p className="mb-2 inline-flex items-center gap-1.5 text-[12px] font-medium text-emerald-700">
-        <Users className="h-3.5 w-3.5" /> {done}
-      </p>
-    );
   }
 
   if (!open) {
     return (
-      <div className="mb-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" onClick={openPanel}>
-          <Users className="h-3.5 w-3.5" /> Hand off to team
+          <Users className="h-3.5 w-3.5" />
+          {project.assigned_member_id ? "Reassign" : "Assign to team member"}
         </Button>
+        {project.assigned_member_id && (
+          <span className="text-[11.5px] font-medium text-emerald-700">
+            Assigned{assignedName ? ` to ${assignedName}` : ""} — running in their portal
+          </span>
+        )}
       </div>
     );
   }
 
   return (
     <div className="mb-2 rounded-xl border border-border p-3">
-      <p className="text-[12px] font-medium">Hand off to your team</p>
+      <p className="text-[12px] font-medium">Assign this project to a team member</p>
       <p className="mt-0.5 text-[11.5px] text-muted-foreground">
-        Creates a human project from this — only the title, summary, and deadline cross over. The plan and internal
-        context stay here.
+        The whole project — plan, phases, and agent execution — moves into their portal. They approve each
+        deliverable and own the result. Your Executive, KPIs, CRM, and inbox stay private.
       </p>
       <div className="mt-2.5 grid grid-cols-2 gap-2">
         <div>
-          <label className="text-[11px] font-medium text-muted-foreground">Lead (owns it)</label>
-          <Select value={lead} onChange={(e) => setLead(e.target.value)}>
-            <option value="">Owner (you)</option>
+          <label className="text-[11px] font-medium text-muted-foreground">Assign to</label>
+          <Select value={member} onChange={(e) => setMember(e.target.value)}>
+            <option value="">— unassigned (you run it) —</option>
             {members.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
@@ -615,8 +613,8 @@ function HandoffToTeamPanel({ projectId }: { projectId: string }) {
           </Select>
         </div>
         <div>
-          <label className="text-[11px] font-medium text-muted-foreground">Manager</label>
-          <Select value={manager} onChange={(e) => setManager(e.target.value)}>
+          <label className="text-[11px] font-medium text-muted-foreground">Overseeing manager</label>
+          <Select value={manager} onChange={(e) => setManager(e.target.value)} disabled={!member}>
             <option value="">— none —</option>
             {managers.map((m) => (
               <option key={m.id} value={m.id}>
@@ -626,15 +624,11 @@ function HandoffToTeamPanel({ projectId }: { projectId: string }) {
           </Select>
         </div>
       </div>
-      <div className="mt-2 w-40">
-        <label className="text-[11px] font-medium text-muted-foreground">Deadline</label>
-        <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
-      </div>
       {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
       <div className="mt-2.5 flex items-center gap-2">
         <Button size="sm" variant="success" disabled={busy} onClick={submit}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Users className="h-3.5 w-3.5" />}
-          Hand off
+          {member ? "Assign" : "Unassign"}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
           Cancel
@@ -860,7 +854,7 @@ function ProjectDrawer({
               : "Building the next phase — its tasks will appear on the board in a few seconds."}
           </p>
         )}
-        {!isGrowth && project.status !== "cancelled" && <HandoffToTeamPanel projectId={project.id} />}
+        {!isGrowth && project.status !== "cancelled" && <AssignToTeamPanel project={project} onChanged={onChanged} />}
         {!isGrowth && (project.status === "active" || project.status === "done") && (
           <div className="mb-2">
             <Button size="sm" variant="outline" disabled={exporting} onClick={exportPacket}>

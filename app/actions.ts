@@ -166,9 +166,10 @@ import {
   deleteAssignment,
   deleteHumanProject,
   deleteTeamMember,
+  assignProjectToMember,
   getPortalData,
   getWorkspaceRole,
-  handoffAiProjectToHumans,
+  isProjectAssignedToMember,
   listAssignments,
   listHumanProjects,
   listTeamMembers,
@@ -206,8 +207,12 @@ import {
   advanceWorkspaceProjects,
   approveProjectPlan,
   cancelProject,
+  getMemberProjectDetail,
   getProjectPacket,
   healStuckProjectTasks,
+  listAssignedProjects,
+  memberOwnsAsset,
+  memberOwnsTask,
   type ProjectPacket,
   createProject,
   deleteProject,
@@ -3026,21 +3031,129 @@ export async function deleteHumanProjectAction(id: string) {
   }
 }
 
-/** Hand an AI project to the team through the sanitized gate. Owner-only. */
-export async function handoffAiProjectToHumansAction(
-  aiProjectId: string,
-  opts: { lead_member_id?: string | null; manager_member_id?: string | null; deadline?: string | null },
+/** Assign a full AI project to a team member (or clear it with member_id null). Owner-only. */
+export async function assignProjectToMemberAction(
+  projectId: string,
+  opts: { member_id: string | null; manager_id?: string | null },
 ) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   const role = await getWorkspaceRole(ws, user.id);
-  if (role !== "owner") return { ok: false as const, error: "Only the owner can hand off projects." };
+  if (role !== "owner") return { ok: false as const, error: "Only the owner can assign projects." };
   try {
-    return await handoffAiProjectToHumans(ws, aiProjectId, opts);
+    return await assignProjectToMember(ws, projectId, opts);
   } catch (e) {
-    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't hand off the project." };
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't assign the project." };
+  }
+}
+
+// ── Member: run an assigned project (every write scoped to the assignment) ───
+
+export async function getMyAssignedProjectsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listAssignedProjects(ws, user.id);
+  } catch {
+    return [];
+  }
+}
+
+export async function getMyProjectDetailAction(projectId: string) {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getMemberProjectDetail(ws, user.id, projectId);
+  } catch {
+    return null;
+  }
+}
+
+/** Have the agent draft a task's deliverable — only inside a project assigned to you. */
+export async function memberRunTaskAction(taskId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!(await memberOwnsTask(ws, user.id, taskId))) {
+    return { ok: false as const, error: "That task isn't in a project assigned to you." };
+  }
+  try {
+    return await runTaskWithAgent(ws, taskId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't run the task." };
+  }
+}
+
+/** Approve + execute a task — only inside a project assigned to you. */
+export async function memberApproveTaskAction(taskId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!(await memberOwnsTask(ws, user.id, taskId))) {
+    return { ok: false as const, error: "That task isn't in a project assigned to you." };
+  }
+  try {
+    return await runTaskExecution(ws, taskId, { name: displayName(user), email: user.email ?? "" });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't approve the task." };
+  }
+}
+
+/** Reject a task — only inside a project assigned to you. */
+export async function memberRejectTaskAction(taskId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!(await memberOwnsTask(ws, user.id, taskId))) {
+    return { ok: false as const, error: "That task isn't in a project assigned to you." };
+  }
+  try {
+    await rejectTaskForUser(ws, taskId);
+    return { ok: true as const };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't reject the task." };
+  }
+}
+
+/** Edit a deliverable — only inside a project assigned to you. */
+export async function memberUpdateTaskAssetAction(assetId: string, content: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!(await memberOwnsAsset(ws, user.id, assetId))) {
+    return { ok: false as const, error: "That deliverable isn't in a project assigned to you." };
+  }
+  try {
+    return await updateTaskAssetContent(ws, assetId, content);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save." };
+  }
+}
+
+/** Advance an assigned project when its current phase is done — only if it's yours. */
+export async function memberAdvanceProjectAction(projectId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!(await isProjectAssignedToMember(ws, projectId, user.id))) {
+    return { ok: false as const, error: "That project isn't assigned to you." };
+  }
+  try {
+    await advanceProject(ws, projectId);
+    return { ok: true as const };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't advance the project." };
   }
 }
 

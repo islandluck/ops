@@ -922,6 +922,11 @@ export const projects = pgTable("projects", {
   /** 0-based index of the phase currently being worked. */
   current_phase: integer("current_phase").notNull().default(0),
   created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
+  // Team Room: the full project can be assigned to a team member — it then shows
+  // in their portal, where they approve its deliverables (scoped to assignment).
+  // These point to team_members (app-enforced, no DB FK); null = owner-run.
+  assigned_member_id: uuid("assigned_member_id"),
+  assigned_manager_id: uuid("assigned_manager_id"),
   created_at: createdAt,
   updated_at: updatedAt,
 });

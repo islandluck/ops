@@ -383,31 +383,59 @@ export async function deleteHumanProject(workspaceId: string, id: string): Promi
 }
 
 /**
- * Project an AI project into the team plane through the sanitized gate: copies
- * ONLY the title + summary/goal (never the plan, rationale, or agent context) plus
- * a deadline the owner sets. Owner-gated at the action layer.
+ * Assign a FULL AI project to a team member. The real project — its plan, phases,
+ * and agent execution — stays intact; it just gains an assignee and surfaces in
+ * that member's portal, where they approve its deliverables (scoped to the
+ * assignment). Pass member_id null to unassign. Owner-gated at the action layer.
  */
-export async function handoffAiProjectToHumans(
+export async function assignProjectToMember(
   workspaceId: string,
-  aiProjectId: string,
-  opts: { lead_member_id?: string | null; manager_member_id?: string | null; deadline?: string | null },
-): Promise<{ ok: true; project: HumanProject } | { ok: false; error: string }> {
+  projectId: string,
+  opts: { member_id: string | null; manager_id?: string | null },
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const [ai] = await db
-    .select({ title: projects.title, goal: projects.goal, summary: projects.summary })
+    .select({ id: projects.id })
     .from(projects)
-    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, aiProjectId)))
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
     .limit(1);
   if (!ai) return { ok: false, error: "That project no longer exists." };
-  // Sanitized projection — the WHAT, never the how/why. Only title + summary cross.
-  return createHumanProject(workspaceId, {
-    title: (ai.title || ai.goal || "Project").slice(0, 200),
-    summary: (ai.summary || ai.goal || "").slice(0, 4000),
-    lead_member_id: opts.lead_member_id ?? null,
-    manager_member_id: opts.manager_member_id ?? null,
-    deadline: opts.deadline ?? null,
-    source: "ai_handoff",
-    source_project_id: aiProjectId,
-  });
+  if (opts.member_id) {
+    const [m] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, opts.member_id)))
+      .limit(1);
+    if (!m) return { ok: false, error: "That team member no longer exists." };
+  }
+  await db
+    .update(projects)
+    .set({
+      assigned_member_id: opts.member_id || null,
+      assigned_manager_id: opts.manager_id || null,
+      updated_at: new Date(),
+    })
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)));
+  return { ok: true };
+}
+
+/** True if the AI project `projectId` is assigned to the member behind `userId`. */
+export async function isProjectAssignedToMember(
+  workspaceId: string,
+  projectId: string,
+  userId: string,
+): Promise<boolean> {
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!me) return false;
+  const [p] = await db
+    .select({ assigned: projects.assigned_member_id })
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
+    .limit(1);
+  return !!p && p.assigned === me.id;
 }
 
 /**

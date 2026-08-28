@@ -3,14 +3,22 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityEvents, agents, pages, projects, taskAssets, tasks } from "@/lib/db/schema";
+import { activityEvents, agents, pages, projects, taskAssets, tasks, teamMembers } from "@/lib/db/schema";
 import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import { planProjectWithClaude } from "@/lib/ai/project";
 import { generateAndSavePage } from "@/lib/pages";
 import { runTaskWithAgent } from "./run";
 import { materializeGrowthPhase, snapshotFollowers } from "./growth";
-import type { Category, Project, ProjectPlan, ProjectStatus, ProjectStep } from "@/lib/types";
+import type {
+  Category,
+  MemberProjectDetail,
+  MemberProjectTask,
+  Project,
+  ProjectPlan,
+  ProjectStatus,
+  ProjectStep,
+} from "@/lib/types";
 
 /**
  * Project orchestration — the Manager/Executive engine. A leadership agent turns
@@ -40,6 +48,8 @@ function toProject(row: ProjectRow, progress?: { total: number; done: number }):
     plan: row.plan,
     current_phase: row.current_phase,
     created_by_type: row.created_by_type,
+    assigned_member_id: row.assigned_member_id ?? null,
+    assigned_manager_id: row.assigned_manager_id ?? null,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
     progress,
@@ -673,4 +683,103 @@ export async function getProject(workspaceId: string, projectId: string): Promis
     .limit(1);
   if (!r) return null;
   return toProject(r, await computeProgress(r));
+}
+
+/* ---------------- assigned projects (team member portal) ------------------ */
+
+/** Resolve the team_member id behind a user in this workspace (null if none). */
+async function memberIdForUser(workspaceId: string, userId: string): Promise<string | null> {
+  const [m] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  return m?.id ?? null;
+}
+
+/** The full AI projects assigned to the member behind `userId` (with progress). */
+export async function listAssignedProjects(workspaceId: string, userId: string): Promise<Project[]> {
+  const memberId = await memberIdForUser(workspaceId, userId);
+  if (!memberId) return [];
+  const rows = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.assigned_member_id, memberId)))
+    .orderBy(desc(projects.created_at));
+  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
+}
+
+/** An assigned project + its tasks/deliverables — ONLY if it's assigned to this member. */
+export async function getMemberProjectDetail(
+  workspaceId: string,
+  userId: string,
+  projectId: string,
+): Promise<MemberProjectDetail | null> {
+  const memberId = await memberIdForUser(workspaceId, userId);
+  if (!memberId) return null;
+  const [r] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, projectId)))
+    .limit(1);
+  if (!r || r.assigned_member_id !== memberId) return null;
+  const project = toProject(r, await computeProgress(r));
+  const taskRows = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.project_id, projectId), eq(tasks.archived, false)))
+    .orderBy(asc(tasks.project_phase), asc(tasks.created_at));
+  const ids = taskRows.map((t) => t.id);
+  // task_assets has no workspace_id — it's scoped through its task (loaded ws-scoped above).
+  const assetRows = ids.length
+    ? await db.select().from(taskAssets).where(inArray(taskAssets.task_id, ids)) // tenant-scope-exempt: no ws column; task ids are ws-scoped
+    : [];
+  const firstAssetByTask = new Map<string, (typeof assetRows)[number]>();
+  for (const a of assetRows) if (!firstAssetByTask.has(a.task_id)) firstAssetByTask.set(a.task_id, a);
+  const memberTasks: MemberProjectTask[] = taskRows.map((t) => {
+    const a = firstAssetByTask.get(t.id);
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      category: t.category,
+      status: t.status,
+      approval_status: t.approval_status,
+      execution_status: t.execution_status,
+      requires_approval: t.requires_approval,
+      project_phase: t.project_phase ?? null,
+      step_kind: t.project_step_kind ?? null,
+      deliverable: a ? { id: a.id, title: a.title, content: a.content } : null,
+    };
+  });
+  return { project, tasks: memberTasks };
+}
+
+/** True if the task belongs to a project assigned to the member behind `userId`. */
+export async function memberOwnsTask(workspaceId: string, userId: string, taskId: string): Promise<boolean> {
+  const memberId = await memberIdForUser(workspaceId, userId);
+  if (!memberId) return false;
+  const [t] = await db
+    .select({ project_id: tasks.project_id })
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.id, taskId)))
+    .limit(1);
+  if (!t?.project_id) return false;
+  const [p] = await db
+    .select({ assigned: projects.assigned_member_id })
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, t.project_id)))
+    .limit(1);
+  return !!p && p.assigned === memberId;
+}
+
+/** True if the deliverable asset belongs to a task in a project assigned to the member. */
+export async function memberOwnsAsset(workspaceId: string, userId: string, assetId: string): Promise<boolean> {
+  const [a] = await db
+    .select({ task_id: taskAssets.task_id })
+    .from(taskAssets)
+    .where(eq(taskAssets.id, assetId)) // tenant-scope-exempt: no ws column; delegates to memberOwnsTask (ws-scoped)
+    .limit(1);
+  if (!a) return false;
+  return memberOwnsTask(workspaceId, userId, a.task_id);
 }

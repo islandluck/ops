@@ -1,14 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, CheckCircle2, FolderKanban, Loader2, Plus, Users } from "lucide-react";
+import { CalendarClock, CheckCircle2, ChevronRight, FolderKanban, Loader2, Plus, Sparkles, Users } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
-import { createDelegatedTaskAction, getPortalDataAction, updateMyAssignmentStatusAction } from "@/app/actions";
-import type { AssignmentStatus, HumanProject, TeamAssignment, TeamMember } from "@/lib/types";
+import {
+  createDelegatedTaskAction,
+  getMyAssignedProjectsAction,
+  getMyProjectDetailAction,
+  getPortalDataAction,
+  updateMyAssignmentStatusAction,
+} from "@/app/actions";
+import type {
+  AssignmentStatus,
+  HumanProject,
+  MemberProjectDetail,
+  Project,
+  TeamAssignment,
+  TeamMember,
+} from "@/lib/types";
+import { AssignedProjectView } from "./assigned-project";
 
 const STATUSES: { key: AssignmentStatus; label: string }[] = [
   { key: "assigned", label: "To do" },
@@ -137,21 +151,46 @@ export default function PortalPage() {
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
   const [reports, setReports] = useState<TeamMember[]>([]);
   const [projects, setProjects] = useState<HumanProject[]>([]);
+  const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [delegateOpen, setDelegateOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MemberProjectDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   async function load() {
-    const d = await getPortalDataAction();
+    const [d, ap] = await Promise.all([getPortalDataAction(), getMyAssignedProjectsAction()]);
     setMember(d.member);
     setAssignments(d.assignments);
     setReports(d.reports);
     setProjects(d.projects);
+    setAssignedProjects(ap);
     setLoading(false);
   }
 
   useEffect(() => {
     load();
   }, []);
+
+  async function openProject(id: string) {
+    setSelectedId(id);
+    setDetailLoading(true);
+    setDetail(await getMyProjectDetailAction(id));
+    setDetailLoading(false);
+  }
+
+  async function refreshDetail() {
+    if (!selectedId) return;
+    const [d, ap] = await Promise.all([getMyProjectDetailAction(selectedId), getMyAssignedProjectsAction()]);
+    setDetail(d);
+    setAssignedProjects(ap);
+  }
+
+  function backToList() {
+    setSelectedId(null);
+    setDetail(null);
+    void load();
+  }
 
   async function setStatus(id: string, status: AssignmentStatus) {
     setAssignments((prev) => prev.map((a) => (a.id === id ? { ...a, status } : a)));
@@ -162,6 +201,31 @@ export default function PortalPage() {
     return (
       <div className="flex justify-center py-20 text-muted-foreground">
         <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+
+  // Detail view: a member opened one of their assigned projects to run it.
+  if (selectedId) {
+    return (
+      <div className="flex flex-col gap-4">
+        {detailLoading ? (
+          <div className="flex justify-center py-20 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : detail ? (
+          <AssignedProjectView detail={detail} onBack={backToList} onRefresh={refreshDetail} />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={backToList}
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+            >
+              ← Back to projects
+            </button>
+            <Card className="p-4 text-sm text-muted-foreground">This project isn&apos;t available.</Card>
+          </div>
+        )}
       </div>
     );
   }
@@ -186,6 +250,44 @@ export default function PortalPage() {
           {member?.manager_name ? ` · Reports to ${member.manager_name}` : ""}
         </p>
       </div>
+
+      {assignedProjects.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1.5 text-sm font-semibold">
+            <Sparkles className="h-4 w-4 text-muted-foreground" /> Assigned projects
+          </div>
+          <div className="flex flex-col gap-2">
+            {assignedProjects.map((p) => {
+              const prog = p.progress ?? { total: 0, done: 0 };
+              const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => openProject(p.id)}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-card p-3 text-left transition hover:border-primary/40"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{p.title}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[10px] tabular-nums text-muted-foreground">
+                        {prog.done}/{prog.total}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {p.status === "planning" ? "Plan review" : p.status === "done" ? "Complete" : p.status}
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">Open a project to draft, review, and approve its deliverables.</p>
+        </div>
+      )}
 
       {projects.length > 0 && (
         <div className="flex flex-col gap-2">
