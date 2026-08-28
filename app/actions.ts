@@ -160,18 +160,25 @@ import {
 } from "@/lib/agents/ads";
 import {
   createAssignment,
+  createDelegatedTask,
+  createHumanProject,
   createTeamMember,
   deleteAssignment,
+  deleteHumanProject,
   deleteTeamMember,
   getPortalData,
   getWorkspaceRole,
+  handoffAiProjectToHumans,
   listAssignments,
+  listHumanProjects,
   listTeamMembers,
   setMemberOrg,
   updateAssignment,
+  updateHumanProject,
   updateMyAssignmentStatus,
   updateTeamMember,
   type AssignmentInput,
+  type HumanProjectInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
 import {
@@ -2957,6 +2964,99 @@ export async function setTeamMemberOrgAction(
   }
 }
 
+// ── Human projects + delegation (Phase 2) ────────────────────────────────────
+
+export async function listHumanProjectsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listHumanProjects(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createHumanProjectAction(input: HumanProjectInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false as const, error: "Only owners and managers can create projects." };
+  }
+  try {
+    return await createHumanProject(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the project." };
+  }
+}
+
+export async function updateHumanProjectAction(id: string, patch: Partial<HumanProjectInput>) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false as const, error: "Only owners and managers can edit projects." };
+  }
+  try {
+    return await updateHumanProject(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the project." };
+  }
+}
+
+export async function deleteHumanProjectAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false as const, error: "Only owners and managers can delete projects." };
+  }
+  try {
+    return await deleteHumanProject(ws, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the project." };
+  }
+}
+
+/** Hand an AI project to the team through the sanitized gate. Owner-only. */
+export async function handoffAiProjectToHumansAction(
+  aiProjectId: string,
+  opts: { lead_member_id?: string | null; manager_member_id?: string | null; deadline?: string | null },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner") return { ok: false as const, error: "Only the owner can hand off projects." };
+  try {
+    return await handoffAiProjectToHumans(ws, aiProjectId, opts);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't hand off the project." };
+  }
+}
+
+/** A manager/owner delegates a task to someone they manage. Permission enforced inside. */
+export async function createDelegatedTaskAction(input: AssignmentInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createDelegatedTask(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the task." };
+  }
+}
+
 export async function listAssignmentsAction() {
   const user = await getCurrentUser();
   if (!user) return [];
@@ -3067,13 +3167,13 @@ export async function acceptInviteAction(token: string) {
 
 export async function getPortalDataAction() {
   const user = await getCurrentUser();
-  if (!user) return { member: null, assignments: [], reports: [] };
+  if (!user) return { member: null, assignments: [], reports: [], projects: [] };
   const ws = await workspaceIdForUser(user.id);
-  if (!ws) return { member: null, assignments: [], reports: [] };
+  if (!ws) return { member: null, assignments: [], reports: [], projects: [] };
   try {
     return await getPortalData(ws, user.id);
   } catch {
-    return { member: null, assignments: [], reports: [] };
+    return { member: null, assignments: [], reports: [], projects: [] };
   }
 }
 

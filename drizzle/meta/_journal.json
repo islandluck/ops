@@ -337,6 +337,13 @@
       "when": 1787874315807,
       "tag": "0047_flowery_baron_zemo",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1787881091404,
+      "tag": "0048_living_dexter_bennett",
+      "breakpoints": true
     }
   ]
 }

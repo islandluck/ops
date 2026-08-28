@@ -25,7 +25,7 @@ import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Drawer } from "@/components/ui/drawer";
-import { Input, Textarea } from "@/components/ui/input";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { CATEGORY_META } from "@/lib/constants";
 import { useStore } from "@/lib/store";
@@ -40,10 +40,12 @@ import {
   getCampaignDataAction,
   getProjectPacketAction,
   getProjectsAction,
+  handoffAiProjectToHumansAction,
+  listTeamMembersAction,
 } from "@/app/actions";
 import { escapeHtml, markdownToHtml } from "@/lib/content/format";
 import type { ProjectPacket } from "@/lib/agents/project";
-import type { CampaignData, CampaignPost, Category, Project, ProjectStatus } from "@/lib/types";
+import type { CampaignData, CampaignPost, Category, Project, ProjectStatus, TeamMember } from "@/lib/types";
 
 const STATUS_META: Record<ProjectStatus, { label: string; cls: string; dot: string }> = {
   planning: { label: "Plan ready to review", cls: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" },
@@ -537,6 +539,111 @@ function NewCampaignDrawer({
   );
 }
 
+/** Owner action: project an AI project into the team plane through the sanitized
+ *  gate. Only the title/summary/deadline cross — never the plan or agent context. */
+function HandoffToTeamPanel({ projectId }: { projectId: string }) {
+  const [open, setOpen] = useState(false);
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [lead, setLead] = useState("");
+  const [manager, setManager] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState<string | null>(null);
+
+  const managers = members.filter((m) => m.team_role === "manager");
+
+  async function openPanel() {
+    setOpen(true);
+    setError("");
+    if (!members.length) setMembers(await listTeamMembersAction());
+  }
+
+  async function submit() {
+    setBusy(true);
+    setError("");
+    const res = await handoffAiProjectToHumansAction(projectId, {
+      lead_member_id: lead || null,
+      manager_member_id: manager || null,
+      deadline: deadline || null,
+    });
+    setBusy(false);
+    if ("ok" in res && res.ok) {
+      const leadName = members.find((m) => m.id === lead)?.name ?? "your team";
+      setDone(`Handed off to ${leadName}. It's now a human project in Team.`);
+      setOpen(false);
+    } else {
+      setError("error" in res ? res.error : "Couldn't hand off the project.");
+    }
+  }
+
+  if (done) {
+    return (
+      <p className="mb-2 inline-flex items-center gap-1.5 text-[12px] font-medium text-emerald-700">
+        <Users className="h-3.5 w-3.5" /> {done}
+      </p>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div className="mb-2">
+        <Button size="sm" variant="outline" onClick={openPanel}>
+          <Users className="h-3.5 w-3.5" /> Hand off to team
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-2 rounded-xl border border-border p-3">
+      <p className="text-[12px] font-medium">Hand off to your team</p>
+      <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+        Creates a human project from this — only the title, summary, and deadline cross over. The plan and internal
+        context stay here.
+      </p>
+      <div className="mt-2.5 grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[11px] font-medium text-muted-foreground">Lead (owns it)</label>
+          <Select value={lead} onChange={(e) => setLead(e.target.value)}>
+            <option value="">Owner (you)</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-muted-foreground">Manager</label>
+          <Select value={manager} onChange={(e) => setManager(e.target.value)}>
+            <option value="">— none —</option>
+            {managers.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+      <div className="mt-2 w-40">
+        <label className="text-[11px] font-medium text-muted-foreground">Deadline</label>
+        <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+      </div>
+      {error && <p className="mt-2 text-[12px] text-destructive">{error}</p>}
+      <div className="mt-2.5 flex items-center gap-2">
+        <Button size="sm" variant="success" disabled={busy} onClick={submit}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Users className="h-3.5 w-3.5" />}
+          Hand off
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ProjectDrawer({
   project,
   building,
@@ -753,6 +860,7 @@ function ProjectDrawer({
               : "Building the next phase — its tasks will appear on the board in a few seconds."}
           </p>
         )}
+        {!isGrowth && project.status !== "cancelled" && <HandoffToTeamPanel projectId={project.id} />}
         {!isGrowth && (project.status === "active" || project.status === "done") && (
           <div className="mb-2">
             <Button size="sm" variant="outline" disabled={exporting} onClick={exportPacket}>

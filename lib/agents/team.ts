@@ -3,8 +3,16 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { teamAssignments, teamMembers, workspaceMembers } from "@/lib/db/schema";
-import type { AssignmentStatus, TeamAssignment, TeamMember, TeamRole, WorkspaceRole } from "@/lib/types";
+import { humanProjects, projects, teamAssignments, teamMembers, workspaceMembers } from "@/lib/db/schema";
+import type {
+  AssignmentStatus,
+  HumanProject,
+  HumanProjectStatus,
+  TeamAssignment,
+  TeamMember,
+  TeamRole,
+  WorkspaceRole,
+} from "@/lib/types";
 
 /**
  * Team Room engine (Slice 1 — owner side). Roster + profiles + handoffs, plus a
@@ -216,9 +224,219 @@ export async function getDirectReports(workspaceId: string, managerMemberId: str
   return rows.map((r) => toMember(r));
 }
 
+/**
+ * Can `actorUserId` assign work to `targetMemberId`? Owner → anyone; a manager →
+ * their own direct reports; a contributor → no one.
+ */
+export async function canDelegateTo(
+  workspaceId: string,
+  actorUserId: string,
+  targetMemberId: string,
+): Promise<boolean> {
+  const role = await getWorkspaceRole(workspaceId, actorUserId);
+  if (role === "owner") return true;
+  if (role !== "manager") return false;
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, actorUserId)))
+    .limit(1);
+  if (!me) return false;
+  const [target] = await db
+    .select({ manager_id: teamMembers.manager_id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, targetMemberId)))
+    .limit(1);
+  return !!target && target.manager_id === me.id;
+}
+
+// ── Human projects + delegation (Phase 2) ────────────────────────────────────
+
+function toHumanProject(
+  r: typeof humanProjects.$inferSelect,
+  names: { lead: string | null; manager: string | null },
+  counts: { open: number; total: number },
+): HumanProject {
+  return {
+    id: r.id,
+    title: r.title,
+    summary: r.summary,
+    status: r.status as HumanProjectStatus,
+    deadline: r.deadline ? new Date(r.deadline).toISOString() : null,
+    lead_member_id: r.lead_member_id ?? null,
+    lead_name: names.lead,
+    manager_member_id: r.manager_member_id ?? null,
+    manager_name: names.manager,
+    source: (r.source as HumanProject["source"]) ?? "manual",
+    source_project_id: r.source_project_id ?? null,
+    open_tasks: counts.open,
+    total_tasks: counts.total,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listHumanProjects(workspaceId: string): Promise<HumanProject[]> {
+  const rows = await db
+    .select()
+    .from(humanProjects)
+    .where(eq(humanProjects.workspace_id, workspaceId))
+    .orderBy(desc(humanProjects.created_at));
+  if (!rows.length) return [];
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  // Task counts per project (open vs total), computed in one pass.
+  const taskRows = await db
+    .select({ project_id: teamAssignments.project_id, status: teamAssignments.status })
+    .from(teamAssignments)
+    .where(eq(teamAssignments.workspace_id, workspaceId));
+  const counts = new Map<string, { open: number; total: number }>();
+  for (const t of taskRows) {
+    if (!t.project_id) continue;
+    const c = counts.get(t.project_id) ?? { open: 0, total: 0 };
+    c.total += 1;
+    if (t.status !== "done") c.open += 1;
+    counts.set(t.project_id, c);
+  }
+  return rows.map((r) =>
+    toHumanProject(
+      r,
+      {
+        lead: r.lead_member_id ? nameById.get(r.lead_member_id) ?? null : null,
+        manager: r.manager_member_id ? nameById.get(r.manager_member_id) ?? null : null,
+      },
+      counts.get(r.id) ?? { open: 0, total: 0 },
+    ),
+  );
+}
+
+export interface HumanProjectInput {
+  title: string;
+  summary?: string;
+  status?: HumanProjectStatus;
+  deadline?: string | null;
+  lead_member_id?: string | null;
+  manager_member_id?: string | null;
+  source?: HumanProject["source"];
+  source_project_id?: string | null;
+}
+
+export async function createHumanProject(
+  workspaceId: string,
+  input: HumanProjectInput,
+): Promise<{ ok: true; project: HumanProject } | { ok: false; error: string }> {
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: "Give the project a title." };
+  const now = new Date();
+  const [row] = await db
+    .insert(humanProjects)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      title: title.slice(0, 200),
+      summary: (input.summary ?? "").slice(0, 4000),
+      status: input.status ?? "active",
+      deadline: input.deadline ? new Date(input.deadline) : null,
+      lead_member_id: input.lead_member_id || null,
+      manager_member_id: input.manager_member_id || null,
+      source: input.source ?? "manual",
+      source_project_id: input.source_project_id || null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, project: toHumanProject(row, { lead: null, manager: null }, { open: 0, total: 0 }) };
+}
+
+export async function updateHumanProject(
+  workspaceId: string,
+  id: string,
+  patch: Partial<HumanProjectInput>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (typeof patch.title === "string") {
+    if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
+    set.title = patch.title.trim().slice(0, 200);
+  }
+  if (typeof patch.summary === "string") set.summary = patch.summary.slice(0, 4000);
+  if (typeof patch.status === "string") set.status = patch.status;
+  if (patch.deadline !== undefined) set.deadline = patch.deadline ? new Date(patch.deadline) : null;
+  if (patch.lead_member_id !== undefined) set.lead_member_id = patch.lead_member_id || null;
+  if (patch.manager_member_id !== undefined) set.manager_member_id = patch.manager_member_id || null;
+  await db
+    .update(humanProjects)
+    .set(set)
+    .where(and(eq(humanProjects.workspace_id, workspaceId), eq(humanProjects.id, id)));
+  return { ok: true };
+}
+
+export async function deleteHumanProject(workspaceId: string, id: string): Promise<{ ok: true }> {
+  // Detach its tasks (they survive as standalone), then delete the project.
+  await db
+    .update(teamAssignments)
+    .set({ project_id: null, updated_at: new Date() })
+    .where(and(eq(teamAssignments.workspace_id, workspaceId), eq(teamAssignments.project_id, id)));
+  await db.delete(humanProjects).where(and(eq(humanProjects.workspace_id, workspaceId), eq(humanProjects.id, id)));
+  return { ok: true };
+}
+
+/**
+ * Project an AI project into the team plane through the sanitized gate: copies
+ * ONLY the title + summary/goal (never the plan, rationale, or agent context) plus
+ * a deadline the owner sets. Owner-gated at the action layer.
+ */
+export async function handoffAiProjectToHumans(
+  workspaceId: string,
+  aiProjectId: string,
+  opts: { lead_member_id?: string | null; manager_member_id?: string | null; deadline?: string | null },
+): Promise<{ ok: true; project: HumanProject } | { ok: false; error: string }> {
+  const [ai] = await db
+    .select({ title: projects.title, goal: projects.goal, summary: projects.summary })
+    .from(projects)
+    .where(and(eq(projects.workspace_id, workspaceId), eq(projects.id, aiProjectId)))
+    .limit(1);
+  if (!ai) return { ok: false, error: "That project no longer exists." };
+  // Sanitized projection — the WHAT, never the how/why. Only title + summary cross.
+  return createHumanProject(workspaceId, {
+    title: (ai.title || ai.goal || "Project").slice(0, 200),
+    summary: (ai.summary || ai.goal || "").slice(0, 4000),
+    lead_member_id: opts.lead_member_id ?? null,
+    manager_member_id: opts.manager_member_id ?? null,
+    deadline: opts.deadline ?? null,
+    source: "ai_handoff",
+    source_project_id: aiProjectId,
+  });
+}
+
+/**
+ * A manager (or the owner) creates a task for someone they're allowed to delegate
+ * to, recording the delegator. Enforces canDelegateTo.
+ */
+export async function createDelegatedTask(
+  workspaceId: string,
+  actorUserId: string,
+  input: AssignmentInput,
+): Promise<{ ok: true; assignment: TeamAssignment } | { ok: false; error: string }> {
+  if (!input.member_id) return { ok: false, error: "Pick who to assign it to." };
+  const allowed = await canDelegateTo(workspaceId, actorUserId, input.member_id);
+  if (!allowed) return { ok: false, error: "You can only delegate to your direct reports." };
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, actorUserId)))
+    .limit(1);
+  return createAssignment(workspaceId, { ...input, created_by_member_id: me?.id ?? null });
+}
+
 // ── Assignments (handoffs) ──────────────────────────────────────────────────
 
-function toAssignment(r: typeof teamAssignments.$inferSelect, memberName: string): TeamAssignment {
+function toAssignment(
+  r: typeof teamAssignments.$inferSelect,
+  memberName: string,
+  projectTitle: string | null = null,
+): TeamAssignment {
   return {
     id: r.id,
     member_id: r.member_id,
@@ -229,18 +447,22 @@ function toAssignment(r: typeof teamAssignments.$inferSelect, memberName: string
     handoff_note: r.handoff_note,
     status: r.status as AssignmentStatus,
     deadline: r.deadline ? new Date(r.deadline).toISOString() : null,
+    project_id: r.project_id ?? null,
+    project_title: projectTitle,
+    created_by_member_id: r.created_by_member_id ?? null,
     created_at: new Date(r.created_at).toISOString(),
   };
 }
 
 export async function listAssignments(workspaceId: string): Promise<TeamAssignment[]> {
   const rows = await db
-    .select({ a: teamAssignments, memberName: teamMembers.name })
+    .select({ a: teamAssignments, memberName: teamMembers.name, projectTitle: humanProjects.title })
     .from(teamAssignments)
     .leftJoin(teamMembers, eq(teamAssignments.member_id, teamMembers.id))
+    .leftJoin(humanProjects, eq(teamAssignments.project_id, humanProjects.id))
     .where(eq(teamAssignments.workspace_id, workspaceId))
     .orderBy(desc(teamAssignments.created_at));
-  return rows.map((r) => toAssignment(r.a, r.memberName ?? "—"));
+  return rows.map((r) => toAssignment(r.a, r.memberName ?? "—", r.projectTitle ?? null));
 }
 
 export interface AssignmentInput {
@@ -250,6 +472,9 @@ export interface AssignmentInput {
   deadline?: string | null;
   ref_type?: TeamAssignment["ref_type"];
   ref_id?: string | null;
+  /** Phase 2: attach to a human project + record the delegator. */
+  project_id?: string | null;
+  created_by_member_id?: string | null;
 }
 
 export async function createAssignment(
@@ -281,6 +506,8 @@ export async function createAssignment(
       handoff_note: (input.handoff_note ?? "").slice(0, 4000),
       status: "assigned",
       deadline: input.deadline ? new Date(input.deadline) : null,
+      project_id: input.project_id ?? null,
+      created_by_member_id: input.created_by_member_id ?? null,
       created_at: now,
       updated_at: now,
     })
@@ -321,13 +548,18 @@ export async function deleteAssignment(workspaceId: string, id: string): Promise
 export async function getPortalData(
   workspaceId: string,
   userId: string,
-): Promise<{ member: TeamMember | null; assignments: TeamAssignment[]; reports: TeamMember[] }> {
+): Promise<{
+  member: TeamMember | null;
+  assignments: TeamAssignment[];
+  reports: TeamMember[];
+  projects: HumanProject[];
+}> {
   const [row] = await db
     .select()
     .from(teamMembers)
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
-  if (!row) return { member: null, assignments: [], reports: [] };
+  if (!row) return { member: null, assignments: [], reports: [], projects: [] };
   const assignments = await db
     .select()
     .from(teamAssignments)
@@ -343,12 +575,19 @@ export async function getPortalData(
       .limit(1);
     managerName = mgr?.name ?? null;
   }
-  // A manager also sees their direct reports (read-only in Phase 1; delegation lands in Phase 2).
+  // A manager also sees their direct reports (for delegation).
   const reports = row.team_role === "manager" ? await getDirectReports(workspaceId, row.id) : [];
+  // Human projects this member leads or manages, + a title lookup for their tasks.
+  const allProjects = await listHumanProjects(workspaceId);
+  const myProjects = allProjects.filter((p) => p.lead_member_id === row.id || p.manager_member_id === row.id);
+  const projectTitleById = new Map(allProjects.map((p) => [p.id, p.title]));
   return {
     member: toMember(row, managerName),
-    assignments: assignments.map((a) => toAssignment(a, row.name)),
+    assignments: assignments.map((a) =>
+      toAssignment(a, row.name, a.project_id ? projectTitleById.get(a.project_id) ?? null : null),
+    ),
     reports,
+    projects: myProjects,
   };
 }
 

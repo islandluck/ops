@@ -217,7 +217,7 @@ export interface TeamMember {
 export type AssignmentStatus = "assigned" | "in_progress" | "blocked" | "done";
 export type AssignmentRefType = "project" | "task" | "note";
 
-/** A handoff of work to a team member (optionally linked to a project/task/note). */
+/** A handoff/task assigned to a team member (optionally inside a human project). */
 export interface TeamAssignment {
   id: string;
   member_id: string;
@@ -229,6 +229,35 @@ export interface TeamAssignment {
   handoff_note: string;
   status: AssignmentStatus;
   deadline: string | null;
+  /** Phase 2: the human project this task belongs to (null = standalone). */
+  project_id: string | null;
+  project_title: string | null;
+  /** Who delegated it (a manager's member id; null = owner-created). */
+  created_by_member_id: string | null;
+  created_at: string;
+}
+
+export type HumanProjectStatus = "active" | "on_hold" | "done";
+export type HumanProjectSource = "manual" | "ai_handoff";
+
+/** A human-owned project in the team plane (manual, or handed off from an AI project). */
+export interface HumanProject {
+  id: string;
+  title: string;
+  summary: string;
+  status: HumanProjectStatus;
+  deadline: string | null;
+  /** The human who owns/drives it (null = owner-led). */
+  lead_member_id: string | null;
+  lead_name: string | null;
+  /** The manager overseeing it. */
+  manager_member_id: string | null;
+  manager_name: string | null;
+  source: HumanProjectSource;
+  /** The AI project it was projected from (sanitized), if any. */
+  source_project_id: string | null;
+  open_tasks: number;
+  total_tasks: number;
   created_at: string;
 }
 

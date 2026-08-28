@@ -703,6 +703,10 @@ export const teamAssignments = pgTable(
     handoff_note: text("handoff_note").notNull().default(""),
     status: text("status").notNull().default("assigned"),
     deadline: timestamp("deadline", { withTimezone: true }),
+    // Phase 2: optional link to a human_projects container (null = standalone) and
+    // who delegated it (a manager's member id; null = owner-created).
+    project_id: uuid("project_id"),
+    created_by_member_id: uuid("created_by_member_id"),
     created_at: createdAt,
     updated_at: updatedAt,
   },
@@ -710,6 +714,34 @@ export const teamAssignments = pgTable(
     index("team_assignments_ws_idx").on(t.workspace_id, t.created_at),
     index("team_assignments_member_idx").on(t.member_id),
   ],
+);
+
+/**
+ * Team Room Phase 2 — a human-owned project (the team plane). Either created in
+ * the app (source "manual") or projected from an AI project through the sanitized
+ * handoff gate (source "ai_handoff", carrying only title/summary/deadline — never
+ * the AI project's plan, rationale, or agent context). lead/manager point to
+ * team_members (app-enforced, no DB FK); null lead = owner-led.
+ */
+export const humanProjects = pgTable(
+  "human_projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    summary: text("summary").notNull().default(""),
+    status: text("status").$type<"active" | "on_hold" | "done">().notNull().default("active"),
+    deadline: timestamp("deadline", { withTimezone: true }),
+    lead_member_id: uuid("lead_member_id"),
+    manager_member_id: uuid("manager_member_id"),
+    source: text("source").$type<"manual" | "ai_handoff">().notNull().default("manual"),
+    source_project_id: uuid("source_project_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("human_projects_ws_idx").on(t.workspace_id, t.created_at)],
 );
 
 /**

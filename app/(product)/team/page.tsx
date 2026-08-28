@@ -5,11 +5,13 @@ import {
   CalendarClock,
   Check,
   Copy,
+  FolderKanban,
   Link2,
   Loader2,
   Mail,
   Pencil,
   Plus,
+  Sparkles,
   Trash2,
   UserPlus,
   UsersRound,
@@ -23,18 +25,29 @@ import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
 import {
   createAssignmentAction,
+  createHumanProjectAction,
   createTeamMemberAction,
   deleteAssignmentAction,
+  deleteHumanProjectAction,
   deleteTeamMemberAction,
   inviteTeamMemberAction,
   listAssignmentsAction,
+  listHumanProjectsAction,
   listInvitesAction,
   listTeamMembersAction,
   setTeamMemberOrgAction,
   updateAssignmentAction,
+  updateHumanProjectAction,
   updateTeamMemberAction,
 } from "@/app/actions";
-import type { AssignmentStatus, TeamAssignment, TeamMember, TeamRole } from "@/lib/types";
+import type {
+  AssignmentStatus,
+  HumanProject,
+  HumanProjectStatus,
+  TeamAssignment,
+  TeamMember,
+  TeamRole,
+} from "@/lib/types";
 
 const ACCENTS = ["indigo", "sky", "emerald", "amber", "rose", "violet", "slate"] as const;
 const ACCENT_BG: Record<string, string> = {
@@ -498,12 +511,163 @@ function HandoffDialog({
   );
 }
 
+// ── Human project dialog ─────────────────────────────────────────────────────
+
+const PROJECT_STATUSES: { key: HumanProjectStatus; label: string }[] = [
+  { key: "active", label: "Active" },
+  { key: "on_hold", label: "On hold" },
+  { key: "done", label: "Done" },
+];
+const PROJECT_STATUS_LABEL: Record<HumanProjectStatus, string> = {
+  active: "Active",
+  on_hold: "On hold",
+  done: "Done",
+};
+const PROJECT_STATUS_TINT: Record<HumanProjectStatus, string> = {
+  active: "text-sky-600 dark:text-sky-400",
+  on_hold: "text-amber-600 dark:text-amber-400",
+  done: "text-success",
+};
+
+function HumanProjectDialog({
+  open,
+  project,
+  members,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  project: HumanProject | null;
+  members: TeamMember[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const managers = useMemo(() => members.filter((m) => m.team_role === "manager"), [members]);
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [status, setStatus] = useState<HumanProjectStatus>("active");
+  const [deadline, setDeadline] = useState("");
+  const [lead, setLead] = useState("");
+  const [manager, setManager] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setTitle(project?.title ?? "");
+    setSummary(project?.summary ?? "");
+    setStatus(project?.status ?? "active");
+    setDeadline(project?.deadline ? project.deadline.slice(0, 10) : "");
+    setLead(project?.lead_member_id ?? "");
+    setManager(project?.manager_member_id ?? "");
+  }, [open, project]);
+
+  async function save() {
+    if (!title.trim()) {
+      setError("Give the project a title.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const payload = {
+      title,
+      summary,
+      status,
+      deadline: deadline || null,
+      lead_member_id: lead || null,
+      manager_member_id: manager || null,
+    };
+    const r = project
+      ? await updateHumanProjectAction(project.id, payload)
+      : await createHumanProjectAction(payload);
+    setSaving(false);
+    if ("ok" in r && r.ok) {
+      onSaved();
+      onClose();
+    } else {
+      setError("error" in r ? r.error : "Couldn't save the project.");
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={project ? "Edit project" : "New project"}>
+      <div className="flex flex-col gap-3">
+        <div>
+          <Label>Title *</Label>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Q3 product launch" />
+        </div>
+        <div>
+          <Label>What it is / the goal</Label>
+          <Textarea
+            rows={3}
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            placeholder="Ship the launch: landing page, email sequence, and press outreach."
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Lead (owns it)</Label>
+            <Select value={lead} onChange={(e) => setLead(e.target.value)}>
+              <option value="">Owner (you)</option>
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label>Manager (oversees)</Label>
+            <Select value={manager} onChange={(e) => setManager(e.target.value)}>
+              <option value="">— none —</option>
+              {managers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Status</Label>
+            <Select value={status} onChange={(e) => setStatus(e.target.value as HumanProjectStatus)}>
+              {PROJECT_STATUSES.map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label>Deadline</Label>
+            <Input type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+          </div>
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="mt-1 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {project ? "Save" : "Create project"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default function TeamPage() {
-  const [view, setView] = useState<"roster" | "board">("roster");
+  const [view, setView] = useState<"roster" | "projects" | "board">("roster");
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
+  const [projects, setProjects] = useState<HumanProject[]>([]);
   const [invites, setInvites] = useState<{ id: string; member_id: string; accept_url: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -513,17 +677,29 @@ export default function TeamPage() {
     member: null,
   });
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [projectDialog, setProjectDialog] = useState<{ open: boolean; project: HumanProject | null }>({
+    open: false,
+    project: null,
+  });
 
   async function refresh() {
-    const [m, a, inv] = await Promise.all([
+    const [m, a, inv, p] = await Promise.all([
       listTeamMembersAction(),
       listAssignmentsAction(),
       listInvitesAction(),
+      listHumanProjectsAction(),
     ]);
     setMembers(m);
     setAssignments(a);
     setInvites(inv);
+    setProjects(p);
     setLoading(false);
+  }
+
+  async function removeProject(p: HumanProject) {
+    if (!confirm(`Delete "${p.title}"? Its tasks will be kept but detached from the project.`)) return;
+    await deleteHumanProjectAction(p.id);
+    refresh();
   }
 
   const inviteByMember = useMemo(() => {
@@ -585,14 +761,19 @@ export default function TeamPage() {
             <Segmented
               options={[
                 { value: "roster", label: "Roster" },
+                { value: "projects", label: "Projects" },
                 { value: "board", label: "Handoffs" },
               ]}
               value={view}
-              onChange={(v) => setView(v as "roster" | "board")}
+              onChange={(v) => setView(v as "roster" | "projects" | "board")}
             />
             {view === "roster" ? (
               <Button size="sm" onClick={() => setMemberDialog({ open: true, member: null })}>
                 <UserPlus className="h-4 w-4" /> Add member
+              </Button>
+            ) : view === "projects" ? (
+              <Button size="sm" onClick={() => setProjectDialog({ open: true, project: null })}>
+                <Plus className="h-4 w-4" /> New project
               </Button>
             ) : (
               <Button size="sm" onClick={() => setHandoffOpen(true)} disabled={!members.length}>
@@ -685,6 +866,66 @@ export default function TeamPage() {
               );
             })}
           </div>
+        ) : view === "projects" ? (
+          projects.length === 0 ? (
+            <div className="mt-10 flex flex-col items-center gap-3 text-center text-muted-foreground">
+              <FolderKanban className="h-10 w-10 opacity-40" />
+              <p className="max-w-sm text-sm">
+                Human projects are work your team owns — created here, or handed off from an AI project in Projects.
+                Assign a lead and a manager, then delegate the tasks.
+              </p>
+              <Button onClick={() => setProjectDialog({ open: true, project: null })}>
+                <Plus className="h-4 w-4" /> New project
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {projects.map((p) => (
+                <Card key={p.id} className="group flex flex-col gap-2 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-semibold">{p.title}</span>
+                        {p.source === "ai_handoff" && (
+                          <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            <Sparkles className="h-2.5 w-2.5" /> From AI
+                          </span>
+                        )}
+                      </div>
+                      <div className={cn("mt-0.5 text-[11px] font-semibold uppercase tracking-wide", PROJECT_STATUS_TINT[p.status])}>
+                        {PROJECT_STATUS_LABEL[p.status]}
+                      </div>
+                    </div>
+                    <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
+                      <Button variant="ghost" size="icon" onClick={() => setProjectDialog({ open: true, project: p })}>
+                        <Pencil className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => removeProject(p)}>
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    </div>
+                  </div>
+                  {p.summary && <p className="line-clamp-3 text-sm text-muted-foreground">{p.summary}</p>}
+                  <div className="mt-auto flex flex-col gap-1 border-t border-border pt-2 text-xs text-muted-foreground">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate">
+                        Lead: <span className="text-foreground">{p.lead_name ?? "You"}</span>
+                        {p.manager_name ? ` · Mgr: ${p.manager_name}` : ""}
+                      </span>
+                      <span className="shrink-0">
+                        {p.open_tasks}/{p.total_tasks} tasks
+                      </span>
+                    </div>
+                    {p.deadline && (
+                      <span className="inline-flex items-center gap-1">
+                        <CalendarClock className="h-3 w-3" /> Due {fmtDate(p.deadline)}
+                      </span>
+                    )}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {STATUSES.map((col) => (
@@ -749,6 +990,13 @@ export default function TeamPage() {
         onSaved={refresh}
       />
       <HandoffDialog open={handoffOpen} members={members} onClose={() => setHandoffOpen(false)} onSaved={refresh} />
+      <HumanProjectDialog
+        open={projectDialog.open}
+        project={projectDialog.project}
+        members={members}
+        onClose={() => setProjectDialog({ open: false, project: null })}
+        onSaved={refresh}
+      />
     </>
   );
 }
