@@ -386,20 +386,70 @@ const OPEN_STATUSES: AssignmentStatus[] = ["assigned", "in_progress", "blocked"]
  * A compact roster + open-handoff summary for the Executive/Boardroom, so they
  * reason about the team. Returns "" when there's no team yet.
  */
+/** "Mar 14" + days until the next occurrence of a stored birthday, or null. */
+function birthdayInfo(raw: string): { label: string; daysUntil: number } | null {
+  const m = raw.match(/(?:\d{4}-)?(\d{1,2})-(\d{1,2})/);
+  if (!m) return null;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let next = new Date(start.getFullYear(), month - 1, day);
+  if (next.getTime() < start.getTime()) next = new Date(start.getFullYear() + 1, month - 1, day);
+  const daysUntil = Math.round((next.getTime() - start.getTime()) / 86_400_000);
+  return { label: next.toLocaleDateString("en-US", { month: "short", day: "numeric" }), daysUntil };
+}
+
+/**
+ * A full roster the Executive/Boardroom read: each person's role, place in the
+ * hierarchy, skills, birthday, start date, timezone, and description — plus an
+ * upcoming-birthdays list and open handoffs. Returns "" when there's no team yet.
+ */
 export async function getTeamContext(workspaceId: string): Promise<string> {
   const members = await listTeamMembers(workspaceId);
   const active = members.filter((m) => m.status !== "inactive");
   if (!active.length) return "";
 
+  // Reverse the reporting edge so each manager can list who they manage.
+  const reportsByManager = new Map<string, string[]>();
+  for (const m of active) {
+    if (m.manager_id) reportsByManager.set(m.manager_id, [...(reportsByManager.get(m.manager_id) ?? []), m.name]);
+  }
+
   const roster = active
     .map((m) => {
-      const bits = [m.role_title && `— ${m.role_title}`, m.description && `: ${m.description}`]
-        .filter(Boolean)
-        .join(" ");
-      const skills = m.skills.length ? ` [skills: ${m.skills.join(", ")}]` : "";
-      return `- ${m.name} ${bits}${skills}`.replace(/\s+/g, " ").trim();
+      const tags: string[] = [];
+      if (m.team_role === "manager") {
+        const reps = reportsByManager.get(m.id);
+        tags.push(reps?.length ? `Manager of ${reps.join(", ")}` : "Manager");
+      }
+      if (m.manager_name) tags.push(`reports to ${m.manager_name}`);
+      const bday = m.birthday ? birthdayInfo(m.birthday) : null;
+      const facts = [
+        m.skills.length ? `Skills: ${m.skills.join(", ")}` : "",
+        bday ? `Birthday: ${bday.label}` : "",
+        m.start_date ? `Started: ${m.start_date}` : "",
+        m.timezone ? `Timezone: ${m.timezone}` : "",
+      ].filter(Boolean);
+      const head = `- ${m.name} — ${m.role_title || "—"}${tags.length ? ` (${tags.join("; ")})` : ""}`;
+      const factLine = facts.length ? `\n  ${facts.join(" · ")}` : "";
+      const about = m.description ? `\n  About: ${m.description}` : "";
+      return `${head}${factLine}${about}`;
     })
     .join("\n");
+
+  // Upcoming birthdays, soonest first — so "whose birthday is coming up?" just works.
+  const birthdays = active
+    .map((m) => ({ name: m.name, info: m.birthday ? birthdayInfo(m.birthday) : null }))
+    .filter((b): b is { name: string; info: { label: string; daysUntil: number } } => b.info !== null)
+    .sort((a, b) => a.info.daysUntil - b.info.daysUntil);
+  const bdayText = birthdays.length
+    ? "\n\nUpcoming birthdays (soonest first):\n" +
+      birthdays
+        .map((b) => `- ${b.name}: ${b.info.label} (in ${b.info.daysUntil} day${b.info.daysUntil === 1 ? "" : "s"})`)
+        .join("\n")
+    : "";
 
   const assignments = await listAssignments(workspaceId);
   const open = assignments.filter((a) => OPEN_STATUSES.includes(a.status));
@@ -414,5 +464,5 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
         .join("\n")
     : "";
 
-  return `Team (${active.length} member${active.length === 1 ? "" : "s"}):\n${roster}${openText}`.slice(0, 3000);
+  return `Team (${active.length} member${active.length === 1 ? "" : "s"}):\n${roster}${bdayText}${openText}`.slice(0, 8000);
 }

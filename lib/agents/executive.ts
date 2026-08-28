@@ -180,7 +180,7 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     brief.crm_context ? `\nLIVE CRM: ${brief.crm_context}` : "",
     brief.calendar_context ? `\nSCHEDULE: ${brief.calendar_context}` : "",
     teamContext
-      ? `\nTEAM (the people you can hand work to — factor their roles, skills, and current handoffs into any plan or delegation):\n${teamContext}`
+      ? `\nTEAM (your people — their roles, reporting lines, skills, birthdays, timezones, and open handoffs. Use this for any plan or delegation AND to answer questions about the team, including whose birthday is coming up and who reports to whom):\n${teamContext}`
       : "",
     "",
     "You have a complete, live view of the business. Ground EVERY claim in the data below — never invent numbers.",
