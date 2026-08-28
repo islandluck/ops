@@ -3,12 +3,16 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { humanProjects, projects, teamAssignments, teamMembers, workspaceMembers } from "@/lib/db/schema";
+import { humanProjects, projects, teamAssignments, teamGoals, teamMembers, workspaceMembers } from "@/lib/db/schema";
 import type {
   AssignmentStatus,
   HumanProject,
   HumanProjectStatus,
   TeamAssignment,
+  TeamGoal,
+  TeamGoalHorizon,
+  TeamGoalScope,
+  TeamGoalStatus,
   TeamMember,
   TeamRole,
   WorkspaceRole,
@@ -458,6 +462,202 @@ export async function createDelegatedTask(
   return createAssignment(workspaceId, { ...input, created_by_member_id: me?.id ?? null });
 }
 
+// ── Team goals (Phase 3) ─────────────────────────────────────────────────────
+
+function toGoal(r: typeof teamGoals.$inferSelect, memberName: string | null = null): TeamGoal {
+  return {
+    id: r.id,
+    title: r.title,
+    detail: r.detail,
+    horizon: r.horizon as TeamGoalHorizon,
+    scope: r.scope as TeamGoalScope,
+    member_id: r.member_id ?? null,
+    member_name: memberName,
+    status: r.status as TeamGoalStatus,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listTeamGoals(workspaceId: string): Promise<TeamGoal[]> {
+  const rows = await db
+    .select()
+    .from(teamGoals)
+    .where(eq(teamGoals.workspace_id, workspaceId))
+    .orderBy(desc(teamGoals.created_at));
+  if (!rows.length) return [];
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  return rows.map((r) => toGoal(r, r.member_id ? nameById.get(r.member_id) ?? null : null));
+}
+
+export interface TeamGoalInput {
+  title: string;
+  detail?: string;
+  horizon: TeamGoalHorizon;
+  scope: TeamGoalScope;
+  member_id?: string | null;
+}
+
+/**
+ * Can `userId` set/edit a goal of this scope + target? Owner: any; manager: team
+ * goals + goals for themselves or a direct report; contributor: none.
+ */
+export async function canSetGoalFor(
+  workspaceId: string,
+  userId: string,
+  scope: TeamGoalScope,
+  memberId: string | null,
+): Promise<boolean> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role === "owner") return true;
+  if (role !== "manager") return false;
+  if (scope === "team") return true;
+  if (!memberId) return false;
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!me) return false;
+  if (memberId === me.id) return true;
+  const [target] = await db
+    .select({ manager_id: teamMembers.manager_id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, memberId)))
+    .limit(1);
+  return !!target && target.manager_id === me.id;
+}
+
+export async function createTeamGoal(
+  workspaceId: string,
+  userId: string,
+  input: TeamGoalInput,
+): Promise<{ ok: true; goal: TeamGoal } | { ok: false; error: string }> {
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: "Give the goal a title." };
+  const scope: TeamGoalScope = input.scope === "individual" ? "individual" : "team";
+  const memberId = scope === "individual" ? input.member_id || null : null;
+  if (scope === "individual" && !memberId) return { ok: false, error: "Pick who the goal is for." };
+  if (!(await canSetGoalFor(workspaceId, userId, scope, memberId))) {
+    return { ok: false, error: "You can only set team goals or goals for your reports." };
+  }
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(teamGoals)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      title: title.slice(0, 300),
+      detail: (input.detail ?? "").slice(0, 2000),
+      horizon: input.horizon === "week" || input.horizon === "quarter" ? input.horizon : "month",
+      scope,
+      member_id: memberId,
+      status: "active",
+      created_by_member_id: me?.id ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, goal: toGoal(row) };
+}
+
+export async function updateTeamGoal(
+  workspaceId: string,
+  userId: string,
+  id: string,
+  patch: { title?: string; detail?: string; horizon?: TeamGoalHorizon; status?: TeamGoalStatus },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [goal] = await db
+    .select()
+    .from(teamGoals)
+    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)))
+    .limit(1);
+  if (!goal) return { ok: false, error: "That goal no longer exists." };
+  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, goal.member_id ?? null))) {
+    return { ok: false, error: "You can't edit this goal." };
+  }
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (typeof patch.title === "string") {
+    if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
+    set.title = patch.title.trim().slice(0, 300);
+  }
+  if (typeof patch.detail === "string") set.detail = patch.detail.slice(0, 2000);
+  if (patch.horizon) set.horizon = patch.horizon;
+  if (patch.status) set.status = patch.status;
+  await db.update(teamGoals).set(set).where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)));
+  return { ok: true };
+}
+
+export async function deleteTeamGoal(
+  workspaceId: string,
+  userId: string,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [goal] = await db
+    .select()
+    .from(teamGoals)
+    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)))
+    .limit(1);
+  if (!goal) return { ok: true };
+  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, goal.member_id ?? null))) {
+    return { ok: false, error: "You can't delete this goal." };
+  }
+  await db.delete(teamGoals).where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)));
+  return { ok: true };
+}
+
+/** A member marks THEIR OWN individual goal done/active (ownership enforced). */
+export async function setMyGoalStatus(
+  workspaceId: string,
+  userId: string,
+  id: string,
+  status: TeamGoalStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!me) return { ok: false, error: "No team profile found." };
+  const res = await db
+    .update(teamGoals)
+    .set({ status, updated_at: new Date() })
+    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id), eq(teamGoals.member_id, me.id)))
+    .returning({ id: teamGoals.id });
+  if (!res.length) return { ok: false, error: "That isn't one of your goals." };
+  return { ok: true };
+}
+
+/** Goals a member sees in their portal: team-wide, their own, and (managers) their reports'. */
+export async function getMyGoals(
+  workspaceId: string,
+  userId: string,
+): Promise<{ team: TeamGoal[]; mine: TeamGoal[]; reports: TeamGoal[] }> {
+  const all = await listTeamGoals(workspaceId);
+  const [me] = await db
+    .select({ id: teamMembers.id, team_role: teamMembers.team_role })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const team = all.filter((g) => g.scope === "team");
+  const mine = me ? all.filter((g) => g.scope === "individual" && g.member_id === me.id) : [];
+  let reports: TeamGoal[] = [];
+  if (me?.team_role === "manager") {
+    const reportRows = await getDirectReports(workspaceId, me.id);
+    const reportIds = new Set(reportRows.map((r) => r.id));
+    reports = all.filter((g) => g.scope === "individual" && !!g.member_id && reportIds.has(g.member_id));
+  }
+  return { team, mine, reports };
+}
+
 // ── Assignments (handoffs) ──────────────────────────────────────────────────
 
 function toAssignment(
@@ -718,6 +918,19 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
         .join("\n")
     : "";
 
+  // Active team goals (team-wide + individual), so plans ladder to them.
+  const goals = (await listTeamGoals(workspaceId)).filter((g) => g.status === "active");
+  const goalsText = goals.length
+    ? "\n\nTeam goals (active):\n" +
+      goals
+        .slice(0, 40)
+        .map(
+          (g) =>
+            `- [${g.horizon}] ${g.scope === "individual" ? g.member_name ?? "someone" : "Team"}: ${g.title}`,
+        )
+        .join("\n")
+    : "";
+
   const assignments = await listAssignments(workspaceId);
   const open = assignments.filter((a) => OPEN_STATUSES.includes(a.status));
   const openText = open.length
@@ -731,5 +944,8 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
         .join("\n")
     : "";
 
-  return `Team (${active.length} member${active.length === 1 ? "" : "s"}):\n${roster}${bdayText}${openText}`.slice(0, 8000);
+  return `Team (${active.length} member${active.length === 1 ? "" : "s"}):\n${roster}${goalsText}${bdayText}${openText}`.slice(
+    0,
+    8000,
+  );
 }

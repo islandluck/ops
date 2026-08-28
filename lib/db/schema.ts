@@ -745,6 +745,31 @@ export const humanProjects = pgTable(
 );
 
 /**
+ * Team Room Phase 3 — a team goal (team plane). Horizon week/month/quarter;
+ * scope "team" (whole team) or "individual" (member_id, app-enforced, no DB FK).
+ * Owner sets any; a manager sets team goals + goals for their direct reports.
+ */
+export const teamGoals = pgTable(
+  "team_goals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    horizon: text("horizon").$type<"week" | "month" | "quarter">().notNull().default("month"),
+    scope: text("scope").$type<"team" | "individual">().notNull().default("team"),
+    member_id: uuid("member_id"),
+    status: text("status").$type<"active" | "done">().notNull().default("active"),
+    created_by_member_id: uuid("created_by_member_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_goals_ws_idx").on(t.workspace_id)],
+);
+
+/**
  * Team Room — a pending invitation for someone to join the workspace as a member.
  * The owner enters their profile + email; a Supabase invite email is sent; on
  * accept, a workspace_members row (role=member) is created + team_members.user_id

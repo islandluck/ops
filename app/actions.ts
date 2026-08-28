@@ -162,24 +162,31 @@ import {
   createAssignment,
   createDelegatedTask,
   createHumanProject,
+  createTeamGoal,
   createTeamMember,
   deleteAssignment,
   deleteHumanProject,
+  deleteTeamGoal,
   deleteTeamMember,
   assignProjectToMember,
+  getMyGoals,
   getPortalData,
   getWorkspaceRole,
   isProjectAssignedToMember,
   listAssignments,
   listHumanProjects,
+  listTeamGoals,
   listTeamMembers,
   setMemberOrg,
+  setMyGoalStatus,
   updateAssignment,
   updateHumanProject,
   updateMyAssignmentStatus,
+  updateTeamGoal,
   updateTeamMember,
   type AssignmentInput,
   type HumanProjectInput,
+  type TeamGoalInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
 import {
@@ -3183,6 +3190,83 @@ export async function createDelegatedTaskAction(input: AssignmentInput) {
     return await createDelegatedTask(ws, user.id, input);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the task." };
+  }
+}
+
+// ── Team goals (Phase 3) ─────────────────────────────────────────────────────
+
+export async function listTeamGoalsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listTeamGoals(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function getMyGoalsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { team: [], mine: [], reports: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { team: [], mine: [], reports: [] };
+  try {
+    return await getMyGoals(ws, user.id);
+  } catch {
+    return { team: [], mine: [], reports: [] };
+  }
+}
+
+export async function createTeamGoalAction(input: TeamGoalInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createTeamGoal(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the goal." };
+  }
+}
+
+export async function updateTeamGoalAction(
+  id: string,
+  patch: { title?: string; detail?: string; horizon?: "week" | "month" | "quarter"; status?: "active" | "done" },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateTeamGoal(ws, user.id, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the goal." };
+  }
+}
+
+export async function deleteTeamGoalAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteTeamGoal(ws, user.id, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the goal." };
+  }
+}
+
+export async function setMyGoalStatusAction(id: string, status: "active" | "done") {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setMyGoalStatus(ws, user.id, id, status);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the goal." };
   }
 }
 

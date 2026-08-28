@@ -351,6 +351,13 @@
       "when": 1787886686552,
       "tag": "0049_keen_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1787898379352,
+      "tag": "0050_special_nextwave",
+      "breakpoints": true
     }
   ]
 }

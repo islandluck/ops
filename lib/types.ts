@@ -261,6 +261,24 @@ export interface HumanProject {
   created_at: string;
 }
 
+export type TeamGoalHorizon = "week" | "month" | "quarter";
+export type TeamGoalScope = "team" | "individual";
+export type TeamGoalStatus = "active" | "done";
+
+/** A team goal — team-wide or for one member, over a week/month/quarter horizon. */
+export interface TeamGoal {
+  id: string;
+  title: string;
+  detail: string;
+  horizon: TeamGoalHorizon;
+  scope: TeamGoalScope;
+  /** For scope "individual": the member it's for. */
+  member_id: string | null;
+  member_name: string | null;
+  status: TeamGoalStatus;
+  created_at: string;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */

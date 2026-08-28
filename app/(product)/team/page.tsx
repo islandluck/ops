@@ -51,6 +51,7 @@ import type {
   TeamMember,
   TeamRole,
 } from "@/lib/types";
+import { GoalsView } from "./goals-view";
 
 const ACCENTS = ["indigo", "sky", "emerald", "amber", "rose", "violet", "slate"] as const;
 const ACCENT_BG: Record<string, string> = {
@@ -761,7 +762,7 @@ function TeamHumanProjectCard({
 
 export default function TeamPage() {
   const router = useRouter();
-  const [view, setView] = useState<"roster" | "projects" | "board">("roster");
+  const [view, setView] = useState<"roster" | "projects" | "board" | "goals">("roster");
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
   const [projects, setProjects] = useState<HumanProject[]>([]);
@@ -862,10 +863,11 @@ export default function TeamPage() {
               options={[
                 { value: "roster", label: "Roster" },
                 { value: "projects", label: "Board" },
+                { value: "goals", label: "Goals" },
                 { value: "board", label: "Handoffs" },
               ]}
               value={view}
-              onChange={(v) => setView(v as "roster" | "projects" | "board")}
+              onChange={(v) => setView(v as "roster" | "projects" | "board" | "goals")}
             />
             {view === "roster" ? (
               <Button size="sm" onClick={() => setMemberDialog({ open: true, member: null })}>
@@ -875,7 +877,7 @@ export default function TeamPage() {
               <Button size="sm" onClick={() => setProjectDialog({ open: true, project: null })}>
                 <Plus className="h-4 w-4" /> New project
               </Button>
-            ) : (
+            ) : view === "goals" ? null : (
               <Button size="sm" onClick={() => setHandoffOpen(true)} disabled={!members.length}>
                 <Plus className="h-4 w-4" /> Hand off
               </Button>
@@ -888,6 +890,8 @@ export default function TeamPage() {
           <div className="flex justify-center py-16 text-muted-foreground">
             <Loader2 className="h-6 w-6 animate-spin" />
           </div>
+        ) : view === "goals" ? (
+          <GoalsView members={members} />
         ) : members.length === 0 ? (
           <div className="mt-10 flex flex-col items-center gap-3 text-center text-muted-foreground">
             <UsersRound className="h-10 w-10 opacity-40" />

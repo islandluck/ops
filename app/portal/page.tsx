@@ -23,6 +23,7 @@ import type {
   TeamMember,
 } from "@/lib/types";
 import { AssignedProjectView } from "./assigned-project";
+import { GoalsSection } from "./goals-section";
 
 const STATUSES: { key: AssignmentStatus; label: string }[] = [
   { key: "assigned", label: "To do" },
@@ -250,6 +251,8 @@ export default function PortalPage() {
           {member?.manager_name ? ` · Reports to ${member.manager_name}` : ""}
         </p>
       </div>
+
+      <GoalsSection isManager={member?.team_role === "manager"} reports={reports} />
 
       {assignedProjects.length > 0 && (
         <div className="flex flex-col gap-2">
