@@ -51,6 +51,9 @@ export const PROVIDERS: Record<ProviderKey, ProviderDef> = {
       "https://www.googleapis.com/auth/gmail.modify",
       "https://www.googleapis.com/auth/calendar.events",
       "https://www.googleapis.com/auth/spreadsheets",
+      // Team Docs: list a shared Drive folder's files (metadata + open links only,
+      // no content download). Requires reconnecting Google to grant it.
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
       "openid",
       "email",
     ],

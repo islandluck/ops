@@ -181,6 +181,11 @@ import {
   assignProjectToMember,
   getMyGoals,
   getTeamCalendar,
+  getTeamDriveFolder,
+  setTeamDriveFolder,
+  clearTeamDriveFolder,
+  browseTeamDrive,
+  type DriveBrowse,
   getPortalData,
   getWorkspaceRole,
   isProjectAssignedToMember,
@@ -3486,6 +3491,56 @@ export async function deleteTeamMeetingAction(id: string) {
     return await deleteTeamMeeting(ws, user.id, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the meeting." };
+  }
+}
+
+// ── Shared Google Drive folder (Team Docs) ───────────────────────────────────
+
+export async function browseTeamDriveAction(folderId?: string): Promise<DriveBrowse> {
+  const user = await getCurrentUser();
+  if (!user) return { connected: false, teamFolder: null, folder: null, entries: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { connected: false, teamFolder: null, folder: null, entries: [] };
+  try {
+    return await browseTeamDrive(ws, user.id, folderId);
+  } catch {
+    return { connected: false, teamFolder: null, folder: null, entries: [] };
+  }
+}
+
+export async function getTeamDriveFolderAction() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getTeamDriveFolder(ws);
+  } catch {
+    return null;
+  }
+}
+
+export async function setTeamDriveFolderAction(folderUrlOrId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setTeamDriveFolder(ws, user.id, folderUrlOrId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't set the folder." };
+  }
+}
+
+export async function clearTeamDriveFolderAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await clearTeamDriveFolder(ws, user.id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't clear the folder." };
   }
 }
 

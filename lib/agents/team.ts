@@ -15,8 +15,11 @@ import {
   teamGoals,
   teamMeetings,
   teamMembers,
+  teamSettings,
   workspaceMembers,
 } from "@/lib/db/schema";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { getDriveMeta, isWithinDriveFolder, listDriveFolder, type DriveEntry } from "@/lib/integrations/google";
 import type {
   AssignmentStatus,
   CalendarItem,
@@ -1571,4 +1574,126 @@ export async function deleteTeamMeeting(
   }
   await db.delete(teamMeetings).where(and(eq(teamMeetings.workspace_id, workspaceId), eq(teamMeetings.id, id)));
   return { ok: true };
+}
+
+// ── Team settings + shared Google Drive folder ───────────────────────────────
+
+async function getTeamSetting(workspaceId: string, key: string): Promise<string | null> {
+  const [row] = await db
+    .select({ value: teamSettings.value })
+    .from(teamSettings)
+    .where(and(eq(teamSettings.workspace_id, workspaceId), eq(teamSettings.key, key)))
+    .limit(1);
+  return row?.value ?? null;
+}
+
+async function setTeamSetting(workspaceId: string, key: string, value: string): Promise<void> {
+  const [existing] = await db
+    .select({ id: teamSettings.id })
+    .from(teamSettings)
+    .where(and(eq(teamSettings.workspace_id, workspaceId), eq(teamSettings.key, key)))
+    .limit(1);
+  if (existing) {
+    await db.update(teamSettings).set({ value, updated_at: new Date() }).where(eq(teamSettings.id, existing.id));
+  } else {
+    await db
+      .insert(teamSettings)
+      .values({ id: randomUUID(), workspace_id: workspaceId, key, value, updated_at: new Date() });
+  }
+}
+
+export async function getTeamDriveFolder(workspaceId: string): Promise<{ id: string; name: string } | null> {
+  const raw = await getTeamSetting(workspaceId, "drive_folder");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { id?: string; name?: string };
+    return parsed.id ? { id: parsed.id, name: parsed.name ?? "Team folder" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pull a Google Drive folder id out of a share link (or accept a raw id). */
+function parseDriveFolderId(input: string): string | null {
+  const s = input.trim();
+  const m = s.match(/\/folders\/([a-zA-Z0-9_-]+)/) ?? s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(s)) return s;
+  return null;
+}
+
+export async function setTeamDriveFolder(
+  workspaceId: string,
+  userId: string,
+  folderUrlOrId: string,
+): Promise<{ ok: true; folder: { id: string; name: string } } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner") return { ok: false, error: "Only the workspace owner can set the team Drive folder." };
+  const folderId = parseDriveFolderId(folderUrlOrId);
+  if (!folderId) return { ok: false, error: "Paste a Google Drive folder link." };
+  const token = await getValidAccessToken(workspaceId, "Gmail");
+  if (!token) return { ok: false, error: "Connect Google in Integrations first." };
+  try {
+    const meta = await getDriveMeta(token, folderId);
+    if (!meta.isFolder) return { ok: false, error: "That link points to a file, not a folder." };
+    await setTeamSetting(workspaceId, "drive_folder", JSON.stringify({ id: meta.id, name: meta.name }));
+    return { ok: true, folder: { id: meta.id, name: meta.name } };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't read that folder." };
+  }
+}
+
+export async function clearTeamDriveFolder(
+  workspaceId: string,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner") return { ok: false, error: "Only the owner can change this." };
+  await setTeamSetting(workspaceId, "drive_folder", "");
+  return { ok: true };
+}
+
+export interface DriveBrowse {
+  connected: boolean;
+  teamFolder: { id: string; name: string } | null;
+  folder: { id: string; name: string } | null;
+  entries: DriveEntry[];
+  error?: string;
+}
+
+/** Browse within the shared team Drive folder. A requested subfolder must be
+ *  inside the team folder's subtree; anything else falls back to the team root. */
+export async function browseTeamDrive(
+  workspaceId: string,
+  userId: string,
+  folderId?: string,
+): Promise<DriveBrowse> {
+  const teamFolder = await getTeamDriveFolder(workspaceId);
+  const token = await getValidAccessToken(workspaceId, "Gmail");
+  if (!token) return { connected: false, teamFolder, folder: null, entries: [] };
+  if (!teamFolder) return { connected: true, teamFolder: null, folder: null, entries: [] };
+  let target = teamFolder.id;
+  let targetName = teamFolder.name;
+  if (folderId && folderId !== teamFolder.id) {
+    try {
+      if (await isWithinDriveFolder(token, folderId, teamFolder.id)) {
+        target = folderId;
+        targetName = (await getDriveMeta(token, folderId)).name;
+      }
+    } catch {
+      /* fall back to the team root */
+    }
+  }
+  try {
+    const entries = await listDriveFolder(token, target);
+    return { connected: true, teamFolder, folder: { id: target, name: targetName }, entries };
+  } catch (e) {
+    return {
+      connected: true,
+      teamFolder,
+      folder: { id: target, name: targetName },
+      entries: [],
+      error: e instanceof Error ? e.message : "Couldn't list the folder.",
+    };
+  }
 }

@@ -899,6 +899,21 @@ export const teamMeetings = pgTable(
   (t) => [index("team_meetings_ws_idx").on(t.workspace_id, t.meeting_date)],
 );
 
+/** Small key/value settings for the team plane (e.g. the shared Google Drive folder). */
+export const teamSettings = pgTable(
+  "team_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    value: text("value").notNull().default(""),
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_settings_ws_idx").on(t.workspace_id, t.key)],
+);
+
 /**
  * Team Room — a pending invitation for someone to join the workspace as a member.
  * The owner enters their profile + email; a Supabase invite email is sent; on

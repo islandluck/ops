@@ -911,7 +911,7 @@ export default function TeamPage() {
         ) : view === "goals" ? (
           <GoalsView members={members} />
         ) : view === "docs" ? (
-          <DocsView canManage />
+          <DocsView canManage isOwner />
         ) : view === "chat" ? (
           <ChatView canManage />
         ) : view === "calendar" ? (

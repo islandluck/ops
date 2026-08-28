@@ -456,7 +456,7 @@ export default function PortalPage() {
             <div className="flex items-center gap-1.5 text-sm font-semibold">
               <FileText className="h-4 w-4 text-muted-foreground" /> Documents
             </div>
-            <DocsView canManage={member?.team_role === "manager"} />
+            <DocsView canManage={member?.team_role === "manager"} isOwner={false} />
           </div>
         </>
       )}

@@ -509,3 +509,86 @@ export async function getCalendarContext(workspaceId: string, tz?: string): Prom
     return hit?.text ?? "";
   }
 }
+
+/* ------------------------------- Drive ---------------------------------- */
+
+const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+
+export interface DriveEntry {
+  id: string;
+  name: string;
+  isFolder: boolean;
+  webViewLink: string;
+  mimeType: string;
+  modifiedTime: string;
+}
+
+interface DriveFileRaw {
+  id: string;
+  name: string;
+  mimeType?: string;
+  webViewLink?: string;
+  modifiedTime?: string;
+  parents?: string[];
+}
+
+/** List a Drive folder's immediate children (folders first, then files by name). */
+export async function listDriveFolder(accessToken: string, folderId: string): Promise<DriveEntry[]> {
+  const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
+  const fields = encodeURIComponent("files(id,name,mimeType,webViewLink,modifiedTime)");
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=200&orderBy=folder,name`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.status === 403) {
+    throw new Error("Google Drive access isn't granted. Reconnect Google in Integrations to enable it.");
+  }
+  const json = (await res.json()) as { files?: DriveFileRaw[]; error?: { message?: string } };
+  if (!res.ok) throw new Error(`Drive list failed: ${json.error?.message ?? res.status}`);
+  return (json.files ?? []).map((f) => ({
+    id: f.id,
+    name: f.name,
+    isFolder: f.mimeType === DRIVE_FOLDER_MIME,
+    webViewLink: f.webViewLink ?? "",
+    mimeType: f.mimeType ?? "",
+    modifiedTime: f.modifiedTime ?? "",
+  }));
+}
+
+/** A folder/file's name + parent ids (for validation + breadcrumbs). */
+export async function getDriveMeta(
+  accessToken: string,
+  fileId: string,
+): Promise<{ id: string; name: string; isFolder: boolean; parents: string[] }> {
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,parents`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (res.status === 403) throw new Error("Google Drive access isn't granted. Reconnect Google in Integrations.");
+  const json = (await res.json()) as DriveFileRaw & { error?: { message?: string } };
+  if (!res.ok) throw new Error(`Drive lookup failed: ${json.error?.message ?? res.status}`);
+  return {
+    id: json.id,
+    name: json.name,
+    isFolder: json.mimeType === DRIVE_FOLDER_MIME,
+    parents: json.parents ?? [],
+  };
+}
+
+/** True if `folderId` is `teamFolderId` or a descendant of it (bounded parent walk). */
+export async function isWithinDriveFolder(
+  accessToken: string,
+  folderId: string,
+  teamFolderId: string,
+): Promise<boolean> {
+  if (folderId === teamFolderId) return true;
+  let current = folderId;
+  for (let i = 0; i < 8; i++) {
+    const meta = await getDriveMeta(accessToken, current);
+    if (meta.parents.includes(teamFolderId)) return true;
+    if (!meta.parents.length) return false;
+    current = meta.parents[0];
+    if (current === teamFolderId) return true;
+  }
+  return false;
+}
