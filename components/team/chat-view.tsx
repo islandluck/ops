@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Hash, Loader2, Plus, Send } from "lucide-react";
+import { Hash, Loader2, Plus, Send, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
   createChatChannelAction,
+  deleteChatChannelAction,
+  deleteChatMessageAction,
   listChatChannelsAction,
   listChatMessagesAction,
+  markChannelReadAction,
   sendChatMessageAction,
 } from "@/app/actions";
 import type { ChatChannel, ChatMessage } from "@/lib/types";
@@ -21,7 +24,7 @@ function fmtTime(iso: string): string {
   }
 }
 
-/** In-platform team chat: channels + messages, kept fresh by a light 3s poll. */
+/** In-platform team chat: channels + messages, unread badges, delete, 3s poll. */
 export function ChatView({ canManage }: { canManage: boolean }) {
   const [channels, setChannels] = useState<ChatChannel[]>([]);
   const [channelId, setChannelId] = useState<string | null>(null);
@@ -33,6 +36,10 @@ export function ChatView({ canManage }: { canManage: boolean }) {
   const channelIdRef = useRef<string | null>(null);
   channelIdRef.current = channelId;
 
+  async function loadChannels() {
+    setChannels(await listChatChannelsAction());
+  }
+
   useEffect(() => {
     listChatChannelsAction().then((cs) => {
       setChannels(cs);
@@ -41,18 +48,21 @@ export function ChatView({ canManage }: { canManage: boolean }) {
     });
   }, []);
 
-  // Load + poll messages for the current channel.
+  // Load + poll the current channel's messages; mark it read + refresh badges.
   useEffect(() => {
     if (!channelId) return;
     let active = true;
-    async function load() {
+    async function tick() {
       const id = channelIdRef.current;
       if (!id) return;
       const msgs = await listChatMessagesAction(id);
-      if (active && channelIdRef.current === id) setMessages(msgs);
+      if (!active || channelIdRef.current !== id) return;
+      setMessages(msgs);
+      await markChannelReadAction(id);
+      if (active) await loadChannels();
     }
-    void load();
-    const t = setInterval(load, 3000);
+    void tick();
+    const t = setInterval(tick, 3000);
     return () => {
       active = false;
       clearInterval(t);
@@ -70,11 +80,8 @@ export function ChatView({ canManage }: { canManage: boolean }) {
     setDraft("");
     const r = await sendChatMessageAction(channelId, body);
     setSending(false);
-    if ("ok" in r && r.ok) {
-      setMessages((prev) => [...prev, r.message]);
-    } else {
-      setDraft(body);
-    }
+    if ("ok" in r && r.ok) setMessages((prev) => [...prev, r.message]);
+    else setDraft(body);
   }
 
   async function addChannel() {
@@ -87,6 +94,26 @@ export function ChatView({ canManage }: { canManage: boolean }) {
     } else if ("error" in r) {
       window.alert(r.error);
     }
+  }
+
+  async function removeChannel() {
+    if (!channelId) return;
+    const ch = channels.find((c) => c.id === channelId);
+    if (!window.confirm(`Delete #${ch?.name ?? "channel"} and all its messages?`)) return;
+    const r = await deleteChatChannelAction(channelId);
+    if ("ok" in r && r.ok) {
+      const remaining = channels.filter((c) => c.id !== channelId);
+      setChannels(remaining);
+      setChannelId(remaining[0]?.id ?? null);
+      setMessages([]);
+    } else if ("error" in r) {
+      window.alert(r.error);
+    }
+  }
+
+  async function removeMessage(id: string) {
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    await deleteChatMessageAction(id);
   }
 
   if (loading) {
@@ -110,13 +137,25 @@ export function ChatView({ canManage }: { canManage: boolean }) {
             )}
           >
             <Hash className="h-3.5 w-3.5" /> {c.name}
+            {c.id !== channelId && c.unread > 0 && (
+              <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                {c.unread}
+              </span>
+            )}
           </button>
         ))}
-        {canManage && (
-          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={addChannel} aria-label="New channel">
-            <Plus className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          {canManage && channelId && (
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={removeChannel} aria-label="Delete channel">
+              <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          )}
+          {canManage && (
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={addChannel} aria-label="New channel">
+              <Plus className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-3">
@@ -126,10 +165,19 @@ export function ChatView({ canManage }: { canManage: boolean }) {
           </div>
         ) : (
           messages.map((m) => (
-            <div key={m.id} className={cn("flex flex-col", m.mine ? "items-end" : "items-start")}>
+            <div key={m.id} className={cn("group flex flex-col", m.mine ? "items-end" : "items-start")}>
               <div className="mb-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span className="font-medium text-foreground">{m.mine ? "You" : m.sender_name}</span>
                 <span>{fmtTime(m.created_at)}</span>
+                {(m.mine || canManage) && (
+                  <button
+                    onClick={() => removeMessage(m.id)}
+                    className="opacity-0 transition hover:text-destructive group-hover:opacity-100"
+                    aria-label="Delete message"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
               </div>
               <div
                 className={cn(

@@ -760,7 +760,9 @@ export const teamGoals = pgTable(
     detail: text("detail").notNull().default(""),
     horizon: text("horizon").$type<"week" | "month" | "quarter">().notNull().default("month"),
     scope: text("scope").$type<"team" | "individual">().notNull().default("team"),
+    // Legacy single assignee (pre-refinement); member_ids is the source of truth now.
     member_id: uuid("member_id"),
+    member_ids: uuid("member_ids").array().notNull().default([]),
     status: text("status").$type<"active" | "done">().notNull().default("active"),
     created_by_member_id: uuid("created_by_member_id"),
     created_at: createdAt,
@@ -839,6 +841,62 @@ export const teamAssistantMessages = pgTable(
     created_at: createdAt,
   },
   (t) => [index("team_assistant_msgs_idx").on(t.workspace_id, t.user_id, t.created_at)],
+);
+
+/** Per-user, per-channel read marker — powers chat unread badges. */
+export const chatReads = pgTable(
+  "chat_reads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    user_id: uuid("user_id").notNull(),
+    channel_id: uuid("channel_id").notNull(),
+    last_read_at: timestamp("last_read_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_reads_idx").on(t.workspace_id, t.user_id, t.channel_id)],
+);
+
+/** Team calendar — recurring meetings, 1:1s (member_id), and one-off events. */
+export const teamEvents = pgTable(
+  "team_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    detail: text("detail").notNull().default(""),
+    kind: text("kind").$type<"meeting" | "one_on_one" | "event">().notNull().default("meeting"),
+    starts_at: timestamp("starts_at", { withTimezone: true }).notNull().defaultNow(),
+    // Free-form recurrence label (display-only for now, e.g. "Weekly", "Every Monday").
+    recurrence: text("recurrence").notNull().default(""),
+    member_id: uuid("member_id"),
+    created_by_member_id: uuid("created_by_member_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_events_ws_idx").on(t.workspace_id, t.starts_at)],
+);
+
+/** A meeting record — notes now; action-items → tasks come in a later pass. */
+export const teamMeetings = pgTable(
+  "team_meetings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    meeting_date: timestamp("meeting_date", { withTimezone: true }).notNull().defaultNow(),
+    notes: text("notes").notNull().default(""),
+    attendee_ids: uuid("attendee_ids").array().notNull().default([]),
+    created_by_member_id: uuid("created_by_member_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_meetings_ws_idx").on(t.workspace_id, t.meeting_date)],
 );
 
 /**

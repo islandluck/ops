@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Loader2, Plus, Target } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input, Label, Select, Textarea } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
@@ -48,7 +48,9 @@ function GoalItem({ goal, onToggle }: { goal: TeamGoal; onToggle?: () => void })
           <span className="rounded-full bg-muted px-1.5 py-0.5 font-semibold uppercase tracking-wide">
             {HORIZON_LABEL[goal.horizon]}
           </span>
-          {goal.scope === "individual" && goal.member_name && <span>· {goal.member_name}</span>}
+          {goal.scope === "individual" && goal.member_names.length > 0 && (
+            <span>· {goal.member_names.join(", ")}</span>
+          )}
         </div>
       </div>
     </div>
@@ -84,7 +86,7 @@ function ManagerGoalDialog({
   const [detail, setDetail] = useState("");
   const [horizon, setHorizon] = useState<TeamGoalHorizon>("month");
   const [scope, setScope] = useState<"team" | "individual">("individual");
-  const [memberId, setMemberId] = useState("");
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,7 +97,7 @@ function ManagerGoalDialog({
     setDetail("");
     setHorizon("month");
     setScope("individual");
-    setMemberId(reports[0]?.id ?? "");
+    setMemberIds([]);
   }, [open, reports]);
 
   async function save() {
@@ -103,7 +105,7 @@ function ManagerGoalDialog({
       setError("Give the goal a title.");
       return;
     }
-    if (scope === "individual" && !memberId) {
+    if (scope === "individual" && !memberIds.length) {
       setError("Pick who the goal is for.");
       return;
     }
@@ -114,7 +116,7 @@ function ManagerGoalDialog({
       detail,
       horizon,
       scope,
-      member_id: scope === "individual" ? memberId : null,
+      member_ids: scope === "individual" ? memberIds : [],
     });
     setSaving(false);
     if ("ok" in r && r.ok) {
@@ -148,13 +150,13 @@ function ManagerGoalDialog({
             onChange={(v) => setHorizon(v as TeamGoalHorizon)}
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-2">
           <div>
             <Label>For</Label>
             <Segmented
               options={[
                 { value: "team", label: "Whole team" },
-                { value: "individual", label: "A report" },
+                { value: "individual", label: "Reports" },
               ]}
               value={scope}
               onChange={(v) => setScope(v as "team" | "individual")}
@@ -162,14 +164,27 @@ function ManagerGoalDialog({
           </div>
           {scope === "individual" && (
             <div>
-              <Label>Who</Label>
-              <Select value={memberId} onChange={(e) => setMemberId(e.target.value)}>
-                {reports.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.name}
-                  </option>
-                ))}
-              </Select>
+              <Label>Who (pick one or more)</Label>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {reports.map((r) => {
+                  const on = memberIds.includes(r.id);
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setMemberIds((prev) => (on ? prev.filter((x) => x !== r.id) : [...prev, r.id]))}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-xs transition",
+                        on
+                          ? "border-primary bg-primary/12 text-primary"
+                          : "border-border text-muted-foreground hover:border-foreground",
+                      )}
+                    >
+                      {r.name}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

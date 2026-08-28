@@ -1,21 +1,25 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNotNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   chatChannels,
   chatMessages,
+  chatReads,
   humanProjects,
   projects,
   teamAssignments,
   teamDocuments,
+  teamEvents,
   teamGoals,
+  teamMeetings,
   teamMembers,
   workspaceMembers,
 } from "@/lib/db/schema";
 import type {
   AssignmentStatus,
+  CalendarItem,
   ChatChannel,
   ChatMessage,
   HumanProject,
@@ -23,10 +27,13 @@ import type {
   TeamAssignment,
   TeamDocument,
   TeamDocumentKind,
+  TeamEvent,
+  TeamEventKind,
   TeamGoal,
   TeamGoalHorizon,
   TeamGoalScope,
   TeamGoalStatus,
+  TeamMeeting,
   TeamMember,
   TeamRole,
   WorkspaceRole,
@@ -478,15 +485,17 @@ export async function createDelegatedTask(
 
 // ── Team goals (Phase 3) ─────────────────────────────────────────────────────
 
-function toGoal(r: typeof teamGoals.$inferSelect, memberName: string | null = null): TeamGoal {
+function toGoal(r: typeof teamGoals.$inferSelect, nameById: Map<string, string> = new Map()): TeamGoal {
+  // member_ids is the source of truth; fall back to the legacy single member_id.
+  const ids = ((r.member_ids?.length ? r.member_ids : r.member_id ? [r.member_id] : []) as string[]).filter(Boolean);
   return {
     id: r.id,
     title: r.title,
     detail: r.detail,
     horizon: r.horizon as TeamGoalHorizon,
     scope: r.scope as TeamGoalScope,
-    member_id: r.member_id ?? null,
-    member_name: memberName,
+    member_ids: ids,
+    member_names: ids.map((id) => nameById.get(id)).filter((n): n is string => !!n),
     status: r.status as TeamGoalStatus,
     created_at: new Date(r.created_at).toISOString(),
   };
@@ -504,7 +513,7 @@ export async function listTeamGoals(workspaceId: string): Promise<TeamGoal[]> {
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId));
   const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
-  return rows.map((r) => toGoal(r, r.member_id ? nameById.get(r.member_id) ?? null : null));
+  return rows.map((r) => toGoal(r, nameById));
 }
 
 export interface TeamGoalInput {
@@ -512,7 +521,7 @@ export interface TeamGoalInput {
   detail?: string;
   horizon: TeamGoalHorizon;
   scope: TeamGoalScope;
-  member_id?: string | null;
+  member_ids?: string[];
 }
 
 /**
@@ -523,26 +532,23 @@ export async function canSetGoalFor(
   workspaceId: string,
   userId: string,
   scope: TeamGoalScope,
-  memberId: string | null,
+  memberIds: string[],
 ): Promise<boolean> {
   const role = await getWorkspaceRole(workspaceId, userId);
   if (role === "owner") return true;
   if (role !== "manager") return false;
   if (scope === "team") return true;
-  if (!memberId) return false;
+  if (!memberIds.length) return false;
   const [me] = await db
     .select({ id: teamMembers.id })
     .from(teamMembers)
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
   if (!me) return false;
-  if (memberId === me.id) return true;
-  const [target] = await db
-    .select({ manager_id: teamMembers.manager_id })
-    .from(teamMembers)
-    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, memberId)))
-    .limit(1);
-  return !!target && target.manager_id === me.id;
+  // A manager may set goals for themselves or any direct report — for ALL targets.
+  const reports = await getDirectReports(workspaceId, me.id);
+  const allowed = new Set([me.id, ...reports.map((r) => r.id)]);
+  return memberIds.every((id) => allowed.has(id));
 }
 
 export async function createTeamGoal(
@@ -553,9 +559,9 @@ export async function createTeamGoal(
   const title = input.title.trim();
   if (!title) return { ok: false, error: "Give the goal a title." };
   const scope: TeamGoalScope = input.scope === "individual" ? "individual" : "team";
-  const memberId = scope === "individual" ? input.member_id || null : null;
-  if (scope === "individual" && !memberId) return { ok: false, error: "Pick who the goal is for." };
-  if (!(await canSetGoalFor(workspaceId, userId, scope, memberId))) {
+  const memberIds = scope === "individual" ? (input.member_ids ?? []).filter(Boolean) : [];
+  if (scope === "individual" && !memberIds.length) return { ok: false, error: "Pick who the goal is for." };
+  if (!(await canSetGoalFor(workspaceId, userId, scope, memberIds))) {
     return { ok: false, error: "You can only set team goals or goals for your reports." };
   }
   const [me] = await db
@@ -570,10 +576,11 @@ export async function createTeamGoal(
       id: randomUUID(),
       workspace_id: workspaceId,
       title: title.slice(0, 300),
-      detail: (input.detail ?? "").slice(0, 2000),
+      detail: (input.detail ?? "").slice(0, 4000),
       horizon: input.horizon === "week" || input.horizon === "quarter" ? input.horizon : "month",
       scope,
-      member_id: memberId,
+      member_id: null,
+      member_ids: memberIds,
       status: "active",
       created_by_member_id: me?.id ?? null,
       created_at: now,
@@ -587,7 +594,14 @@ export async function updateTeamGoal(
   workspaceId: string,
   userId: string,
   id: string,
-  patch: { title?: string; detail?: string; horizon?: TeamGoalHorizon; status?: TeamGoalStatus },
+  patch: {
+    title?: string;
+    detail?: string;
+    horizon?: TeamGoalHorizon;
+    status?: TeamGoalStatus;
+    scope?: TeamGoalScope;
+    member_ids?: string[];
+  },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const [goal] = await db
     .select()
@@ -595,7 +609,10 @@ export async function updateTeamGoal(
     .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)))
     .limit(1);
   if (!goal) return { ok: false, error: "That goal no longer exists." };
-  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, goal.member_id ?? null))) {
+  const currentIds = ((goal.member_ids?.length ? goal.member_ids : goal.member_id ? [goal.member_id] : []) as string[]).filter(
+    Boolean,
+  );
+  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, currentIds))) {
     return { ok: false, error: "You can't edit this goal." };
   }
   const set: Record<string, unknown> = { updated_at: new Date() };
@@ -603,9 +620,21 @@ export async function updateTeamGoal(
     if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
     set.title = patch.title.trim().slice(0, 300);
   }
-  if (typeof patch.detail === "string") set.detail = patch.detail.slice(0, 2000);
+  if (typeof patch.detail === "string") set.detail = patch.detail.slice(0, 4000);
   if (patch.horizon) set.horizon = patch.horizon;
   if (patch.status) set.status = patch.status;
+  // Reassigning people (and scope) — must also be allowed for the NEW target.
+  if (patch.scope || patch.member_ids) {
+    const nextScope: TeamGoalScope = patch.scope ?? (goal.scope as TeamGoalScope);
+    const nextIds = nextScope === "individual" ? (patch.member_ids ?? currentIds).filter(Boolean) : [];
+    if (nextScope === "individual" && !nextIds.length) return { ok: false, error: "Pick who the goal is for." };
+    if (!(await canSetGoalFor(workspaceId, userId, nextScope, nextIds))) {
+      return { ok: false, error: "You can only assign goals to your reports." };
+    }
+    set.scope = nextScope;
+    set.member_ids = nextIds;
+    set.member_id = null;
+  }
   await db.update(teamGoals).set(set).where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)));
   return { ok: true };
 }
@@ -621,7 +650,10 @@ export async function deleteTeamGoal(
     .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)))
     .limit(1);
   if (!goal) return { ok: true };
-  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, goal.member_id ?? null))) {
+  const ids = ((goal.member_ids?.length ? goal.member_ids : goal.member_id ? [goal.member_id] : []) as string[]).filter(
+    Boolean,
+  );
+  if (!(await canSetGoalFor(workspaceId, userId, goal.scope as TeamGoalScope, ids))) {
     return { ok: false, error: "You can't delete this goal." };
   }
   await db.delete(teamGoals).where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)));
@@ -641,12 +673,17 @@ export async function setMyGoalStatus(
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
   if (!me) return { ok: false, error: "No team profile found." };
-  const res = await db
+  const [goal] = await db
+    .select({ member_ids: teamGoals.member_ids, member_id: teamGoals.member_id })
+    .from(teamGoals)
+    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)))
+    .limit(1);
+  const ids = (goal ? (goal.member_ids?.length ? goal.member_ids : goal.member_id ? [goal.member_id] : []) : []) as string[];
+  if (!goal || !ids.includes(me.id)) return { ok: false, error: "That isn't one of your goals." };
+  await db
     .update(teamGoals)
     .set({ status, updated_at: new Date() })
-    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id), eq(teamGoals.member_id, me.id)))
-    .returning({ id: teamGoals.id });
-  if (!res.length) return { ok: false, error: "That isn't one of your goals." };
+    .where(and(eq(teamGoals.workspace_id, workspaceId), eq(teamGoals.id, id)));
   return { ok: true };
 }
 
@@ -662,12 +699,12 @@ export async function getMyGoals(
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
   const team = all.filter((g) => g.scope === "team");
-  const mine = me ? all.filter((g) => g.scope === "individual" && g.member_id === me.id) : [];
+  const mine = me ? all.filter((g) => g.scope === "individual" && g.member_ids.includes(me.id)) : [];
   let reports: TeamGoal[] = [];
   if (me?.team_role === "manager") {
     const reportRows = await getDirectReports(workspaceId, me.id);
     const reportIds = new Set(reportRows.map((r) => r.id));
-    reports = all.filter((g) => g.scope === "individual" && !!g.member_id && reportIds.has(g.member_id));
+    reports = all.filter((g) => g.scope === "individual" && g.member_ids.some((mid) => reportIds.has(mid)));
   }
   return { team, mine, reports };
 }
@@ -768,7 +805,7 @@ export async function deleteTeamDocument(
 // ── Team chat (Phase 5) ──────────────────────────────────────────────────────
 
 /** List chat channels, seeding a default "general" the first time. */
-export async function listChatChannels(workspaceId: string): Promise<ChatChannel[]> {
+export async function listChatChannels(workspaceId: string, userId: string): Promise<ChatChannel[]> {
   let rows = await db
     .select()
     .from(chatChannels)
@@ -790,7 +827,88 @@ export async function listChatChannels(workspaceId: string): Promise<ChatChannel
       .where(eq(chatChannels.workspace_id, workspaceId))
       .orderBy(asc(chatChannels.created_at));
   }
-  return rows.map((r) => ({ id: r.id, name: r.name, created_at: new Date(r.created_at).toISOString() }));
+  // This user's read markers → unread = others' messages since they last read.
+  const reads = await db
+    .select({ channel_id: chatReads.channel_id, last_read_at: chatReads.last_read_at })
+    .from(chatReads)
+    .where(and(eq(chatReads.workspace_id, workspaceId), eq(chatReads.user_id, userId)));
+  const lastReadByChannel = new Map(reads.map((r) => [r.channel_id, r.last_read_at]));
+  return Promise.all(
+    rows.map(async (r) => {
+      const since = lastReadByChannel.get(r.id);
+      const conds = [
+        eq(chatMessages.workspace_id, workspaceId),
+        eq(chatMessages.channel_id, r.id),
+        ne(chatMessages.sender_user_id, userId),
+      ];
+      if (since) conds.push(gt(chatMessages.created_at, since));
+      // tenant-scope-exempt: conds[0] is eq(chatMessages.workspace_id, workspaceId)
+      const [row] = await db.select({ n: count() }).from(chatMessages).where(and(...conds));
+      return { id: r.id, name: r.name, unread: Number(row?.n ?? 0), created_at: new Date(r.created_at).toISOString() };
+    }),
+  );
+}
+
+export async function markChannelRead(workspaceId: string, userId: string, channelId: string): Promise<void> {
+  const [existing] = await db
+    .select({ id: chatReads.id })
+    .from(chatReads)
+    .where(
+      and(
+        eq(chatReads.workspace_id, workspaceId),
+        eq(chatReads.user_id, userId),
+        eq(chatReads.channel_id, channelId),
+      ),
+    )
+    .limit(1);
+  const now = new Date();
+  if (existing) {
+    await db.update(chatReads).set({ last_read_at: now }).where(eq(chatReads.id, existing.id));
+  } else {
+    await db.insert(chatReads).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      user_id: userId,
+      channel_id: channelId,
+      last_read_at: now,
+    });
+  }
+}
+
+/** Delete a channel + its messages/read markers. Owner/manager only. */
+export async function deleteChatChannel(
+  workspaceId: string,
+  userId: string,
+  channelId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can delete channels." };
+  }
+  await db.delete(chatMessages).where(and(eq(chatMessages.workspace_id, workspaceId), eq(chatMessages.channel_id, channelId)));
+  await db.delete(chatReads).where(and(eq(chatReads.workspace_id, workspaceId), eq(chatReads.channel_id, channelId)));
+  await db.delete(chatChannels).where(and(eq(chatChannels.workspace_id, workspaceId), eq(chatChannels.id, channelId)));
+  return { ok: true };
+}
+
+/** Delete a message. The sender can delete their own; owner/manager can delete any. */
+export async function deleteChatMessage(
+  workspaceId: string,
+  userId: string,
+  messageId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [msg] = await db
+    .select({ sender_user_id: chatMessages.sender_user_id })
+    .from(chatMessages)
+    .where(and(eq(chatMessages.workspace_id, workspaceId), eq(chatMessages.id, messageId)))
+    .limit(1);
+  if (!msg) return { ok: true };
+  if (msg.sender_user_id !== userId) {
+    const role = await getWorkspaceRole(workspaceId, userId);
+    if (role !== "owner" && role !== "manager") return { ok: false, error: "You can only delete your own messages." };
+  }
+  await db.delete(chatMessages).where(and(eq(chatMessages.workspace_id, workspaceId), eq(chatMessages.id, messageId)));
+  return { ok: true };
 }
 
 export async function createChatChannel(
@@ -826,7 +944,10 @@ export async function createChatChannel(
       updated_at: now,
     })
     .returning();
-  return { ok: true, channel: { id: row.id, name: row.name, created_at: new Date(row.created_at).toISOString() } };
+  return {
+    ok: true,
+    channel: { id: row.id, name: row.name, unread: 0, created_at: new Date(row.created_at).toISOString() },
+  };
 }
 
 /** Messages in a channel (oldest→newest), each flagged `mine` for the viewer. */
@@ -1165,7 +1286,7 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
         .slice(0, 40)
         .map(
           (g) =>
-            `- [${g.horizon}] ${g.scope === "individual" ? g.member_name ?? "someone" : "Team"}: ${g.title}`,
+            `- [${g.horizon}] ${g.scope === "individual" ? g.member_names.join(", ") || "someone" : "Team"}: ${g.title}`,
         )
         .join("\n")
     : "";
@@ -1187,4 +1308,267 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
     0,
     8000,
   );
+}
+
+// ── Team calendar (Phase: refinements) ───────────────────────────────────────
+
+function toEvent(r: typeof teamEvents.$inferSelect, memberName: string | null = null): TeamEvent {
+  return {
+    id: r.id,
+    title: r.title,
+    detail: r.detail,
+    kind: r.kind as TeamEventKind,
+    starts_at: new Date(r.starts_at).toISOString(),
+    recurrence: r.recurrence,
+    member_id: r.member_id ?? null,
+    member_name: memberName,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listTeamEvents(workspaceId: string): Promise<TeamEvent[]> {
+  const rows = await db
+    .select()
+    .from(teamEvents)
+    .where(eq(teamEvents.workspace_id, workspaceId))
+    .orderBy(asc(teamEvents.starts_at));
+  if (!rows.length) return [];
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  return rows.map((r) => toEvent(r, r.member_id ? nameById.get(r.member_id) ?? null : null));
+}
+
+export interface TeamEventInput {
+  title: string;
+  detail?: string;
+  kind: TeamEventKind;
+  starts_at: string;
+  recurrence?: string;
+  member_id?: string | null;
+}
+
+export async function createTeamEvent(
+  workspaceId: string,
+  userId: string,
+  input: TeamEventInput,
+): Promise<{ ok: true; event: TeamEvent } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can add calendar entries." };
+  }
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: "Give the entry a title." };
+  const when = new Date(input.starts_at);
+  if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid date & time." };
+  const kind: TeamEventKind = input.kind === "one_on_one" || input.kind === "event" ? input.kind : "meeting";
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(teamEvents)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      title: title.slice(0, 200),
+      detail: (input.detail ?? "").slice(0, 2000),
+      kind,
+      starts_at: when,
+      recurrence: (input.recurrence ?? "").slice(0, 60),
+      member_id: kind === "one_on_one" ? input.member_id || null : null,
+      created_by_member_id: me?.id ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, event: toEvent(row) };
+}
+
+export async function deleteTeamEvent(
+  workspaceId: string,
+  userId: string,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can remove calendar entries." };
+  }
+  await db.delete(teamEvents).where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
+  return { ok: true };
+}
+
+/** The team calendar: owner-set events + deadlines derived from projects & tasks. */
+export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem[]> {
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  const items: CalendarItem[] = [];
+
+  const events = await db.select().from(teamEvents).where(eq(teamEvents.workspace_id, workspaceId));
+  for (const e of events) {
+    items.push({
+      id: e.id,
+      kind: e.kind as CalendarItem["kind"],
+      title: e.title,
+      when: new Date(e.starts_at).toISOString(),
+      who: e.member_id ? nameById.get(e.member_id) ?? null : null,
+      recurrence: e.recurrence,
+    });
+  }
+  const hps = await db
+    .select({ id: humanProjects.id, title: humanProjects.title, deadline: humanProjects.deadline, lead: humanProjects.lead_member_id })
+    .from(humanProjects)
+    .where(and(eq(humanProjects.workspace_id, workspaceId), isNotNull(humanProjects.deadline)));
+  for (const p of hps) {
+    if (!p.deadline) continue;
+    items.push({
+      id: `hp-${p.id}`,
+      kind: "deadline",
+      title: `${p.title} — due`,
+      when: new Date(p.deadline).toISOString(),
+      who: p.lead ? nameById.get(p.lead) ?? null : null,
+      recurrence: "",
+    });
+  }
+  const tas = await db
+    .select({ id: teamAssignments.id, title: teamAssignments.title, deadline: teamAssignments.deadline, member: teamAssignments.member_id })
+    .from(teamAssignments)
+    .where(and(eq(teamAssignments.workspace_id, workspaceId), isNotNull(teamAssignments.deadline)));
+  for (const t of tas) {
+    if (!t.deadline) continue;
+    items.push({
+      id: `ta-${t.id}`,
+      kind: "deadline",
+      title: `${t.title} — due`,
+      when: new Date(t.deadline).toISOString(),
+      who: t.member ? nameById.get(t.member) ?? null : null,
+      recurrence: "",
+    });
+  }
+  const cutoff = Date.now() - 2 * 86_400_000;
+  return items
+    .filter((i) => new Date(i.when).getTime() >= cutoff)
+    .sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime())
+    .slice(0, 100);
+}
+
+// ── Meetings (notes now; action-items → tasks in a later pass) ────────────────
+
+function toMeeting(r: typeof teamMeetings.$inferSelect, nameById: Map<string, string>): TeamMeeting {
+  const ids = (r.attendee_ids ?? []) as string[];
+  return {
+    id: r.id,
+    title: r.title,
+    meeting_date: new Date(r.meeting_date).toISOString(),
+    notes: r.notes,
+    attendee_ids: ids,
+    attendee_names: ids.map((id) => nameById.get(id)).filter((n): n is string => !!n),
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listTeamMeetings(workspaceId: string): Promise<TeamMeeting[]> {
+  const rows = await db
+    .select()
+    .from(teamMeetings)
+    .where(eq(teamMeetings.workspace_id, workspaceId))
+    .orderBy(desc(teamMeetings.meeting_date));
+  if (!rows.length) return [];
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  return rows.map((r) => toMeeting(r, nameById));
+}
+
+export interface TeamMeetingInput {
+  title: string;
+  meeting_date: string;
+  notes?: string;
+  attendee_ids?: string[];
+}
+
+export async function createTeamMeeting(
+  workspaceId: string,
+  userId: string,
+  input: TeamMeetingInput,
+): Promise<{ ok: true; meeting: TeamMeeting } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can add meetings." };
+  }
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: "Give the meeting a title." };
+  const when = new Date(input.meeting_date);
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(teamMeetings)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      title: title.slice(0, 200),
+      meeting_date: Number.isNaN(when.getTime()) ? now : when,
+      notes: (input.notes ?? "").slice(0, 20000),
+      attendee_ids: (input.attendee_ids ?? []).filter(Boolean),
+      created_by_member_id: me?.id ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  return { ok: true, meeting: toMeeting(row, new Map(memberRows.map((m) => [m.id, m.name]))) };
+}
+
+export async function updateTeamMeeting(
+  workspaceId: string,
+  userId: string,
+  id: string,
+  patch: { title?: string; notes?: string; meeting_date?: string; attendee_ids?: string[] },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can edit meetings." };
+  }
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (typeof patch.title === "string") {
+    if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
+    set.title = patch.title.trim().slice(0, 200);
+  }
+  if (typeof patch.notes === "string") set.notes = patch.notes.slice(0, 20000);
+  if (patch.meeting_date) {
+    const d = new Date(patch.meeting_date);
+    if (!Number.isNaN(d.getTime())) set.meeting_date = d;
+  }
+  if (Array.isArray(patch.attendee_ids)) set.attendee_ids = patch.attendee_ids.filter(Boolean);
+  await db.update(teamMeetings).set(set).where(and(eq(teamMeetings.workspace_id, workspaceId), eq(teamMeetings.id, id)));
+  return { ok: true };
+}
+
+export async function deleteTeamMeeting(
+  workspaceId: string,
+  userId: string,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can delete meetings." };
+  }
+  await db.delete(teamMeetings).where(and(eq(teamMeetings.workspace_id, workspaceId), eq(teamMeetings.id, id)));
+  return { ok: true };
 }

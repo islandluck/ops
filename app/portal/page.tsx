@@ -36,6 +36,8 @@ import { AssignedProjectView } from "./assigned-project";
 import { GoalsSection } from "./goals-section";
 import { DocsView } from "@/components/team/docs-view";
 import { ChatView } from "@/components/team/chat-view";
+import { CalendarView } from "@/components/team/calendar-view";
+import { MeetingsView } from "@/components/team/meetings-view";
 import { AssistantView } from "./assistant-view";
 
 const STATUSES: { key: AssignmentStatus; label: string }[] = [
@@ -171,7 +173,7 @@ export default function PortalPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberProjectDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [tab, setTab] = useState<"work" | "chat" | "assistant">("work");
+  const [tab, setTab] = useState<"work" | "chat" | "assistant" | "calendar" | "meetings">("work");
 
   async function load() {
     const [d, ap] = await Promise.all([getPortalDataAction(), getMyAssignedProjectsAction()]);
@@ -267,7 +269,7 @@ export default function PortalPage() {
       </div>
 
       <div className="flex gap-1">
-        {(["work", "chat", "assistant"] as const).map((t) => (
+        {(["work", "chat", "calendar", "meetings", "assistant"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -276,7 +278,15 @@ export default function PortalPage() {
               tab === t ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {t === "work" ? "My work" : t === "chat" ? "Chat" : "Assistant"}
+            {t === "work"
+              ? "My work"
+              : t === "chat"
+                ? "Chat"
+                : t === "calendar"
+                  ? "Calendar"
+                  : t === "meetings"
+                    ? "Meetings"
+                    : "Assistant"}
           </button>
         ))}
       </div>
@@ -285,6 +295,10 @@ export default function PortalPage() {
         <ChatView canManage={member?.team_role === "manager"} />
       ) : tab === "assistant" ? (
         <AssistantView />
+      ) : tab === "calendar" ? (
+        <CalendarView canManage={member?.team_role === "manager"} members={reports} />
+      ) : tab === "meetings" ? (
+        <MeetingsView canManage={member?.team_role === "manager"} members={reports} />
       ) : (
         <>
           <GoalsSection isManager={member?.team_role === "manager"} reports={reports} />

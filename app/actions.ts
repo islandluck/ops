@@ -161,18 +161,26 @@ import {
 import {
   createAssignment,
   createChatChannel,
+  deleteChatChannel,
+  deleteChatMessage,
+  markChannelRead,
   createDelegatedTask,
   createHumanProject,
   createTeamDocument,
   createTeamGoal,
+  createTeamEvent,
+  createTeamMeeting,
   createTeamMember,
   deleteAssignment,
   deleteHumanProject,
   deleteTeamDocument,
+  deleteTeamEvent,
   deleteTeamGoal,
+  deleteTeamMeeting,
   deleteTeamMember,
   assignProjectToMember,
   getMyGoals,
+  getTeamCalendar,
   getPortalData,
   getWorkspaceRole,
   isProjectAssignedToMember,
@@ -181,7 +189,9 @@ import {
   listChatMessages,
   listHumanProjects,
   listTeamDocuments,
+  listTeamEvents,
   listTeamGoals,
+  listTeamMeetings,
   listTeamMembers,
   sendChatMessage,
   setMemberOrg,
@@ -190,11 +200,14 @@ import {
   updateHumanProject,
   updateMyAssignmentStatus,
   updateTeamGoal,
+  updateTeamMeeting,
   updateTeamMember,
   type AssignmentInput,
   type HumanProjectInput,
   type TeamDocumentInput,
+  type TeamEventInput,
   type TeamGoalInput,
+  type TeamMeetingInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
 import { getTeamAssistantHistory, sendTeamAssistantMessage } from "@/lib/agents/team-assistant";
@@ -3242,7 +3255,14 @@ export async function createTeamGoalAction(input: TeamGoalInput) {
 
 export async function updateTeamGoalAction(
   id: string,
-  patch: { title?: string; detail?: string; horizon?: "week" | "month" | "quarter"; status?: "active" | "done" },
+  patch: {
+    title?: string;
+    detail?: string;
+    horizon?: "week" | "month" | "quarter";
+    status?: "active" | "done";
+    scope?: "team" | "individual";
+    member_ids?: string[];
+  },
 ) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
@@ -3325,9 +3345,147 @@ export async function listChatChannelsAction() {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return [];
   try {
-    return await listChatChannels(ws);
+    return await listChatChannels(ws, user.id);
   } catch {
     return [];
+  }
+}
+
+export async function markChannelReadAction(channelId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    await markChannelRead(ws, user.id, channelId);
+    return { ok: true as const };
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteChatChannelAction(channelId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteChatChannel(ws, user.id, channelId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the channel." };
+  }
+}
+
+export async function deleteChatMessageAction(messageId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteChatMessage(ws, user.id, messageId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the message." };
+  }
+}
+
+// ── Team calendar + meetings (Phase: refinements) ────────────────────────────
+
+export async function getTeamCalendarAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await getTeamCalendar(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function listTeamEventsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listTeamEvents(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createTeamEventAction(input: TeamEventInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createTeamEvent(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the entry." };
+  }
+}
+
+export async function deleteTeamEventAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteTeamEvent(ws, user.id, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't remove the entry." };
+  }
+}
+
+export async function listTeamMeetingsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listTeamMeetings(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createTeamMeetingAction(input: TeamMeetingInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createTeamMeeting(ws, user.id, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the meeting." };
+  }
+}
+
+export async function updateTeamMeetingAction(
+  id: string,
+  patch: { title?: string; notes?: string; meeting_date?: string; attendee_ids?: string[] },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateTeamMeeting(ws, user.id, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't save the meeting." };
+  }
+}
+
+export async function deleteTeamMeetingAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteTeamMeeting(ws, user.id, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't delete the meeting." };
   }
 }
 

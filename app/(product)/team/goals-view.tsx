@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Check, Loader2, Pencil, Plus, Target, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input, Label, Select, Textarea } from "@/components/ui/input";
+import { Input, Label, Textarea } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
@@ -39,7 +39,7 @@ function GoalDialog({
   const [detail, setDetail] = useState("");
   const [horizon, setHorizon] = useState<TeamGoalHorizon>("month");
   const [scope, setScope] = useState<TeamGoalScope>("team");
-  const [memberId, setMemberId] = useState("");
+  const [memberIds, setMemberIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,7 +50,7 @@ function GoalDialog({
     setDetail(goal?.detail ?? "");
     setHorizon(goal?.horizon ?? "month");
     setScope(goal?.scope ?? "team");
-    setMemberId(goal?.member_id ?? "");
+    setMemberIds(goal?.member_ids ?? []);
   }, [open, goal]);
 
   async function save() {
@@ -58,16 +58,14 @@ function GoalDialog({
       setError("Give the goal a title.");
       return;
     }
-    if (scope === "individual" && !memberId) {
+    if (scope === "individual" && !memberIds.length) {
       setError("Pick who the goal is for.");
       return;
     }
     setSaving(true);
     setError(null);
-    // Scope + member can't be changed on edit (keeps the model simple) — only on create.
-    const r = goal
-      ? await updateTeamGoalAction(goal.id, { title, detail, horizon })
-      : await createTeamGoalAction({ title, detail, horizon, scope, member_id: scope === "individual" ? memberId : null });
+    const payload = { title, detail, horizon, scope, member_ids: scope === "individual" ? memberIds : [] };
+    const r = goal ? await updateTeamGoalAction(goal.id, payload) : await createTeamGoalAction(payload);
     setSaving(false);
     if ("ok" in r && r.ok) {
       onSaved();
@@ -85,12 +83,12 @@ function GoalDialog({
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ship the Q3 launch" />
         </div>
         <div>
-          <Label>Detail (optional)</Label>
+          <Label>Context (what does hitting this look like?)</Label>
           <Textarea
-            rows={2}
+            rows={4}
             value={detail}
             onChange={(e) => setDetail(e.target.value)}
-            placeholder="What does hitting this look like?"
+            placeholder="Add detail, success criteria, links, or anything the team should know."
           />
         </div>
         <div>
@@ -105,34 +103,45 @@ function GoalDialog({
             onChange={(v) => setHorizon(v as TeamGoalHorizon)}
           />
         </div>
-        {!goal && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>For</Label>
-              <Segmented
-                options={[
-                  { value: "team", label: "Whole team" },
-                  { value: "individual", label: "One person" },
-                ]}
-                value={scope}
-                onChange={(v) => setScope(v as TeamGoalScope)}
-              />
-            </div>
-            {scope === "individual" && (
-              <div>
-                <Label>Who</Label>
-                <Select value={memberId} onChange={(e) => setMemberId(e.target.value)}>
-                  <option value="">Pick a person…</option>
-                  {members.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            )}
+        <div className="flex flex-col gap-2">
+          <div>
+            <Label>For</Label>
+            <Segmented
+              options={[
+                { value: "team", label: "Whole team" },
+                { value: "individual", label: "Specific people" },
+              ]}
+              value={scope}
+              onChange={(v) => setScope(v as TeamGoalScope)}
+            />
           </div>
-        )}
+          {scope === "individual" && (
+            <div>
+              <Label>Who (pick one or more)</Label>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {members.map((m) => {
+                  const on = memberIds.includes(m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setMemberIds((prev) => (on ? prev.filter((x) => x !== m.id) : [...prev, m.id]))}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-xs transition",
+                        on
+                          ? "border-primary bg-primary/12 text-primary"
+                          : "border-border text-muted-foreground hover:border-foreground",
+                      )}
+                    >
+                      {m.name}
+                    </button>
+                  );
+                })}
+                {members.length === 0 && <span className="text-xs text-muted-foreground">Add team members first.</span>}
+              </div>
+            </div>
+          )}
+        </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="mt-1 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
@@ -181,7 +190,7 @@ function GoalCard({
             goal.scope === "team" ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground",
           )}
         >
-          {goal.scope === "team" ? "Whole team" : (goal.member_name ?? "Someone")}
+          {goal.scope === "team" ? "Whole team" : goal.member_names.join(", ") || "Someone"}
         </span>
       </div>
       <div className="flex shrink-0 gap-0.5 opacity-0 transition group-hover:opacity-100">

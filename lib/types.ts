@@ -272,9 +272,9 @@ export interface TeamGoal {
   detail: string;
   horizon: TeamGoalHorizon;
   scope: TeamGoalScope;
-  /** For scope "individual": the member it's for. */
-  member_id: string | null;
-  member_name: string | null;
+  /** For scope "individual": the members it's for (one or more). */
+  member_ids: string[];
+  member_names: string[];
   status: TeamGoalStatus;
   created_at: string;
 }
@@ -296,6 +296,8 @@ export interface TeamDocument {
 export interface ChatChannel {
   id: string;
   name: string;
+  /** Unread messages for the current viewer since they last read this channel. */
+  unread: number;
   created_at: string;
 }
 
@@ -313,6 +315,42 @@ export interface TeamAssistantMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  created_at: string;
+}
+
+export type TeamEventKind = "meeting" | "one_on_one" | "event";
+
+/** A calendar entry the owner sets — a meeting, a 1:1, or a one-off event. */
+export interface TeamEvent {
+  id: string;
+  title: string;
+  detail: string;
+  kind: TeamEventKind;
+  starts_at: string;
+  recurrence: string;
+  member_id: string | null;
+  member_name: string | null;
+  created_at: string;
+}
+
+/** A row on the team calendar — an event OR a derived deadline. */
+export interface CalendarItem {
+  id: string;
+  kind: "meeting" | "one_on_one" | "event" | "deadline";
+  title: string;
+  when: string;
+  who: string | null;
+  recurrence: string;
+}
+
+/** A meeting record — notes now; action-items → tasks come later. */
+export interface TeamMeeting {
+  id: string;
+  title: string;
+  meeting_date: string;
+  notes: string;
+  attendee_ids: string[];
+  attendee_names: string[];
   created_at: string;
 }
 
