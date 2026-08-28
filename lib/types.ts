@@ -279,6 +279,35 @@ export interface TeamGoal {
   created_at: string;
 }
 
+export type TeamDocumentKind = "link" | "note";
+
+/** A shared team document — a link or an inline note the whole team can see. */
+export interface TeamDocument {
+  id: string;
+  title: string;
+  kind: TeamDocumentKind;
+  url: string;
+  content: string;
+  created_by_name: string;
+  created_at: string;
+}
+
+/** An in-platform chat channel (owner + all team members). */
+export interface ChatChannel {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+/** A chat message. `mine` is true when the current viewer sent it. */
+export interface ChatMessage {
+  id: string;
+  sender_name: string;
+  body: string;
+  mine: boolean;
+  created_at: string;
+}
+
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";
 
 /** Role in the agent hierarchy. Manager/Executive are premium. */

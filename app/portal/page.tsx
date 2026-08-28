@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, CheckCircle2, ChevronRight, FolderKanban, Loader2, Plus, Sparkles, Users } from "lucide-react";
+import {
+  CalendarClock,
+  CheckCircle2,
+  ChevronRight,
+  FileText,
+  FolderKanban,
+  Loader2,
+  Plus,
+  Sparkles,
+  Users,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -24,6 +34,8 @@ import type {
 } from "@/lib/types";
 import { AssignedProjectView } from "./assigned-project";
 import { GoalsSection } from "./goals-section";
+import { DocsView } from "@/components/team/docs-view";
+import { ChatView } from "@/components/team/chat-view";
 
 const STATUSES: { key: AssignmentStatus; label: string }[] = [
   { key: "assigned", label: "To do" },
@@ -158,6 +170,7 @@ export default function PortalPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MemberProjectDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [tab, setTab] = useState<"work" | "chat">("work");
 
   async function load() {
     const [d, ap] = await Promise.all([getPortalDataAction(), getMyAssignedProjectsAction()]);
@@ -252,7 +265,26 @@ export default function PortalPage() {
         </p>
       </div>
 
-      <GoalsSection isManager={member?.team_role === "manager"} reports={reports} />
+      <div className="flex gap-1">
+        {(["work", "chat"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cn(
+              "rounded-lg px-3 py-1 text-sm font-medium transition",
+              tab === t ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t === "work" ? "My work" : "Chat"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "chat" ? (
+        <ChatView canManage={member?.team_role === "manager"} />
+      ) : (
+        <>
+          <GoalsSection isManager={member?.team_role === "manager"} reports={reports} />
 
       {assignedProjects.length > 0 && (
         <div className="flex flex-col gap-2">
@@ -401,6 +433,15 @@ export default function PortalPage() {
             ))}
           </div>
         </div>
+      )}
+
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-1.5 text-sm font-semibold">
+              <FileText className="h-4 w-4 text-muted-foreground" /> Documents
+            </div>
+            <DocsView canManage={member?.team_role === "manager"} />
+          </div>
+        </>
       )}
 
       <DelegateDialog open={delegateOpen} reports={reports} onClose={() => setDelegateOpen(false)} onSaved={load} />

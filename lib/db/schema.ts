@@ -769,6 +769,61 @@ export const teamGoals = pgTable(
   (t) => [index("team_goals_ws_idx").on(t.workspace_id)],
 );
 
+/** Team Room Phase 4 — a shared team document: a link or an inline note the whole
+ *  team can see. created_by_name is denormalized (the owner has no team_members row). */
+export const teamDocuments = pgTable(
+  "team_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    kind: text("kind").$type<"link" | "note">().notNull().default("link"),
+    url: text("url").notNull().default(""),
+    content: text("content").notNull().default(""),
+    created_by_member_id: uuid("created_by_member_id"),
+    created_by_name: text("created_by_name").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("team_documents_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** Team Room Phase 5 — an in-platform chat channel (owner + all team members). */
+export const chatChannels = pgTable(
+  "chat_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    created_by_member_id: uuid("created_by_member_id"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("chat_channels_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** Team Room Phase 5 — a chat message. sender_name is denormalized for display. */
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    channel_id: uuid("channel_id").notNull(),
+    sender_user_id: uuid("sender_user_id"),
+    sender_member_id: uuid("sender_member_id"),
+    sender_name: text("sender_name").notNull().default(""),
+    body: text("body").notNull().default(""),
+    created_at: createdAt,
+  },
+  (t) => [index("chat_messages_channel_idx").on(t.workspace_id, t.channel_id, t.created_at)],
+);
+
 /**
  * Team Room — a pending invitation for someone to join the workspace as a member.
  * The owner enters their profile + email; a Supabase invite email is sent; on

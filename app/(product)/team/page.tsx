@@ -52,6 +52,8 @@ import type {
   TeamRole,
 } from "@/lib/types";
 import { GoalsView } from "./goals-view";
+import { DocsView } from "@/components/team/docs-view";
+import { ChatView } from "@/components/team/chat-view";
 
 const ACCENTS = ["indigo", "sky", "emerald", "amber", "rose", "violet", "slate"] as const;
 const ACCENT_BG: Record<string, string> = {
@@ -762,7 +764,7 @@ function TeamHumanProjectCard({
 
 export default function TeamPage() {
   const router = useRouter();
-  const [view, setView] = useState<"roster" | "projects" | "board" | "goals">("roster");
+  const [view, setView] = useState<"roster" | "projects" | "board" | "goals" | "docs" | "chat">("roster");
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [assignments, setAssignments] = useState<TeamAssignment[]>([]);
   const [projects, setProjects] = useState<HumanProject[]>([]);
@@ -864,10 +866,12 @@ export default function TeamPage() {
                 { value: "roster", label: "Roster" },
                 { value: "projects", label: "Board" },
                 { value: "goals", label: "Goals" },
+                { value: "chat", label: "Chat" },
+                { value: "docs", label: "Docs" },
                 { value: "board", label: "Handoffs" },
               ]}
               value={view}
-              onChange={(v) => setView(v as "roster" | "projects" | "board" | "goals")}
+              onChange={(v) => setView(v as "roster" | "projects" | "board" | "goals" | "docs" | "chat")}
             />
             {view === "roster" ? (
               <Button size="sm" onClick={() => setMemberDialog({ open: true, member: null })}>
@@ -877,7 +881,7 @@ export default function TeamPage() {
               <Button size="sm" onClick={() => setProjectDialog({ open: true, project: null })}>
                 <Plus className="h-4 w-4" /> New project
               </Button>
-            ) : view === "goals" ? null : (
+            ) : view === "goals" || view === "docs" || view === "chat" ? null : (
               <Button size="sm" onClick={() => setHandoffOpen(true)} disabled={!members.length}>
                 <Plus className="h-4 w-4" /> Hand off
               </Button>
@@ -892,6 +896,10 @@ export default function TeamPage() {
           </div>
         ) : view === "goals" ? (
           <GoalsView members={members} />
+        ) : view === "docs" ? (
+          <DocsView canManage />
+        ) : view === "chat" ? (
+          <ChatView canManage />
         ) : members.length === 0 ? (
           <div className="mt-10 flex flex-col items-center gap-3 text-center text-muted-foreground">
             <UsersRound className="h-10 w-10 opacity-40" />

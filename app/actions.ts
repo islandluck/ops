@@ -160,12 +160,15 @@ import {
 } from "@/lib/agents/ads";
 import {
   createAssignment,
+  createChatChannel,
   createDelegatedTask,
   createHumanProject,
+  createTeamDocument,
   createTeamGoal,
   createTeamMember,
   deleteAssignment,
   deleteHumanProject,
+  deleteTeamDocument,
   deleteTeamGoal,
   deleteTeamMember,
   assignProjectToMember,
@@ -174,9 +177,13 @@ import {
   getWorkspaceRole,
   isProjectAssignedToMember,
   listAssignments,
+  listChatChannels,
+  listChatMessages,
   listHumanProjects,
+  listTeamDocuments,
   listTeamGoals,
   listTeamMembers,
+  sendChatMessage,
   setMemberOrg,
   setMyGoalStatus,
   updateAssignment,
@@ -186,6 +193,7 @@ import {
   updateTeamMember,
   type AssignmentInput,
   type HumanProjectInput,
+  type TeamDocumentInput,
   type TeamGoalInput,
   type TeamMemberInput,
 } from "@/lib/agents/team";
@@ -3267,6 +3275,94 @@ export async function setMyGoalStatusAction(id: string, status: "active" | "done
     return await setMyGoalStatus(ws, user.id, id, status);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the goal." };
+  }
+}
+
+// ── Team documents (Phase 4) ─────────────────────────────────────────────────
+
+export async function listTeamDocumentsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listTeamDocuments(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createTeamDocumentAction(input: TeamDocumentInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createTeamDocument(ws, user.id, input, displayName(user));
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the document." };
+  }
+}
+
+export async function deleteTeamDocumentAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await deleteTeamDocument(ws, user.id, id);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't remove the document." };
+  }
+}
+
+// ── Team chat (Phase 5) ──────────────────────────────────────────────────────
+
+export async function listChatChannelsAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listChatChannels(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createChatChannelAction(name: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createChatChannel(ws, user.id, name);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the channel." };
+  }
+}
+
+export async function listChatMessagesAction(channelId: string) {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listChatMessages(ws, user.id, channelId);
+  } catch {
+    return [];
+  }
+}
+
+export async function sendChatMessageAction(channelId: string, body: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await sendChatMessage(ws, user.id, channelId, body, displayName(user));
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send." };
   }
 }
 

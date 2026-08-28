@@ -1,14 +1,28 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { humanProjects, projects, teamAssignments, teamGoals, teamMembers, workspaceMembers } from "@/lib/db/schema";
+import {
+  chatChannels,
+  chatMessages,
+  humanProjects,
+  projects,
+  teamAssignments,
+  teamDocuments,
+  teamGoals,
+  teamMembers,
+  workspaceMembers,
+} from "@/lib/db/schema";
 import type {
   AssignmentStatus,
+  ChatChannel,
+  ChatMessage,
   HumanProject,
   HumanProjectStatus,
   TeamAssignment,
+  TeamDocument,
+  TeamDocumentKind,
   TeamGoal,
   TeamGoalHorizon,
   TeamGoalScope,
@@ -656,6 +670,231 @@ export async function getMyGoals(
     reports = all.filter((g) => g.scope === "individual" && !!g.member_id && reportIds.has(g.member_id));
   }
   return { team, mine, reports };
+}
+
+// ── Team documents (Phase 4) ─────────────────────────────────────────────────
+
+function toDocument(r: typeof teamDocuments.$inferSelect): TeamDocument {
+  return {
+    id: r.id,
+    title: r.title,
+    kind: r.kind as TeamDocumentKind,
+    url: r.url,
+    content: r.content,
+    created_by_name: r.created_by_name,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listTeamDocuments(workspaceId: string): Promise<TeamDocument[]> {
+  const rows = await db
+    .select()
+    .from(teamDocuments)
+    .where(eq(teamDocuments.workspace_id, workspaceId))
+    .orderBy(desc(teamDocuments.created_at));
+  return rows.map(toDocument);
+}
+
+export interface TeamDocumentInput {
+  title: string;
+  kind: TeamDocumentKind;
+  url?: string;
+  content?: string;
+}
+
+/** Any team member can add a shared document. `fallbackName` names the owner (no member row). */
+export async function createTeamDocument(
+  workspaceId: string,
+  userId: string,
+  input: TeamDocumentInput,
+  fallbackName: string,
+): Promise<{ ok: true; document: TeamDocument } | { ok: false; error: string }> {
+  const title = input.title.trim();
+  if (!title) return { ok: false, error: "Give the document a title." };
+  const kind: TeamDocumentKind = input.kind === "note" ? "note" : "link";
+  if (kind === "link" && !(input.url ?? "").trim()) return { ok: false, error: "Add a link URL." };
+  if (kind === "note" && !(input.content ?? "").trim()) return { ok: false, error: "Add some content." };
+  const [me] = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(teamDocuments)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      title: title.slice(0, 200),
+      kind,
+      url: kind === "link" ? (input.url ?? "").trim().slice(0, 2000) : "",
+      content: kind === "note" ? (input.content ?? "").slice(0, 20000) : "",
+      created_by_member_id: me?.id ?? null,
+      created_by_name: (me?.name || fallbackName || "Someone").slice(0, 120),
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, document: toDocument(row) };
+}
+
+/** Owner/manager can remove any shared document; a contributor only their own. */
+export async function deleteTeamDocument(
+  workspaceId: string,
+  userId: string,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [doc] = await db
+    .select({ created_by_member_id: teamDocuments.created_by_member_id })
+    .from(teamDocuments)
+    .where(and(eq(teamDocuments.workspace_id, workspaceId), eq(teamDocuments.id, id)))
+    .limit(1);
+  if (!doc) return { ok: true };
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    const [me] = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+      .limit(1);
+    if (!me || doc.created_by_member_id !== me.id) {
+      return { ok: false, error: "You can only remove documents you added." };
+    }
+  }
+  await db.delete(teamDocuments).where(and(eq(teamDocuments.workspace_id, workspaceId), eq(teamDocuments.id, id)));
+  return { ok: true };
+}
+
+// ── Team chat (Phase 5) ──────────────────────────────────────────────────────
+
+/** List chat channels, seeding a default "general" the first time. */
+export async function listChatChannels(workspaceId: string): Promise<ChatChannel[]> {
+  let rows = await db
+    .select()
+    .from(chatChannels)
+    .where(eq(chatChannels.workspace_id, workspaceId))
+    .orderBy(asc(chatChannels.created_at));
+  if (!rows.length) {
+    const now = new Date();
+    await db.insert(chatChannels).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      name: "general",
+      created_by_member_id: null,
+      created_at: now,
+      updated_at: now,
+    });
+    rows = await db
+      .select()
+      .from(chatChannels)
+      .where(eq(chatChannels.workspace_id, workspaceId))
+      .orderBy(asc(chatChannels.created_at));
+  }
+  return rows.map((r) => ({ id: r.id, name: r.name, created_at: new Date(r.created_at).toISOString() }));
+}
+
+export async function createChatChannel(
+  workspaceId: string,
+  userId: string,
+  name: string,
+): Promise<{ ok: true; channel: ChatChannel } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can add channels." };
+  }
+  const clean = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  if (!clean) return { ok: false, error: "Give the channel a name." };
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(chatChannels)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      name: clean,
+      created_by_member_id: me?.id ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, channel: { id: row.id, name: row.name, created_at: new Date(row.created_at).toISOString() } };
+}
+
+/** Messages in a channel (oldest→newest), each flagged `mine` for the viewer. */
+export async function listChatMessages(
+  workspaceId: string,
+  userId: string,
+  channelId: string,
+  limit = 100,
+): Promise<ChatMessage[]> {
+  const rows = await db
+    .select()
+    .from(chatMessages)
+    .where(and(eq(chatMessages.workspace_id, workspaceId), eq(chatMessages.channel_id, channelId)))
+    .orderBy(desc(chatMessages.created_at))
+    .limit(limit);
+  return rows.reverse().map((r) => ({
+    id: r.id,
+    sender_name: r.sender_name,
+    body: r.body,
+    mine: r.sender_user_id === userId,
+    created_at: new Date(r.created_at).toISOString(),
+  }));
+}
+
+export async function sendChatMessage(
+  workspaceId: string,
+  userId: string,
+  channelId: string,
+  body: string,
+  fallbackName: string,
+): Promise<{ ok: true; message: ChatMessage } | { ok: false; error: string }> {
+  const clean = body.trim();
+  if (!clean) return { ok: false, error: "Message is empty." };
+  const [ch] = await db
+    .select({ id: chatChannels.id })
+    .from(chatChannels)
+    .where(and(eq(chatChannels.workspace_id, workspaceId), eq(chatChannels.id, channelId)))
+    .limit(1);
+  if (!ch) return { ok: false, error: "That channel no longer exists." };
+  const [me] = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  const now = new Date();
+  const [row] = await db
+    .insert(chatMessages)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      channel_id: channelId,
+      sender_user_id: userId,
+      sender_member_id: me?.id ?? null,
+      sender_name: (me?.name || fallbackName || "Someone").slice(0, 120),
+      body: clean.slice(0, 4000),
+      created_at: now,
+    })
+    .returning();
+  return {
+    ok: true,
+    message: {
+      id: row.id,
+      sender_name: row.sender_name,
+      body: row.body,
+      mine: true,
+      created_at: new Date(row.created_at).toISOString(),
+    },
+  };
 }
 
 // ── Assignments (handoffs) ──────────────────────────────────────────────────
