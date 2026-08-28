@@ -1,14 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import dynamic from "next/dynamic";
 import { Menu, TriangleAlert, X } from "lucide-react";
 import { Sidebar } from "@/components/app/sidebar";
-import { TaskDrawer } from "@/components/board/task-drawer";
 import { Logo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/misc";
 import { useStore } from "@/lib/store";
 import { categoryCounts } from "@/lib/filters";
+
+// The task drawer (~1,100 lines) mounts in the shell on every product page but is
+// only needed once a task is opened. Lazy-load it so it isn't in each page's
+// initial bundle. ssr:false — it's a client-only overlay driven by the store.
+const TaskDrawer = dynamic(
+  () => import("@/components/board/task-drawer").then((m) => m.TaskDrawer),
+  { ssr: false },
+);
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { hydrated, state, loadError, reloadWorkspace } = useStore();

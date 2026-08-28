@@ -107,21 +107,28 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const counts = state ? categoryCounts(state.tasks) : null;
 
-  // Executive "needs attention" badge — refreshed as you move around the app.
+  // Executive "needs attention" + Boardroom alert badges. Refreshed on mount and
+  // on a slow interval — deliberately NOT on every navigation, which fired two
+  // server actions per click. Server actions run sequentially per tab, so those
+  // per-nav badge calls queued behind (and delayed) the real work of each click.
   const [attention, setAttention] = useState(0);
-  useEffect(() => {
-    getExecutiveAttentionAction()
-      .then(setAttention)
-      .catch(() => {});
-  }, [pathname]);
-
-  // Boardroom unread-alert badge — refreshed as you move around the app.
   const [boardAlerts, setBoardAlerts] = useState(0);
   useEffect(() => {
-    getBoardAlertCountAction()
-      .then(setBoardAlerts)
-      .catch(() => {});
-  }, [pathname]);
+    let alive = true;
+    const refresh = () => {
+      getExecutiveAttentionAction().then((n) => alive && setAttention(n)).catch(() => {});
+      getBoardAlertCountAction().then((n) => alive && setBoardAlerts(n)).catch(() => {});
+    };
+    refresh();
+    const id = setInterval(refresh, 60000);
+    const onFocus = () => refresh();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      alive = false;
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
 
   function go(path: string) {
     router.push(path);
@@ -192,9 +199,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               const badge =
                 item.href === "/boardroom" ? boardAlerts : item.href === "/executive" ? attention : ready;
               return (
-                <button
+                // Real <Link> (not router.push): Next prefetches the route when the
+                // item enters the viewport, so the click is warm instead of a cold
+                // server round-trip. This is the main "clicking pages is slow" fix.
+                <Link
                   key={item.href}
-                  onClick={() => go(item.href)}
+                  href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors",
                     active
@@ -209,7 +220,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       {badge}
                     </span>
                   )}
-                </button>
+                </Link>
               );
             })}
           </Section>

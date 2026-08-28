@@ -15,7 +15,16 @@ const nextConfig = {
   // persisted. Raise the ceiling so a busy workspace saves reliably. The real
   // anti-runaway fix is the per-agent generation caps + targeted writes; this is
   // defense-in-depth for everything else that still rides the bundle save.
-  experimental: { serverActions: { bodySizeLimit: "8mb" } },
+  experimental: {
+    serverActions: { bodySizeLimit: "8mb" },
+    // Let the client Router Cache reuse a dynamic route's rendered payload for 30s
+    // instead of Next 15's default of 0. Every route here is dynamic (per-user
+    // cookies), so with the default the shared (product) layout re-ran its Supabase
+    // Auth network call + workspace/role DB queries on EVERY navigation between
+    // pages. Caching for 30s makes moving between recently-visited pages instant and
+    // eliminates that repeated auth+DB work — the biggest "clicking is slow" fix.
+    staleTimes: { dynamic: 30 },
+  },
 };
 
 export default nextConfig;

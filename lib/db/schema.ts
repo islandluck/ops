@@ -101,7 +101,7 @@ export const workspaceMembers = pgTable("workspace_members", {
   user_id: uuid("user_id").notNull(),
   role: text("role").notNull().default("owner"),
   created_at: createdAt,
-});
+}, (t) => [index("workspace_members_user_idx").on(t.user_id, t.workspace_id)]);
 
 export const businessBriefs = pgTable("business_briefs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -136,7 +136,7 @@ export const businessBriefs = pgTable("business_briefs", {
   country: text("country").notNull().default(""),
   connected_systems: text("connected_systems").array().notNull().default([]),
   updated_at: updatedAt,
-});
+}, (t) => [index("business_briefs_ws_idx").on(t.workspace_id)]);
 
 export const agents = pgTable("agents", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -167,7 +167,7 @@ export const agents = pgTable("agents", {
   /** Learned writing voice, distilled from the owner's own tweets — injected into
    *  X drafting so posts match how they actually write. Null until learned. */
   style_profile: text("style_profile"),
-});
+}, (t) => [index("agents_ws_idx").on(t.workspace_id)]);
 
 export const integrations = pgTable("integrations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -188,7 +188,7 @@ export const integrations = pgTable("integrations", {
   refresh_token: text("refresh_token"),
   token_expires_at: timestamp("token_expires_at", { withTimezone: true }),
   scope: text("scope"),
-});
+}, (t) => [index("integrations_ws_idx").on(t.workspace_id)]);
 
 export const tasks = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -229,7 +229,11 @@ export const tasks = pgTable("tasks", {
   suggested_time: text("suggested_time"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [
+  index("tasks_ws_created_idx").on(t.workspace_id, t.created_at),
+  index("tasks_ws_status_idx").on(t.workspace_id, t.status),
+  index("tasks_ws_project_idx").on(t.workspace_id, t.project_id),
+]);
 
 /**
  * The latest Executive triage of the Approval Center — an ordered, grouped plan
@@ -262,7 +266,7 @@ export const taskAssets = pgTable("task_assets", {
   title: text("title").notNull(),
   content: text("content").notNull().default(""),
   metadata: jsonb("metadata").$type<Record<string, string | number>>(),
-});
+}, (t) => [index("task_assets_task_idx").on(t.task_id)]);
 
 export const approvalDecisions = pgTable("approval_decisions", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -273,7 +277,7 @@ export const approvalDecisions = pgTable("approval_decisions", {
   decision_type: text("decision_type").$type<DecisionType>().notNull(),
   comment: text("comment"),
   created_at: createdAt,
-});
+}, (t) => [index("approval_decisions_task_idx").on(t.task_id)]);
 
 export const executionRuns = pgTable("execution_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -287,7 +291,7 @@ export const executionRuns = pgTable("execution_runs", {
   affected_systems: text("affected_systems").array().notNull().default([]),
   result_summary: text("result_summary"),
   steps: jsonb("steps").$type<ExecutionStep[]>().notNull().default([]),
-});
+}, (t) => [index("execution_runs_task_idx").on(t.task_id)]);
 
 export const activityEvents = pgTable("activity_events", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -301,7 +305,7 @@ export const activityEvents = pgTable("activity_events", {
   summary: text("summary").notNull(),
   metadata: jsonb("metadata").$type<Record<string, string | number>>(),
   created_at: createdAt,
-});
+}, (t) => [index("activity_events_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** Which Gmail messages have already been triaged (per workspace), so repeat
  *  and background runs skip seen mail and process only genuinely new email. */
@@ -351,7 +355,10 @@ export const emailTriage = pgTable(
     triaged_at: createdAt,
     updated_at: updatedAt,
   },
-  (t) => [uniqueIndex("email_triage_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id)],
+  (t) => [
+    uniqueIndex("email_triage_ws_msg_uniq").on(t.workspace_id, t.gmail_message_id),
+    index("email_triage_ws_triaged_idx").on(t.workspace_id, t.triaged_at),
+  ],
 );
 
 /**
@@ -678,7 +685,10 @@ export const teamMembers = pgTable(
     created_at: createdAt,
     updated_at: updatedAt,
   },
-  (t) => [index("team_members_ws_idx").on(t.workspace_id)],
+  (t) => [
+    index("team_members_ws_idx").on(t.workspace_id),
+    index("team_members_ws_user_idx").on(t.workspace_id, t.user_id),
+  ],
 );
 
 /**
@@ -1052,7 +1062,7 @@ export const documents = pgTable("documents", {
   notion_url: text("notion_url"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("documents_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** Freeform notes the user jots down. A note can be handed to the Executive,
  *  which proposes a project or tasks from it; `status` flips to "actioned" and
@@ -1070,7 +1080,7 @@ export const notes = pgTable("notes", {
   spawned_task_count: integer("spawned_task_count").notNull().default(0),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("notes_ws_updated_idx").on(t.workspace_id, t.updated_at)]);
 
 /** A multi-step project a leadership agent (Manager/Executive) plans and runs:
  *  a goal decomposed into a phased plan whose steps become tasks over time. */
@@ -1099,7 +1109,10 @@ export const projects = pgTable("projects", {
   assigned_manager_id: uuid("assigned_manager_id"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [
+  index("projects_ws_created_idx").on(t.workspace_id, t.created_at),
+  index("projects_ws_status_idx").on(t.workspace_id, t.status),
+]);
 
 /** Follower-count snapshots for a growth campaign — the progress trend vs goal. */
 export const followerSnapshots = pgTable("follower_snapshots", {
@@ -1110,7 +1123,7 @@ export const followerSnapshots = pgTable("follower_snapshots", {
   project_id: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
   followers: integer("followers").notNull().default(0),
   created_at: createdAt,
-});
+}, (t) => [index("follower_snapshots_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** A sellable offer — what a buy button charges for (Stripe price = price_cents). */
 export const products = pgTable("products", {
@@ -1124,7 +1137,7 @@ export const products = pgTable("products", {
   currency: text("currency").notNull().default("usd"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("products_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** A generated page with a buy button — landing / product / blog. Hosted in-app
  *  at /p/[slug]; the atomic unit of the Builder growth loop. */
@@ -1171,7 +1184,7 @@ export const posts = pgTable("posts", {
   agent_id: uuid("agent_id"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("posts_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** A packaged variant of a post for one destination + its distribution status. */
 export const postChannels = pgTable("post_channels", {
@@ -1191,7 +1204,7 @@ export const postChannels = pgTable("post_channels", {
   scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("post_channels_ws_post_idx").on(t.workspace_id, t.post_id)]);
 
 /** Accounts the owner watches for reply opportunities — the "reply radar" watchlist. */
 export const xTargets = pgTable(
@@ -1256,7 +1269,7 @@ export const orders = pgTable("orders", {
   currency: text("currency").notNull().default("usd"),
   customer_email: text("customer_email"),
   created_at: createdAt,
-});
+}, (t) => [index("orders_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /* ---------------------------- executive office --------------------------- */
 
@@ -1273,7 +1286,7 @@ export const executiveMessages = pgTable("executive_messages", {
   /** Archived when the owner starts a new chat — hidden, kept for history. */
   archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
-});
+}, (t) => [index("executive_messages_ws_archived_idx").on(t.workspace_id, t.archived, t.created_at)]);
 
 /** Durable things the Executive Agent knows about the business. */
 export const executiveMemory = pgTable("executive_memory", {
@@ -1287,7 +1300,7 @@ export const executiveMemory = pgTable("executive_memory", {
   pinned: boolean("pinned").notNull().default(false),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("executive_memory_ws_idx").on(t.workspace_id, t.pinned, t.created_at)]);
 
 /** A generated monthly investor / stakeholder update (outward-facing). */
 // Holds stakeholder updates for every audience (investor / team / advisor);
@@ -1304,7 +1317,7 @@ export const investorUpdates = pgTable("investor_updates", {
     .default({ period: "", tldr: "", highlights: [], metrics: [], lowlights: [], whats_next: [], asks: [], closing: "" }),
   archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
-});
+}, (t) => [index("investor_updates_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** A Deep Dive run — ingests company material (docs/text; later email/Notion) and
  *  synthesizes the Company Context Pack. Runnable anytime, not just at onboarding. */
@@ -1327,7 +1340,7 @@ export const deepDives = pgTable("deep_dives", {
   started_at: timestamp("started_at", { withTimezone: true }),
   completed_at: timestamp("completed_at", { withTimezone: true }),
   created_at: createdAt,
-});
+}, (t) => [index("deep_dives_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** One ingested unit for a Deep Dive. `status` is the resumable distill cursor;
  *  `raw_text` is purged once the run completes (we keep only the distillation). */
@@ -1347,7 +1360,7 @@ export const deepDiveSources = pgTable("deep_dive_sources", {
   distilled: jsonb("distilled").$type<SourceDistillation>(),
   error: text("error"),
   created_at: createdAt,
-});
+}, (t) => [index("deep_dive_sources_deepdive_status_idx").on(t.deep_dive_id, t.status)]);
 
 /** The synthesized understanding of the company (the "Context Pack"). Versioned
  *  and cumulative — each Deep Dive builds on the prior current pack; one row is
@@ -1366,7 +1379,7 @@ export const companyContext = pgTable("company_context", {
     .notNull()
     .default({ people: [], timeline: [], themes: [], decisions: [], open_threads: [], risks: [], products: [] }),
   created_at: createdAt,
-});
+}, (t) => [index("company_context_ws_current_idx").on(t.workspace_id, t.is_current)]);
 
 /** A per-workspace opportunity scanner (grant / conference / event / competition).
  *  Runs on a cadence and surfaces ranked opportunities; one row per (workspace, type). */
@@ -1425,7 +1438,10 @@ export const opportunities = pgTable(
     project_id: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
     created_at: createdAt,
   },
-  (t) => ({ wsUrlUniq: uniqueIndex("opportunities_ws_url_uniq").on(t.workspace_id, t.url) }),
+  (t) => ({
+    wsUrlUniq: uniqueIndex("opportunities_ws_url_uniq").on(t.workspace_id, t.url),
+    wsStatus: index("opportunities_ws_status_idx").on(t.workspace_id, t.status),
+  }),
 );
 
 /** A generated daily executive brief (synthesized snapshot of the business). */
@@ -1440,7 +1456,7 @@ export const executiveBriefs = pgTable("executive_briefs", {
     .notNull()
     .default({ headline: "", kpi_review: "", shipped: [], in_motion: [], next: [], insights: [], suggestions: [] }),
   created_at: createdAt,
-});
+}, (t) => [index("executive_briefs_ws_kind_idx").on(t.workspace_id, t.kind, t.created_at)]);
 
 /** Company-wide goals the owner sets with the Executive Agent. */
 export const companyGoals = pgTable("company_goals", {
@@ -1460,4 +1476,4 @@ export const companyGoals = pgTable("company_goals", {
   target_number: integer("target_number"),
   created_at: createdAt,
   updated_at: updatedAt,
-});
+}, (t) => [index("company_goals_ws_created_idx").on(t.workspace_id, t.created_at)]);

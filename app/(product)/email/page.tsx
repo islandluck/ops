@@ -43,8 +43,15 @@ import {
   trashEmailAction,
   triageEmailsAction,
 } from "@/app/actions";
-import { OutboundComposer } from "@/components/email/outbound-composer";
+import dynamic from "next/dynamic";
 import type { EmailBody, EmailCadence, EmailListItem, EmailManagerState, EmailSettings } from "@/lib/types";
+
+// Loaded on demand — the composer (and its 30s poll) only matter once the user
+// opens Compose, so keep it out of the initial /email bundle.
+const OutboundComposer = dynamic(
+  () => import("@/components/email/outbound-composer").then((m) => m.OutboundComposer),
+  { ssr: false },
+);
 
 const CAT_BADGE: Record<string, string> = {
   Investor: "bg-violet-100 text-violet-700",

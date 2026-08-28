@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/brand";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { acceptInviteAction } from "@/app/actions";
 
 export default function AcceptInvitePage() {
@@ -19,8 +18,10 @@ export default function AcceptInvitePage() {
       if (cancelled) return;
       if ("ok" in r && r.ok) {
         // Refresh the session so the cleared "pending invite" flag takes effect,
-        // then hand off to the portal.
+        // then hand off to the portal. Import the browser SDK on demand so it
+        // isn't in this page's initial bundle (it's the only place we use it).
         try {
+          const { createSupabaseBrowserClient } = await import("@/lib/supabase/client");
           await createSupabaseBrowserClient().auth.refreshSession();
         } catch {
           /* ignore */

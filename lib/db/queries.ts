@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { and, desc, eq, inArray, isNotNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "./index";
 import {
@@ -54,9 +55,14 @@ const uid = () => crypto.randomUUID();
 /* Provisioning + load                                                 */
 /* ------------------------------------------------------------------ */
 
-export async function workspaceIdForUser(userId: string): Promise<string | null> {
+/**
+ * The caller's workspace id. Wrapped in React `cache()` so the layout, the page,
+ * and any nested server components in one request share a single resolution
+ * instead of each re-running the membership query on every navigation.
+ */
+export const workspaceIdForUser = cache(async (userId: string): Promise<string | null> => {
   return getWorkspaceId(userId);
-}
+});
 
 async function getWorkspaceId(userId: string): Promise<string | null> {
   // tenant-scope-exempt: resolves the caller's OWN memberships by their auth user_id.
@@ -81,16 +87,18 @@ async function getWorkspaceId(userId: string): Promise<string | null> {
   return (owned ?? memberships[0]).id;
 }
 
-/** The caller's role in a workspace (owner | member | null if not a member). */
-export async function getUserRoleInWorkspace(userId: string, workspaceId: string): Promise<string | null> {
-  // tenant-scope-exempt: resolves the caller's OWN role by their auth user_id.
-  const [row] = await db
-    .select({ role: workspaceMembers.role })
-    .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.user_id, userId), eq(workspaceMembers.workspace_id, workspaceId)))
-    .limit(1);
-  return row?.role ?? null;
-}
+/** The caller's role in a workspace (owner | member | null if not a member). Cached per request. */
+export const getUserRoleInWorkspace = cache(
+  async (userId: string, workspaceId: string): Promise<string | null> => {
+    // tenant-scope-exempt: resolves the caller's OWN role by their auth user_id.
+    const [row] = await db
+      .select({ role: workspaceMembers.role })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.user_id, userId), eq(workspaceMembers.workspace_id, workspaceId)))
+      .limit(1);
+    return row?.role ?? null;
+  },
+);
 
 /** Every workspace the user belongs to (for the switcher + resolution). */
 export async function listMembershipsForUser(
@@ -112,6 +120,16 @@ export async function listMembershipsForUser(
  * requests can't both provision (which would create duplicate workspaces).
  */
 async function getOrCreateWorkspace(userId: string): Promise<string> {
+  // Fast path — the workspace already exists (the overwhelmingly common case): a
+  // plain SELECT, no transaction or advisory lock. The locked path below only
+  // guards the rare first-login provisioning against a duplicate-create race.
+  // tenant-scope-exempt: resolves the caller's OWN membership by their auth user_id.
+  const found = await db
+    .select({ id: workspaceMembers.workspace_id })
+    .from(workspaceMembers)
+    .where(eq(workspaceMembers.user_id, userId))
+    .limit(1);
+  if (found[0]) return found[0].id;
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
 

@@ -81,6 +81,43 @@ async function computeProgress(row: ProjectRow): Promise<{ total: number; done: 
   return progressFor(row.workspace_id, row.id, row.plan);
 }
 
+/** Progress for MANY projects in a single task-status query (avoids the per-row
+ *  N+1 that fired one SELECT per project). Growth campaigns need no task query. */
+async function computeProgressForAll(
+  workspaceId: string,
+  rows: ProjectRow[],
+): Promise<Map<string, { total: number; done: number }>> {
+  const out = new Map<string, { total: number; done: number }>();
+  const taskProjectIds: string[] = [];
+  for (const r of rows) {
+    if (r.plan?.growth) {
+      const weeks = r.plan.growth.weeks || r.plan.phases.length || 1;
+      const done = r.status === "done" ? weeks : Math.min(r.current_phase, weeks);
+      out.set(r.id, { total: weeks, done });
+    } else {
+      taskProjectIds.push(r.id);
+    }
+  }
+  const doneByProject = new Map<string, number>();
+  if (taskProjectIds.length) {
+    const taskRows = await db
+      .select({ project_id: tasks.project_id, status: tasks.status })
+      .from(tasks)
+      .where(and(eq(tasks.workspace_id, workspaceId), inArray(tasks.project_id, taskProjectIds)));
+    for (const t of taskRows) {
+      if (t.project_id && t.status === "done") {
+        doneByProject.set(t.project_id, (doneByProject.get(t.project_id) ?? 0) + 1);
+      }
+    }
+  }
+  for (const r of rows) {
+    if (r.plan?.growth) continue;
+    const total = r.plan.phases.reduce((n, ph) => n + ph.steps.length, 0);
+    out.set(r.id, { total, done: doneByProject.get(r.id) ?? 0 });
+  }
+  return out;
+}
+
 async function logProject(
   workspaceId: string,
   eventType: "agent_updated_draft" | "approved" | "status_changed",
@@ -672,7 +709,8 @@ export async function listProjects(workspaceId: string): Promise<Project[]> {
     .from(projects)
     .where(eq(projects.workspace_id, workspaceId))
     .orderBy(desc(projects.created_at));
-  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
+  const progress = await computeProgressForAll(workspaceId, rows);
+  return rows.map((r) => toProject(r, progress.get(r.id)));
 }
 
 export async function getProject(workspaceId: string, projectId: string): Promise<Project | null> {
@@ -704,7 +742,8 @@ export async function listAssignedProjectsForOwner(workspaceId: string): Promise
     .from(projects)
     .where(and(eq(projects.workspace_id, workspaceId), isNotNull(projects.assigned_member_id)))
     .orderBy(desc(projects.created_at));
-  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
+  const progress = await computeProgressForAll(workspaceId, rows);
+  return rows.map((r) => toProject(r, progress.get(r.id)));
 }
 
 /** The full AI projects assigned to the member behind `userId` (with progress). */
@@ -716,7 +755,8 @@ export async function listAssignedProjects(workspaceId: string, userId: string):
     .from(projects)
     .where(and(eq(projects.workspace_id, workspaceId), eq(projects.assigned_member_id, memberId)))
     .orderBy(desc(projects.created_at));
-  return Promise.all(rows.map(async (r) => toProject(r, await computeProgress(r))));
+  const progress = await computeProgressForAll(workspaceId, rows);
+  return rows.map((r) => toProject(r, progress.get(r.id)));
 }
 
 /** An assigned project + its tasks/deliverables — ONLY if it's assigned to this member. */

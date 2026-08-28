@@ -1148,31 +1148,35 @@ export async function getPortalData(
   reports: TeamMember[];
   projects: HumanProject[];
 }> {
-  const [row] = await db
-    .select()
-    .from(teamMembers)
-    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
-    .limit(1);
-  if (!row) return { member: null, assignments: [], reports: [], projects: [] };
-  const assignments = await db
-    .select()
-    .from(teamAssignments)
-    .where(and(eq(teamAssignments.workspace_id, workspaceId), eq(teamAssignments.member_id, row.id)))
-    .orderBy(desc(teamAssignments.created_at));
-  // Resolve the manager's name for display.
-  let managerName: string | null = null;
-  if (row.manager_id) {
-    const [mgr] = await db
-      .select({ name: teamMembers.name })
+  // `allProjects` doesn't depend on the member row, so resolve it in parallel.
+  const [rows, allProjects] = await Promise.all([
+    db
+      .select()
       .from(teamMembers)
-      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, row.manager_id)))
-      .limit(1);
-    managerName = mgr?.name ?? null;
-  }
-  // A manager also sees their direct reports (for delegation).
-  const reports = row.team_role === "manager" ? await getDirectReports(workspaceId, row.id) : [];
-  // Human projects this member leads or manages, + a title lookup for their tasks.
-  const allProjects = await listHumanProjects(workspaceId);
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+      .limit(1),
+    listHumanProjects(workspaceId),
+  ]);
+  const [row] = rows;
+  if (!row) return { member: null, assignments: [], reports: [], projects: [] };
+  // Assignments, the manager's name, and direct reports are mutually independent
+  // once we have the member row — run them together instead of in sequence.
+  const [assignments, managerName, reports] = await Promise.all([
+    db
+      .select()
+      .from(teamAssignments)
+      .where(and(eq(teamAssignments.workspace_id, workspaceId), eq(teamAssignments.member_id, row.id)))
+      .orderBy(desc(teamAssignments.created_at)),
+    row.manager_id
+      ? db
+          .select({ name: teamMembers.name })
+          .from(teamMembers)
+          .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, row.manager_id)))
+          .limit(1)
+          .then((r) => r[0]?.name ?? null)
+      : Promise.resolve<string | null>(null),
+    row.team_role === "manager" ? getDirectReports(workspaceId, row.id) : Promise.resolve<TeamMember[]>([]),
+  ]);
   const myProjects = allProjects.filter((p) => p.lead_member_id === row.id || p.manager_member_id === row.id);
   const projectTitleById = new Map(allProjects.map((p) => [p.id, p.title]));
   return {

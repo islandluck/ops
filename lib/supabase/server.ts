@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/config";
@@ -25,11 +26,18 @@ export async function createSupabaseServerClient() {
   });
 }
 
-/** The current authenticated user, or null. */
-export async function getCurrentUser() {
+/**
+ * The current authenticated user, or null. Wrapped in React `cache()` so the
+ * several callers in a single request (middleware aside — that's a separate
+ * request) — the product layout, the page, and any nested server components —
+ * share ONE `auth.getUser()` network round-trip instead of each paying for their
+ * own. This is the biggest per-navigation win: getUser() hits the Supabase auth
+ * server, and it was firing 2-3× per page load.
+ */
+export const getCurrentUser = cache(async () => {
   const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   return user;
-}
+});
