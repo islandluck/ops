@@ -283,6 +283,7 @@ import {
   getExecutiveBundle,
   sendExecutiveMessage,
   getThreadMessages,
+  searchThreads,
   newExecutiveThread,
   renameThread,
   deleteThread,
@@ -350,6 +351,7 @@ import type {
   DraftRequest,
   ExecBrief,
   ExecMessage,
+  ExecThreadHit,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -1330,6 +1332,18 @@ export async function getThreadMessagesAction(threadId: string): Promise<ExecMes
   if (!ws) return [];
   try {
     return await getThreadMessages(ws, threadId);
+  } catch {
+    return [];
+  }
+}
+
+export async function searchThreadsAction(query: string): Promise<ExecThreadHit[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await searchThreads(ws, query);
   } catch {
     return [];
   }

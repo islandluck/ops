@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, isNull } from "drizzle-orm";
 import { runWithUsage } from "@/lib/ai/usage";
 import { db } from "@/lib/db";
 import {
@@ -53,6 +53,7 @@ import type {
   ExecMessage,
   ExecSavedMessage,
   ExecThread,
+  ExecThreadHit,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -687,6 +688,70 @@ export async function listThreads(workspaceId: string): Promise<ExecThread[]> {
     .groupBy(executiveMessages.thread_id);
   const cById = new Map(countRows.map((r) => [r.thread_id, Number(r.c)]));
   return rows.map((r) => toThread(r, cById.get(r.id) ?? 0));
+}
+
+/** A short excerpt of `content` around the first case-insensitive match of `q`. */
+function makeSnippet(content: string, q: string): string {
+  const clean = content.replace(/\s+/g, " ").trim();
+  const ci = clean.toLowerCase().indexOf(q.toLowerCase());
+  if (ci < 0) return clean.slice(0, 120);
+  const start = Math.max(0, ci - 40);
+  const end = Math.min(clean.length, ci + q.length + 90);
+  return (start > 0 ? "…" : "") + clean.slice(start, end).trim() + (end < clean.length ? "…" : "");
+}
+
+/** Search threads by title AND message content; returns matches with a snippet. */
+export async function searchThreads(workspaceId: string, query: string): Promise<ExecThreadHit[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
+  const [msgRows, titleRows] = await Promise.all([
+    db
+      .select({ thread_id: executiveMessages.thread_id, content: executiveMessages.content })
+      .from(executiveMessages)
+      .where(
+        and(
+          eq(executiveMessages.workspace_id, workspaceId),
+          isNotNull(executiveMessages.thread_id),
+          ilike(executiveMessages.content, like),
+        ),
+      )
+      .orderBy(desc(executiveMessages.created_at))
+      .limit(300),
+    db
+      .select({ id: executiveThreads.id })
+      .from(executiveThreads)
+      .where(and(eq(executiveThreads.workspace_id, workspaceId), ilike(executiveThreads.title, like)))
+      .limit(100),
+  ]);
+  const snippetByThread = new Map<string, string>();
+  for (const m of msgRows) {
+    if (m.thread_id && !snippetByThread.has(m.thread_id)) snippetByThread.set(m.thread_id, makeSnippet(m.content, q));
+  }
+  const ids = new Set<string>([...snippetByThread.keys(), ...titleRows.map((r) => r.id)]);
+  if (!ids.size) return [];
+  const idList = [...ids];
+  const threadRows = await db
+    .select()
+    .from(executiveThreads)
+    .where(and(eq(executiveThreads.workspace_id, workspaceId), inArray(executiveThreads.id, idList)))
+    .orderBy(desc(executiveThreads.updated_at))
+    .limit(60);
+  const countRows = await db
+    .select({ thread_id: executiveMessages.thread_id, c: count() })
+    .from(executiveMessages)
+    .where(
+      and(
+        eq(executiveMessages.workspace_id, workspaceId),
+        inArray(
+          executiveMessages.thread_id,
+          threadRows.map((t) => t.id),
+        ),
+      ),
+    )
+    .groupBy(executiveMessages.thread_id);
+  const cById = new Map(countRows.map((r) => [r.thread_id, Number(r.c)]));
+  return threadRows.map((r) => ({ ...toThread(r, cById.get(r.id) ?? 0), snippet: snippetByThread.get(r.id) ?? "" }));
 }
 
 /** A thread's full message list (oldest → newest) — for reopening it. */

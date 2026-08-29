@@ -1035,6 +1035,11 @@ export interface ExecThread {
   created_at: string;
 }
 
+/** A thread that matched a search, with a snippet of the matching message. */
+export interface ExecThreadHit extends ExecThread {
+  snippet: string;
+}
+
 export type MemoryKind = "fact" | "preference" | "decision" | "insight";
 
 /* ------------------------------ Email Manager ------------------------------ */

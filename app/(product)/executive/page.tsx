@@ -32,6 +32,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Sparkles,
   Target,
@@ -64,6 +65,7 @@ import {
   sendExecutiveMessageAction,
   newExecutiveThreadAction,
   getThreadMessagesAction,
+  searchThreadsAction,
   renameThreadAction,
   deleteThreadAction,
   setGoalStatusAction,
@@ -80,6 +82,7 @@ import type {
   ExecMessage,
   ExecNudge,
   ExecThread,
+  ExecThreadHit,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -366,6 +369,19 @@ export default function ExecutivePage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      {/* Conversations sidebar (chat only) */}
+      {view === "chat" && (
+        <aside className="hidden shrink-0 border-r border-border bg-muted/20 lg:flex lg:w-[264px]">
+          <ThreadsSidebar
+            threads={threads}
+            activeId={activeThreadId}
+            onOpen={openThread}
+            onNew={newChat}
+            onDelete={deleteThreadHandler}
+            onChanged={loadBundle}
+          />
+        </aside>
+      )}
       {/* Conversation */}
       <div className="flex min-h-0 flex-1 flex-col border-b border-border lg:border-b-0 lg:border-r">
         <div className="flex shrink-0 items-center gap-3 border-b border-border bg-card px-4 py-3 sm:px-6">
@@ -560,16 +576,6 @@ export default function ExecutivePage() {
       {/* Context rail */}
       <aside className="min-h-0 w-full shrink-0 overflow-y-auto bg-muted/30 lg:w-[360px]">
         <div className="space-y-6 p-5">
-          {view === "chat" && (
-            <ThreadsPanel
-              threads={threads}
-              activeId={activeThreadId}
-              onOpen={openThread}
-              onNew={newChat}
-              onDelete={deleteThreadHandler}
-              onChanged={loadBundle}
-            />
-          )}
           <NudgesPanel nudges={bundle?.nudges ?? []} />
           <KpiStrip kpis={bundle?.kpis ?? []} />
           <GoalsPanel goals={bundle?.goals ?? []} onChanged={loadBundle} />
@@ -2342,7 +2348,7 @@ function threadTime(iso: string): string {
   }
 }
 
-function ThreadsPanel({
+function ThreadsSidebar({
   threads,
   activeId,
   onOpen,
@@ -2357,8 +2363,30 @@ function ThreadsPanel({
   onDelete: (id: string) => void;
   onChanged: () => Promise<void>;
 }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<ExecThreadHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState("");
+
+  // Debounced search across titles + message content.
+  useEffect(() => {
+    const query = q.trim();
+    if (!query) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const id = setTimeout(async () => {
+      try {
+        setResults(await searchThreadsAction(query));
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(id);
+  }, [q]);
 
   async function commitRename(id: string) {
     const t = title.trim();
@@ -2369,83 +2397,119 @@ function ThreadsPanel({
     }
   }
 
+  const searchMode = q.trim().length > 0;
+  const items: (ExecThread & { snippet?: string })[] = searchMode ? results ?? [] : threads;
+
   return (
-    <div>
-      <RailHeading
-        icon={<MessageSquarePlus className="h-3.5 w-3.5" />}
-        label="Conversations"
-        action={
-          <button onClick={onNew} className="text-muted-foreground hover:text-foreground" title="New chat">
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        }
-      />
-      <div className="mt-2 space-y-1">
-        {threads.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
-            Your conversations are saved here. Start chatting, or hit + for a new one — you can come back to any thread
-            and keep going.
+    <div className="flex min-h-0 w-full flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-3">
+        <h2 className="text-[13px] font-semibold">Conversations</h2>
+        <button
+          onClick={onNew}
+          title="New chat"
+          className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        >
+          <Plus className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="shrink-0 border-b border-border p-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search conversations"
+            className="w-full rounded-lg border border-input bg-background py-1.5 pl-7 pr-6 text-[13px] outline-none focus:border-primary/50"
+          />
+          {q && (
+            <button
+              onClick={() => setQ("")}
+              title="Clear"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {searchMode && searching && items.length === 0 ? (
+          <div className="flex justify-center py-6 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="px-1 py-6 text-center text-[12px] text-muted-foreground">
+            {searchMode ? "No conversations match that." : "No conversations yet. Start chatting or hit + for a new one."}
           </p>
         ) : (
-          threads.map((t) => {
-            const active = t.id === activeId;
-            return (
-              <div
-                key={t.id}
-                className={cn(
-                  "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition",
-                  active ? "bg-primary/10" : "hover:bg-accent",
-                )}
-              >
-                {editing === t.id ? (
-                  <input
-                    value={title}
-                    autoFocus
-                    onChange={(e) => setTitle(e.target.value)}
-                    onBlur={() => commitRename(t.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void commitRename(t.id);
-                      if (e.key === "Escape") setEditing(null);
-                    }}
-                    className="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[13px] outline-none"
-                  />
-                ) : (
-                  <button onClick={() => onOpen(t.id)} className="min-w-0 flex-1 text-left">
-                    <p className={cn("truncate text-[13px] font-medium", active ? "text-primary" : "text-foreground/90")}>
-                      {t.title || "New conversation"}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {threadTime(t.updated_at)}
-                      {t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}
-                    </p>
-                  </button>
-                )}
-                {editing !== t.id && (
-                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
-                    <button
-                      onClick={() => {
-                        setEditing(t.id);
-                        setTitle(t.title);
-                      }}
-                      title="Rename"
-                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (window.confirm("Delete this conversation?")) onDelete(t.id);
-                      }}
-                      title="Delete"
-                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
+          <div className="space-y-1">
+            {items.map((t) => {
+              const active = t.id === activeId;
+              return (
+                <div
+                  key={t.id}
+                  className={cn("group rounded-lg px-2 py-1.5 transition", active ? "bg-primary/10" : "hover:bg-accent")}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {editing === t.id ? (
+                      <input
+                        value={title}
+                        autoFocus
+                        onChange={(e) => setTitle(e.target.value)}
+                        onBlur={() => commitRename(t.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void commitRename(t.id);
+                          if (e.key === "Escape") setEditing(null);
+                        }}
+                        className="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[13px] outline-none"
+                      />
+                    ) : (
+                      <button onClick={() => onOpen(t.id)} className="min-w-0 flex-1 text-left">
+                        <p
+                          className={cn(
+                            "truncate text-[13px] font-medium",
+                            active ? "text-primary" : "text-foreground/90",
+                          )}
+                        >
+                          {t.title || "New conversation"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {threadTime(t.updated_at)}
+                          {t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}
+                        </p>
+                      </button>
+                    )}
+                    {editing !== t.id && (
+                      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                        <button
+                          onClick={() => {
+                            setEditing(t.id);
+                            setTitle(t.title);
+                          }}
+                          title="Rename"
+                          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (window.confirm("Delete this conversation?")) onDelete(t.id);
+                          }}
+                          title="Delete"
+                          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })
+                  {searchMode && t.snippet && (
+                    <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground/80">{t.snippet}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
