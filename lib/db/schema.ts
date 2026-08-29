@@ -1310,6 +1310,8 @@ export const executiveMessages = pgTable("executive_messages", {
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  // The conversation thread this message belongs to (nullable for legacy rows).
+  thread_id: uuid("thread_id"),
   role: text("role").$type<ExecRole>().notNull(),
   content: text("content").notNull().default(""),
   /** Tool calls the agent made while producing an assistant turn. */
@@ -1317,7 +1319,26 @@ export const executiveMessages = pgTable("executive_messages", {
   /** Archived when the owner starts a new chat — hidden, kept for history. */
   archived: boolean("archived").notNull().default(false),
   created_at: createdAt,
-}, (t) => [index("executive_messages_ws_archived_idx").on(t.workspace_id, t.archived, t.created_at)]);
+}, (t) => [
+  index("executive_messages_ws_archived_idx").on(t.workspace_id, t.archived, t.created_at),
+  index("executive_messages_thread_idx").on(t.workspace_id, t.thread_id, t.created_at),
+]);
+
+/** A saved conversation thread with the Executive — groups executive_messages so the
+ *  founder can return to any past conversation and keep chatting in it. */
+export const executiveThreads = pgTable(
+  "executive_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("executive_threads_ws_idx").on(t.workspace_id, t.updated_at)],
+);
 
 /** Durable things the Executive Agent knows about the business. */
 export const executiveMemory = pgTable("executive_memory", {

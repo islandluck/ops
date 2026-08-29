@@ -1026,6 +1026,15 @@ export interface ExecMessage {
   created_at: string;
 }
 
+/** A conversation thread with the Executive — a saved chat the founder can reopen. */
+export interface ExecThread {
+  id: string;
+  title: string;
+  message_count: number;
+  updated_at: string;
+  created_at: string;
+}
+
 export type MemoryKind = "fact" | "preference" | "decision" | "insight";
 
 /* ------------------------------ Email Manager ------------------------------ */
@@ -1490,8 +1499,10 @@ export interface ExecutiveBundle {
   briefs: ExecBrief[];
   /** Recent investor updates, newest first. */
   investorUpdates: InvestorUpdate[];
-  /** Messages the founder saved to revisit (organized by the Executive). */
-  saved: ExecSavedMessage[];
+  /** All conversation threads (history column), most-recently-active first. */
+  threads: ExecThread[];
+  /** The thread whose messages `messages` holds (null if none yet). */
+  activeThreadId: string | null;
 }
 
 /* ----------------------------- Deep Dive -------------------------------- */

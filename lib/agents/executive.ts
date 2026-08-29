@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
 import { runWithUsage } from "@/lib/ai/usage";
 import { db } from "@/lib/db";
 import {
@@ -13,6 +13,7 @@ import {
   executiveMemory,
   executiveMessages,
   executiveSavedMessages,
+  executiveThreads,
   investorUpdates,
   pages,
   posts,
@@ -51,6 +52,7 @@ import type {
   ExecMemory,
   ExecMessage,
   ExecSavedMessage,
+  ExecThread,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -623,24 +625,129 @@ function buildTools(workspaceId: string): ExecTool[] {
 
 /* ------------------------------- chat ----------------------------------- */
 
+/* ---------------------------- threads ----------------------------------- */
+
+function toThread(r: typeof executiveThreads.$inferSelect, messageCount: number): ExecThread {
+  return {
+    id: r.id,
+    title: r.title,
+    message_count: messageCount,
+    updated_at: iso(r.updated_at),
+    created_at: iso(r.created_at),
+  };
+}
+
+/** The active thread (most recently updated); creates the first one and adopts
+ *  any legacy un-threaded messages into it. */
+async function ensureActiveThread(workspaceId: string): Promise<string> {
+  const [t] = await db
+    .select({ id: executiveThreads.id })
+    .from(executiveThreads)
+    .where(eq(executiveThreads.workspace_id, workspaceId))
+    .orderBy(desc(executiveThreads.updated_at))
+    .limit(1);
+  if (t) return t.id;
+  const id = uid();
+  const now = new Date();
+  await db.insert(executiveThreads).values({ id, workspace_id: workspaceId, title: "", created_at: now, updated_at: now });
+  await db
+    .update(executiveMessages)
+    .set({ thread_id: id })
+    .where(
+      and(
+        eq(executiveMessages.workspace_id, workspaceId),
+        isNull(executiveMessages.thread_id),
+        eq(executiveMessages.archived, false),
+      ),
+    );
+  return id;
+}
+
+/** All conversation threads, most-recently-active first, with message counts. */
+export async function listThreads(workspaceId: string): Promise<ExecThread[]> {
+  const rows = await db
+    .select()
+    .from(executiveThreads)
+    .where(eq(executiveThreads.workspace_id, workspaceId))
+    .orderBy(desc(executiveThreads.updated_at))
+    .limit(100);
+  if (!rows.length) return [];
+  const countRows = await db
+    .select({ thread_id: executiveMessages.thread_id, c: count() })
+    .from(executiveMessages)
+    .where(
+      and(
+        eq(executiveMessages.workspace_id, workspaceId),
+        inArray(
+          executiveMessages.thread_id,
+          rows.map((r) => r.id),
+        ),
+      ),
+    )
+    .groupBy(executiveMessages.thread_id);
+  const cById = new Map(countRows.map((r) => [r.thread_id, Number(r.c)]));
+  return rows.map((r) => toThread(r, cById.get(r.id) ?? 0));
+}
+
+/** A thread's full message list (oldest → newest) — for reopening it. */
+export async function getThreadMessages(workspaceId: string, threadId: string): Promise<ExecMessage[]> {
+  const rows = await db
+    .select()
+    .from(executiveMessages)
+    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.thread_id, threadId)))
+    .orderBy(asc(executiveMessages.created_at))
+    .limit(500);
+  return rows.map(toMsg);
+}
+
+export async function newExecutiveThread(workspaceId: string): Promise<{ id: string }> {
+  const id = uid();
+  const now = new Date();
+  await db.insert(executiveThreads).values({ id, workspace_id: workspaceId, title: "", created_at: now, updated_at: now });
+  return { id };
+}
+
+export async function renameThread(workspaceId: string, id: string, title: string): Promise<{ ok: boolean }> {
+  await db
+    .update(executiveThreads)
+    .set({ title: title.trim().slice(0, 120) })
+    .where(and(eq(executiveThreads.workspace_id, workspaceId), eq(executiveThreads.id, id)));
+  return { ok: true };
+}
+
+export async function deleteThread(workspaceId: string, id: string): Promise<{ ok: boolean }> {
+  await db
+    .delete(executiveMessages)
+    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.thread_id, id)));
+  await db
+    .delete(executiveThreads)
+    .where(and(eq(executiveThreads.workspace_id, workspaceId), eq(executiveThreads.id, id)));
+  return { ok: true };
+}
+
+/* ---------------------------- chat -------------------------------------- */
+
 export async function sendExecutiveMessage(
   workspaceId: string,
   text: string,
-): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
-  return runWithUsage(workspaceId, "executive-chat", () => _sendExecutiveMessage(workspaceId, text));
+  threadId?: string,
+): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
+  return runWithUsage(workspaceId, "executive-chat", () => _sendExecutiveMessage(workspaceId, text, threadId));
 }
 async function _sendExecutiveMessage(
   workspaceId: string,
   text: string,
-): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
+  threadId?: string,
+): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
   const clean = text.trim();
   if (!clean) return { ok: false, error: "Type a message first." };
+  const tid = threadId || (await ensureActiveThread(workspaceId));
 
-  // Prior turns in the current chat (oldest→newest) before recording this one.
+  // Prior turns in THIS thread (oldest→newest) before recording this one.
   const historyRows = await db
     .select()
     .from(executiveMessages)
-    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)))
+    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.thread_id, tid)))
     .orderBy(desc(executiveMessages.created_at))
     .limit(20);
   const history = historyRows.reverse().map((m) => ({ role: m.role, content: m.content }));
@@ -649,6 +756,7 @@ async function _sendExecutiveMessage(
   await db.insert(executiveMessages).values({
     id: uid(),
     workspace_id: workspaceId,
+    thread_id: tid,
     role: "user",
     content: clean.slice(0, 4000),
     actions: [],
@@ -671,26 +779,36 @@ async function _sendExecutiveMessage(
   await db.insert(executiveMessages).values({
     id: asstId,
     workspace_id: workspaceId,
+    thread_id: tid,
     role: "assistant",
     content: result.text,
     actions: result.actions,
     created_at: asstAt,
   });
 
+  // Move the thread to the top + auto-title it from its first message.
+  const [thread] = await db
+    .select({ title: executiveThreads.title })
+    .from(executiveThreads)
+    .where(and(eq(executiveThreads.workspace_id, workspaceId), eq(executiveThreads.id, tid)))
+    .limit(1);
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (thread && !thread.title.trim()) set.title = clean.replace(/\s+/g, " ").trim().slice(0, 80);
+  await db.update(executiveThreads).set(set).where(and(eq(executiveThreads.workspace_id, workspaceId), eq(executiveThreads.id, tid)));
+
   return {
     ok: true,
+    threadId: tid,
     reply: { id: asstId, role: "assistant", content: result.text, actions: result.actions, created_at: iso(asstAt) },
   };
 }
 
-/** Start a fresh conversation — archives the current chat (kept for history).
- *  The agent's memory is separate and unaffected, so it still knows the business. */
-export async function startNewExecutiveChat(workspaceId: string): Promise<{ ok: boolean }> {
-  await db
-    .update(executiveMessages)
-    .set({ archived: true })
-    .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)));
-  return { ok: true };
+/** Start a fresh conversation — creates a new thread and returns its id. Past
+ *  threads stay in the history column, so nothing is lost. The agent's memory is
+ *  separate and unaffected, so it still knows the business. */
+export async function startNewExecutiveChat(workspaceId: string): Promise<{ ok: boolean; threadId: string }> {
+  const { id } = await newExecutiveThread(workspaceId);
+  return { ok: true, threadId: id };
 }
 
 /* ---------------------------- daily brief ------------------------------- */
@@ -1271,8 +1389,9 @@ export async function updateInvestorUpdate(
 /* ------------------------------- bundle --------------------------------- */
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
+  const activeThreadId = await ensureActiveThread(workspaceId);
   // prettier-ignore
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, [brief], savedRows] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, [brief], threads] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -1281,9 +1400,9 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     db
       .select()
       .from(executiveMessages)
-      .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.archived, false)))
+      .where(and(eq(executiveMessages.workspace_id, workspaceId), eq(executiveMessages.thread_id, activeThreadId)))
       .orderBy(asc(executiveMessages.created_at))
-      .limit(200),
+      .limit(500),
     db
       .select()
       .from(executiveMemory)
@@ -1307,12 +1426,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
       .from(businessBriefs)
       .where(eq(businessBriefs.workspace_id, workspaceId))
       .limit(1),
-    db
-      .select()
-      .from(executiveSavedMessages)
-      .where(eq(executiveSavedMessages.workspace_id, workspaceId))
-      .orderBy(desc(executiveSavedMessages.pinned), desc(executiveSavedMessages.created_at))
-      .limit(200),
+    listThreads(workspaceId),
   ]);
 
   return {
@@ -1325,7 +1439,8 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     nudges,
     briefs,
     investorUpdates: invUpdates,
-    saved: savedRows.map(toSaved),
+    threads,
+    activeThreadId,
   };
 }
 

@@ -9,8 +9,6 @@ import {
   ArrowRight,
   ArrowUpRight,
   Bell,
-  Bookmark,
-  BookmarkCheck,
   Brain,
   Check,
   CheckCircle2,
@@ -64,13 +62,11 @@ import {
   generateInvestorUpdateAction,
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
-  saveExecutiveMessageAction,
-  deleteSavedMessageAction,
-  togglePinSavedAction,
-  organizeSavedMessagesAction,
-  promoteSavedToMemoryAction,
+  newExecutiveThreadAction,
+  getThreadMessagesAction,
+  renameThreadAction,
+  deleteThreadAction,
   setGoalStatusAction,
-  startNewExecutiveChatAction,
   togglePinMemoryAction,
   updateInvestorUpdateAction,
 } from "@/app/actions";
@@ -83,7 +79,7 @@ import type {
   ExecMemory,
   ExecMessage,
   ExecNudge,
-  ExecSavedMessage,
+  ExecThread,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -121,6 +117,8 @@ function splitAttachment(content: string): { typed: string; file?: { name: strin
 export default function ExecutivePage() {
   const [bundle, setBundle] = useState<ExecutiveBundle | null>(null);
   const [messages, setMessages] = useState<ExecMessage[]>([]);
+  const [threads, setThreads] = useState<ExecThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"chat" | "brief" | "investor" | "team" | "advisor">("chat");
   const [briefs, setBriefs] = useState<ExecBrief[]>([]);
@@ -142,6 +140,7 @@ export default function ExecutivePage() {
   // Synchronous in-flight lock — immune to the stale `sending` closure, so a rapid
   // second click (before React re-renders) can't fire a duplicate request.
   const sendingRef = useRef(false);
+  const activeIdRef = useRef<string | null>(null);
 
   const attachFile = useCallback(async (file: File | undefined | null) => {
     setAttachErr("");
@@ -163,21 +162,48 @@ export default function ExecutivePage() {
     }
   }, []);
 
+  // Refresh side panels + the threads list. On the FIRST load it also adopts the
+  // active thread + its messages; later refreshes leave the open thread alone.
   const loadBundle = useCallback(async () => {
     const b = await getExecutiveBundleAction();
     if (b) {
       setBundle(b);
-      setMessages(b.messages);
       setBriefs(b.briefs);
       setUpdates(b.investorUpdates);
+      setThreads(b.threads);
+      if (activeIdRef.current == null) {
+        setActiveThreadId(b.activeThreadId);
+        activeIdRef.current = b.activeThreadId;
+        setMessages(b.messages);
+      }
     }
     setLoading(false);
   }, []);
 
-  const saveMessage = useCallback(
-    async (m: ExecMessage) => {
-      await saveExecutiveMessageAction({ messageId: m.id, role: m.role, content: m.content });
-      await loadBundle();
+  const openThread = useCallback(async (id: string) => {
+    activeIdRef.current = id;
+    setActiveThreadId(id);
+    setMessages(await getThreadMessagesAction(id));
+  }, []);
+
+  const deleteThreadHandler = useCallback(
+    async (id: string) => {
+      await deleteThreadAction(id);
+      if (id === activeIdRef.current) {
+        // The open thread was deleted — jump to the most-recent remaining (or a fresh) one.
+        const b = await getExecutiveBundleAction();
+        if (b) {
+          setBundle(b);
+          setBriefs(b.briefs);
+          setUpdates(b.investorUpdates);
+          setThreads(b.threads);
+          activeIdRef.current = b.activeThreadId;
+          setActiveThreadId(b.activeThreadId);
+          setMessages(b.messages);
+        }
+      } else {
+        await loadBundle();
+      }
     },
     [loadBundle],
   );
@@ -254,9 +280,13 @@ export default function ExecutivePage() {
   );
 
   const newChat = useCallback(async () => {
-    setMessages([]);
-    await startNewExecutiveChatAction();
-    await loadBundle();
+    const r = await newExecutiveThreadAction();
+    if (r) {
+      activeIdRef.current = r.id;
+      setActiveThreadId(r.id);
+      setMessages([]);
+      await loadBundle();
+    }
   }, [loadBundle]);
   useEffect(() => {
     void loadBundle();
@@ -278,9 +308,12 @@ export default function ExecutivePage() {
       ]);
       setSending(true); // hides the starter chips + shows "thinking" immediately
       try {
-        const res = await sendExecutiveMessageAction(clean);
-        if (res.ok) {
-          await loadBundle(); // authoritative messages + refreshed KPIs/goals/memory
+        const res = await sendExecutiveMessageAction(clean, activeIdRef.current ?? undefined);
+        if (res.ok && res.threadId) {
+          activeIdRef.current = res.threadId;
+          setActiveThreadId(res.threadId);
+          setMessages(await getThreadMessagesAction(res.threadId));
+          await loadBundle(); // refresh threads (title/order) + KPIs/goals/memory
         } else {
           setMessages((m) => [
             ...m,
@@ -320,7 +353,6 @@ export default function ExecutivePage() {
   }, [send]);
 
   const agentName = bundle?.agentName ?? "Executive Agent";
-  const savedIds = new Set((bundle?.saved ?? []).map((s) => s.message_id).filter((x): x is string => !!x));
   const cadenceBriefs = briefs.filter((b) => b.kind === cadence);
   const shownBrief = cadenceBriefs.find((b) => b.id === selectedBriefId) ?? cadenceBriefs[0] ?? null;
   const currentAudience: UpdateAudience | null =
@@ -397,13 +429,7 @@ export default function ExecutivePage() {
           ) : (
             <div className="mx-auto max-w-2xl space-y-4">
               {messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  agentName={agentName}
-                  saved={savedIds.has(m.id)}
-                  onSave={() => saveMessage(m)}
-                />
+                <MessageBubble key={m.id} message={m} agentName={agentName} />
               ))}
               {sending && (
                 <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
@@ -534,11 +560,20 @@ export default function ExecutivePage() {
       {/* Context rail */}
       <aside className="min-h-0 w-full shrink-0 overflow-y-auto bg-muted/30 lg:w-[360px]">
         <div className="space-y-6 p-5">
+          {view === "chat" && (
+            <ThreadsPanel
+              threads={threads}
+              activeId={activeThreadId}
+              onOpen={openThread}
+              onNew={newChat}
+              onDelete={deleteThreadHandler}
+              onChanged={loadBundle}
+            />
+          )}
           <NudgesPanel nudges={bundle?.nudges ?? []} />
           <KpiStrip kpis={bundle?.kpis ?? []} />
           <GoalsPanel goals={bundle?.goals ?? []} onChanged={loadBundle} />
           <MemoryPanel memory={bundle?.memory ?? []} onChanged={loadBundle} />
-          <SavedPanel saved={bundle?.saved ?? []} onChanged={loadBundle} />
         </div>
       </aside>
     </div>
@@ -578,23 +613,12 @@ function EmptyState({ onPick }: { onPick: (t: string) => void }) {
 // bubbles — even on messages saved before the tools were marked silent.
 const SILENT_ACTION_TOOLS = new Set(["research", "search_inbox", "lookup_person"]);
 
-function MessageBubble({
-  message,
-  agentName,
-  saved,
-  onSave,
-}: {
-  message: ExecMessage;
-  agentName: string;
-  saved: boolean;
-  onSave: () => Promise<void>;
-}) {
+function MessageBubble({ message, agentName }: { message: ExecMessage; agentName: string }) {
   const isUser = message.role === "user";
-  const [busy, setBusy] = useState(false);
   const shownActions = (message.actions ?? []).filter((a) => !SILENT_ACTION_TOOLS.has(a.tool));
   return (
     <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div className={cn("group max-w-[85%] space-y-1.5", isUser ? "items-end" : "items-start")}>
+      <div className={cn("max-w-[85%] space-y-2", isUser ? "items-end" : "items-start")}>
         {!isUser && (
           <p className="mb-0.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-600">
             <Compass className="h-3 w-3" /> {agentName}
@@ -631,33 +655,6 @@ function MessageBubble({
             )}
           </div>
         )}
-        <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-          <button
-            type="button"
-            title={saved ? "Saved" : "Save this message"}
-            onClick={async () => {
-              if (saved || busy) return;
-              setBusy(true);
-              await onSave();
-              setBusy(false);
-            }}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium transition",
-              saved
-                ? "text-primary"
-                : "text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100",
-            )}
-          >
-            {saved ? (
-              <BookmarkCheck className="h-3 w-3" />
-            ) : busy ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Bookmark className="h-3 w-3" />
-            )}
-            {saved ? "Saved" : "Save"}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -2332,131 +2329,123 @@ function MemoryPanel({ memory, onChanged }: { memory: ExecMemory[]; onChanged: (
   );
 }
 
-function firstLine(s: string): string {
-  const line = s.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
-  return line.replace(/^#+\s*/, "").replace(/[*_`>]/g, "").slice(0, 120) || "Saved message";
+function threadTime(iso: string): string {
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 60_000) return "just now";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+    if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
 }
 
-function SavedPanel({ saved, onChanged }: { saved: ExecSavedMessage[]; onChanged: () => Promise<void> }) {
-  const [organizing, setOrganizing] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
+function ThreadsPanel({
+  threads,
+  activeId,
+  onOpen,
+  onNew,
+  onDelete,
+  onChanged,
+}: {
+  threads: ExecThread[];
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
 
-  async function organize() {
-    if (organizing) return;
-    setOrganizing(true);
-    await organizeSavedMessagesAction();
-    setOrganizing(false);
-    await onChanged();
-  }
-
-  // Group by category (order preserved from the server), "" → "Unsorted" (kept last).
-  const groups: { category: string; items: ExecSavedMessage[] }[] = [];
-  for (const s of saved) {
-    const cat = s.category.trim() || "Unsorted";
-    let g = groups.find((x) => x.category === cat);
-    if (!g) {
-      g = { category: cat, items: [] };
-      groups.push(g);
+  async function commitRename(id: string) {
+    const t = title.trim();
+    setEditing(null);
+    if (t) {
+      await renameThreadAction(id, t);
+      await onChanged();
     }
-    g.items.push(s);
   }
-  groups.sort((a, b) => (a.category === "Unsorted" ? 1 : b.category === "Unsorted" ? -1 : 0));
 
   return (
     <div>
       <RailHeading
-        icon={<Bookmark className="h-3.5 w-3.5" />}
-        label="Saved"
+        icon={<MessageSquarePlus className="h-3.5 w-3.5" />}
+        label="Conversations"
         action={
-          saved.length > 0 ? (
-            <button
-              onClick={organize}
-              disabled={organizing}
-              title="Have the Executive title + group these"
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition hover:text-foreground disabled:opacity-60"
-            >
-              {organizing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Organize
-            </button>
-          ) : undefined
+          <button onClick={onNew} className="text-muted-foreground hover:text-foreground" title="New chat">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         }
       />
-      <div className="mt-2 space-y-3">
-        {saved.length === 0 ? (
+      <div className="mt-2 space-y-1">
+        {threads.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border p-3 text-[12px] text-muted-foreground">
-            Hover any message and hit <span className="font-medium">Save</span> to keep it here — then let the Executive
-            organize them into topics.
+            Your conversations are saved here. Start chatting, or hit + for a new one — you can come back to any thread
+            and keep going.
           </p>
         ) : (
-          groups.map((g) => (
-            <div key={g.category} className="space-y-1.5">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {g.category}
-              </div>
-              {g.items.map((s) => {
-                const open = expanded === s.id;
-                const label = s.title.trim() || firstLine(s.content);
-                return (
-                  <div key={s.id} className="group rounded-xl border border-border bg-card">
-                    <div className="flex items-start gap-1.5 p-2.5">
-                      <button onClick={() => setExpanded(open ? null : s.id)} className="min-w-0 flex-1 text-left">
-                        <p
-                          className={cn(
-                            "text-[12.5px] font-medium leading-snug text-foreground/90",
-                            !open && "line-clamp-2",
-                          )}
-                        >
-                          {label}
-                        </p>
-                      </button>
-                      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
-                        <button
-                          onClick={async () => {
-                            await togglePinSavedAction(s.id, !s.pinned);
-                            await onChanged();
-                          }}
-                          title={s.pinned ? "Unpin" : "Pin"}
-                          className={cn(
-                            "rounded p-1 hover:bg-accent",
-                            s.pinned ? "text-primary" : "text-muted-foreground hover:text-foreground",
-                          )}
-                        >
-                          <Pin className="h-3 w-3" />
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await promoteSavedToMemoryAction(s.id);
-                            await onChanged();
-                          }}
-                          title="Add to the Executive's memory"
-                          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        >
-                          <Brain className="h-3 w-3" />
-                        </button>
-                        <button
-                          onClick={async () => {
-                            await deleteSavedMessageAction(s.id);
-                            await onChanged();
-                          }}
-                          title="Remove"
-                          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    </div>
-                    {open && (
-                      <div className="border-t border-border px-2.5 py-2">
-                        <div
-                          className="prose-chat max-h-64 overflow-y-auto text-[12.5px]"
-                          dangerouslySetInnerHTML={{ __html: markdownToHtml(s.content) }}
-                        />
-                      </div>
-                    )}
+          threads.map((t) => {
+            const active = t.id === activeId;
+            return (
+              <div
+                key={t.id}
+                className={cn(
+                  "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition",
+                  active ? "bg-primary/10" : "hover:bg-accent",
+                )}
+              >
+                {editing === t.id ? (
+                  <input
+                    value={title}
+                    autoFocus
+                    onChange={(e) => setTitle(e.target.value)}
+                    onBlur={() => commitRename(t.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void commitRename(t.id);
+                      if (e.key === "Escape") setEditing(null);
+                    }}
+                    className="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-[13px] outline-none"
+                  />
+                ) : (
+                  <button onClick={() => onOpen(t.id)} className="min-w-0 flex-1 text-left">
+                    <p className={cn("truncate text-[13px] font-medium", active ? "text-primary" : "text-foreground/90")}>
+                      {t.title || "New conversation"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {threadTime(t.updated_at)}
+                      {t.message_count ? ` · ${t.message_count} message${t.message_count === 1 ? "" : "s"}` : ""}
+                    </p>
+                  </button>
+                )}
+                {editing !== t.id && (
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                    <button
+                      onClick={() => {
+                        setEditing(t.id);
+                        setTitle(t.title);
+                      }}
+                      title="Rename"
+                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm("Delete this conversation?")) onDelete(t.id);
+                      }}
+                      title="Delete"
+                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   </div>
-                );
-              })}
-            </div>
-          ))
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

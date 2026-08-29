@@ -282,6 +282,10 @@ import {
   generateInvestorUpdate,
   getExecutiveBundle,
   sendExecutiveMessage,
+  getThreadMessages,
+  newExecutiveThread,
+  renameThread,
+  deleteThread,
   saveExecutiveMessage,
   deleteSavedMessage,
   togglePinSaved,
@@ -1299,7 +1303,7 @@ export async function dismissBriefSuggestionAction(
 }
 
 /** Start a fresh Executive conversation (archives the current one). */
-export async function startNewExecutiveChatAction(): Promise<{ ok: boolean }> {
+export async function startNewExecutiveChatAction(): Promise<{ ok: boolean; threadId?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false };
   const ws = await workspaceIdForUser(user.id);
@@ -1307,15 +1311,56 @@ export async function startNewExecutiveChatAction(): Promise<{ ok: boolean }> {
   return startNewExecutiveChat(ws);
 }
 
+export async function newExecutiveThreadAction(): Promise<{ id: string } | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await newExecutiveThread(ws);
+  } catch {
+    return null;
+  }
+}
+
+export async function getThreadMessagesAction(threadId: string): Promise<ExecMessage[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await getThreadMessages(ws, threadId);
+  } catch {
+    return [];
+  }
+}
+
+export async function renameThreadAction(id: string, title: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return renameThread(ws, id, title);
+}
+
+export async function deleteThreadAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteThread(ws, id);
+}
+
 /** Talk to the Executive Agent — a tool-using reply grounded in live business data. */
 export async function sendExecutiveMessageAction(
   text: string,
-): Promise<{ ok: boolean; reply?: ExecMessage; error?: string }> {
+  threadId?: string,
+): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return sendExecutiveMessage(ws, text);
+  return sendExecutiveMessage(ws, text, threadId);
 }
 
 export async function addGoalAction(input: {
