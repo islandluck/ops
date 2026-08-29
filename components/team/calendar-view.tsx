@@ -6,7 +6,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  ExternalLink,
   Loader2,
+  MapPin,
   Pencil,
   Plus,
   Repeat,
@@ -23,13 +25,14 @@ import { cn } from "@/lib/cn";
 import {
   createTeamEventAction,
   deleteTeamEventAction,
+  getGoogleCalendarAction,
   getNotifyChannelsAction,
   getTeamCalendarAction,
   getTeamCalendarRangeAction,
   getTeamEventAction,
   updateTeamEventAction,
 } from "@/app/actions";
-import type { CalendarItem, TeamEvent, TeamEventKind, TeamMember } from "@/lib/types";
+import type { CalendarItem, GoogleCalItem, TeamEvent, TeamEventKind, TeamMember } from "@/lib/types";
 
 /* ------------------------------- grid config ------------------------------- */
 
@@ -58,6 +61,7 @@ const KIND_LABEL: Record<CalendarItem["kind"], string> = {
   event: "Event",
   deadline: "Deadline",
 };
+const GOOGLE = "#4285F4"; // Google blue — the read-only overlay's accent
 
 const DURATIONS = [15, 30, 45, 60, 90, 120, 180, 240, 480];
 const REPEATS = [
@@ -155,8 +159,8 @@ function heightFor(iso: string, durMin: number): number {
   return Math.max(18, Math.min(raw, TOTAL_H - top) - 2);
 }
 
-/** Side-by-side lanes for events that overlap in time, per day. */
-function layoutDay(dayItems: CalendarItem[]): Map<string, { lane: number; lanes: number }> {
+/** Side-by-side lanes for events that overlap in time, per day (team + Google). */
+function layoutDay(dayItems: { id: string; when: string; duration_min: number }[]): Map<string, { lane: number; lanes: number }> {
   const evs = dayItems
     .map((it) => {
       const start = new Date(it.when).getTime();
@@ -549,9 +553,66 @@ function EventViewDialog({
   );
 }
 
+/** Read-only details for a Google Calendar event overlaid on the grid. */
+function GoogleEventDialog({ item, onClose }: { item: GoogleCalItem; onClose: () => void }) {
+  return (
+    <Dialog open onClose={onClose} title={item.title}>
+      <div className="flex flex-col gap-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: GOOGLE }} />
+          <span className="text-muted-foreground">Google Calendar</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <CalendarClock className="h-4 w-4 text-muted-foreground" />
+          <span>{fullDate(item.when)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <span>
+            {item.all_day
+              ? "All day"
+              : `${timeRange(item.when, item.duration_min)} · ${durationLabel(item.duration_min)}`}
+          </span>
+        </div>
+        {item.location && (
+          <div className="flex items-start gap-2">
+            <MapPin className="mt-0.5 h-4 w-4 text-muted-foreground" />
+            <span>{item.location}</span>
+          </div>
+        )}
+        <p className="text-[12px] text-muted-foreground">From your Google Calendar — read-only here.</p>
+        <div className="mt-2 flex justify-end gap-2">
+          {item.url && (
+            <a
+              href={item.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm transition hover:bg-accent"
+            >
+              Open in Google <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /* --------------------------------- view ------------------------------------ */
 
-export function CalendarView({ canManage, members }: { canManage: boolean; members: TeamMember[] }) {
+export function CalendarView({
+  canManage,
+  members,
+  googleCalendar = false,
+}: {
+  canManage: boolean;
+  members: TeamMember[];
+  /** Owner-only: overlay the connected Google Calendar. Never true on the member portal. */
+  googleCalendar?: boolean;
+}) {
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekMonday(new Date()));
   const [grid, setGrid] = useState<CalendarItem[]>([]);
   const [upcoming, setUpcoming] = useState<CalendarItem[]>([]);
@@ -563,6 +624,10 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
     defaultDate: new Date(),
   });
   const [channels, setChannels] = useState<{ slack: boolean; email: boolean }>({ slack: false, email: false });
+  const [google, setGoogle] = useState<{ connected: boolean; items: GoogleCalItem[] }>({ connected: false, items: [] });
+  const [showGoogle, setShowGoogle] = useState(true);
+  const [loadingGoogle, setLoadingGoogle] = useState(false);
+  const [viewingGoogle, setViewingGoogle] = useState<GoogleCalItem | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const loadGrid = useCallback((ws: Date) => {
@@ -577,10 +642,22 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
       .then(setUpcoming)
       .catch(() => setUpcoming([]));
   }, []);
+  const loadGoogle = useCallback(
+    (ws: Date) => {
+      if (!googleCalendar) return;
+      setLoadingGoogle(true);
+      getGoogleCalendarAction(ws.toISOString(), addDays(ws, 7).toISOString())
+        .then((r) => setGoogle(r))
+        .catch(() => setGoogle({ connected: false, items: [] }))
+        .finally(() => setLoadingGoogle(false));
+    },
+    [googleCalendar],
+  );
 
   useEffect(() => {
     loadGrid(weekStart);
-  }, [weekStart, loadGrid]);
+    loadGoogle(weekStart);
+  }, [weekStart, loadGrid, loadGoogle]);
   useEffect(() => {
     loadUpcoming();
   }, [loadUpcoming]);
@@ -618,19 +695,47 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
     grid.filter((i) => i.kind !== "deadline" && sameDay(new Date(i.when), day));
   const deadlinesForDay = (day: Date) =>
     grid.filter((i) => i.kind === "deadline" && sameDay(new Date(i.when), day));
+  const googleOn = googleCalendar && google.connected && showGoogle;
+  const googleTimedForDay = (day: Date) =>
+    googleOn ? google.items.filter((g) => !g.all_day && sameDay(new Date(g.when), day)) : [];
+  const googleAllDayForDay = (day: Date) =>
+    googleOn ? google.items.filter((g) => g.all_day && sameDay(new Date(g.when), day)) : [];
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
-          Your team&apos;s meetings, 1:1s, and deadlines. Click any entry for details. Everything coming up is on the
-          right.
+          Your team&apos;s meetings, 1:1s, and deadlines. Click any entry for details.
         </p>
-        {canManage && (
-          <Button size="sm" onClick={() => setForm({ open: true, event: null, defaultDate: addDefaultDate })}>
-            <Plus className="h-4 w-4" /> Add
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {googleCalendar && google.connected && (
+            <button
+              type="button"
+              onClick={() => setShowGoogle((v) => !v)}
+              title="Show or hide your Google Calendar"
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition",
+                showGoogle
+                  ? "border-[#4285F4]/50 bg-[#4285F4]/10 text-slate-700 dark:text-slate-200"
+                  : "border-border text-muted-foreground hover:border-foreground",
+              )}
+            >
+              <span className="h-2 w-2 rounded-full" style={{ background: GOOGLE }} />
+              Google
+              {loadingGoogle && <Loader2 className="h-3 w-3 animate-spin" />}
+            </button>
+          )}
+          {googleCalendar && !google.connected && canManage && (
+            <a href="/integrations" className="text-xs text-muted-foreground underline hover:text-foreground">
+              Connect Google Calendar
+            </a>
+          )}
+          {canManage && (
+            <Button size="sm" onClick={() => setForm({ open: true, event: null, defaultDate: addDefaultDate })}>
+              <Plus className="h-4 w-4" /> Add
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_290px]">
@@ -682,10 +787,10 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
                       );
                     })}
                   </div>
-                  {/* deadline band */}
+                  {/* all-day band: project/task deadlines + Google all-day events */}
                   <div className="grid border-b border-border bg-muted/20" style={{ gridTemplateColumns: GRID_COLS }}>
                     <div className="flex items-center justify-end border-r border-border px-1.5 py-1 text-[9px] uppercase text-muted-foreground">
-                      Due
+                      All-day
                     </div>
                     {days.map((day) => (
                       <div
@@ -701,6 +806,17 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
                             className="block w-full truncate rounded border border-amber-500/30 bg-amber-500/15 px-1.5 py-0.5 text-left text-[10px] font-medium text-amber-700 dark:text-amber-300"
                           >
                             {it.title}
+                          </button>
+                        ))}
+                        {googleAllDayForDay(day).map((g) => (
+                          <button
+                            key={g.id}
+                            type="button"
+                            title={g.title}
+                            onClick={() => setViewingGoogle(g)}
+                            className="block w-full truncate rounded border border-[#4285F4]/40 bg-[#4285F4]/10 px-1.5 py-0.5 text-left text-[10px] font-medium text-slate-700 dark:text-slate-200"
+                          >
+                            {g.title}
                           </button>
                         ))}
                       </div>
@@ -722,7 +838,8 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
                   {days.map((day) => {
                     const isToday = sameDay(day, today);
                     const dayEvents = timedForDay(day);
-                    const lay = layoutDay(dayEvents);
+                    const gEvents = googleTimedForDay(day);
+                    const lay = layoutDay([...dayEvents, ...gEvents]);
                     return (
                       <div key={day.toISOString()} className={cn("relative border-r border-border last:border-r-0", isToday && "bg-primary/[0.05]")}>
                         {HOURS.map((h) => (
@@ -756,6 +873,29 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
                                 <span className="truncate">{it.title}</span>
                               </span>
                               <span className="truncate text-[10px] opacity-90">{timeStr(it.when)}</span>
+                            </button>
+                          );
+                        })}
+                        {gEvents.map((g) => {
+                          const p = lay.get(g.id) ?? { lane: 0, lanes: 1 };
+                          const w = 100 / p.lanes;
+                          return (
+                            <button
+                              key={g.id}
+                              type="button"
+                              title={g.title}
+                              onClick={() => setViewingGoogle(g)}
+                              style={{
+                                top: topFor(g.when),
+                                height: heightFor(g.when, g.duration_min),
+                                left: `calc(${p.lane * w}% + 2px)`,
+                                width: `calc(${w}% - 4px)`,
+                                borderLeftColor: GOOGLE,
+                              }}
+                              className="absolute flex flex-col overflow-hidden rounded-md border border-l-[3px] border-border bg-card px-1.5 py-1 text-left shadow-sm transition hover:border-primary/40"
+                            >
+                              <span className="truncate text-[11px] font-semibold leading-tight text-foreground">{g.title}</span>
+                              <span className="truncate text-[10px] text-muted-foreground">{timeStr(g.when)}</span>
                             </button>
                           );
                         })}
@@ -820,6 +960,7 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
           onDelete={() => removeEvent(viewing.source_id)}
         />
       )}
+      {viewingGoogle && <GoogleEventDialog item={viewingGoogle} onClose={() => setViewingGoogle(null)} />}
       <EventFormDialog
         open={form.open}
         event={form.event}

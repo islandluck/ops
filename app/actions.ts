@@ -48,6 +48,7 @@ import {
   updateNoteForUser,
   updateTaskAssetContent,
   workspaceIdForUser,
+  getUserRoleInWorkspace,
 } from "@/lib/db/queries";
 import {
   deleteImageAt,
@@ -187,6 +188,7 @@ import {
   getMyGoals,
   getTeamCalendar,
   getTeamCalendarRange,
+  getGoogleCalendar,
   getTeamDriveFolder,
   setTeamDriveFolder,
   clearTeamDriveFolder,
@@ -3429,6 +3431,22 @@ export async function getTeamCalendarRangeAction(fromISO: string, toISO: string)
     return await getTeamCalendarRange(ws, fromISO, toISO);
   } catch {
     return [];
+  }
+}
+
+/** OWNER-ONLY: the workspace's Google Calendar overlay. Gated to the owner so the
+ *  connected (owner's) personal calendar never reaches team members. */
+export async function getGoogleCalendarAction(fromISO: string, toISO: string) {
+  const user = await getCurrentUser();
+  if (!user) return { connected: false, items: [] };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { connected: false, items: [] };
+  const role = await getUserRoleInWorkspace(user.id, ws);
+  if (role !== "owner") return { connected: false, items: [] };
+  try {
+    return await getGoogleCalendar(ws, fromISO, toISO);
+  } catch {
+    return { connected: false, items: [] };
   }
 }
 

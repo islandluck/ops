@@ -20,7 +20,14 @@ import {
   workspaceMembers,
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
-import { getDriveMeta, isWithinDriveFolder, listDriveFolder, sendGmail, type DriveEntry } from "@/lib/integrations/google";
+import {
+  getDriveMeta,
+  isWithinDriveFolder,
+  listCalendarEventsRange,
+  listDriveFolder,
+  sendGmail,
+  type DriveEntry,
+} from "@/lib/integrations/google";
 import { notifySlack } from "@/lib/integrations/slack";
 import { getNotionPageContent, searchNotionPages } from "@/lib/integrations/notion";
 import { extractMeeting, type MeetingExtraction } from "@/lib/ai/meeting-extract";
@@ -30,6 +37,7 @@ import type {
   CalendarItem,
   ChatChannel,
   ChatMessage,
+  GoogleCalItem,
   HumanProject,
   HumanProjectStatus,
   TeamAssignment,
@@ -1853,6 +1861,52 @@ export async function getTeamCalendarRange(
 ): Promise<CalendarItem[]> {
   const items = await buildCalendarItems(workspaceId, new Date(fromISO), new Date(toISO));
   return items.sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime());
+}
+
+/**
+ * The workspace's Google Calendar (the connected — i.e. owner's — account) for a
+ * range, as read-only overlay items. `connected: false` when Google isn't linked.
+ * OWNER-ONLY at the call site: never expose this on the member portal.
+ */
+export async function getGoogleCalendar(
+  workspaceId: string,
+  fromISO: string,
+  toISO: string,
+): Promise<{ connected: boolean; items: GoogleCalItem[] }> {
+  const token = await getValidAccessToken(workspaceId, "Google Calendar");
+  if (!token) return { connected: false, items: [] };
+  try {
+    const evs = await listCalendarEventsRange(token, fromISO, toISO, 250);
+    const items: GoogleCalItem[] = evs.map((e) => {
+      if (e.allDay) {
+        return {
+          id: e.id,
+          title: e.title,
+          when: `${e.start}T00:00:00`, // local midnight, so day-matching is stable
+          duration_min: 0,
+          all_day: true,
+          location: e.location,
+          url: e.htmlLink ?? null,
+        };
+      }
+      const start = new Date(e.start).getTime();
+      const end = new Date(e.end).getTime();
+      const dur = end > start ? Math.round((end - start) / 60000) : 60;
+      return {
+        id: e.id,
+        title: e.title,
+        when: new Date(e.start).toISOString(),
+        duration_min: Math.max(15, dur),
+        all_day: false,
+        location: e.location,
+        url: e.htmlLink ?? null,
+      };
+    });
+    return { connected: true, items };
+  } catch {
+    // Connected but the read failed (transient / revoked) — don't flip to "connect".
+    return { connected: true, items: [] };
+  }
 }
 
 /* ── Notifications ────────────────────────────────────────────────────────── */

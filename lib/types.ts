@@ -365,6 +365,19 @@ export interface CalendarItem {
   editable: boolean;
 }
 
+/** A Google Calendar event overlaid on the team grid (read-only, owner only). */
+export interface GoogleCalItem {
+  id: string;
+  title: string;
+  /** ISO start (local midnight for all-day events). */
+  when: string;
+  /** Minutes; 0 for all-day events. */
+  duration_min: number;
+  all_day: boolean;
+  location: string;
+  url: string | null;
+}
+
 /** An in-app notification for a team member (shown in the portal). */
 export interface TeamNotification {
   id: string;

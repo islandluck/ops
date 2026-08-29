@@ -457,6 +457,68 @@ export async function listUpcomingEvents(
     }));
 }
 
+export interface CalEventRange {
+  id: string;
+  title: string;
+  /** ISO dateTime for timed events, or YYYY-MM-DD for all-day. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  location: string;
+  htmlLink?: string;
+}
+
+/**
+ * Primary-calendar events between two instants (chronological). `singleEvents`
+ * expands recurring events into their instances, so the week grid gets real
+ * occurrences. Used by the team calendar's Google overlay.
+ */
+export async function listCalendarEventsRange(
+  accessToken: string,
+  timeMinISO: string,
+  timeMaxISO: string,
+  max = 250,
+): Promise<CalEventRange[]> {
+  const url =
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events` +
+    `?singleEvents=true&orderBy=startTime&maxResults=${max}` +
+    `&timeMin=${encodeURIComponent(timeMinISO)}&timeMax=${encodeURIComponent(timeMaxISO)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const err = ((await res.json().catch(() => ({}))) as { error?: { message?: string } }).error?.message;
+    throw new Error(`Calendar list failed: ${err ?? res.status}`);
+  }
+  const json = (await res.json()) as {
+    items?: Array<{
+      id?: string;
+      summary?: string;
+      status?: string;
+      location?: string;
+      htmlLink?: string;
+      start?: { dateTime?: string; date?: string };
+      end?: { dateTime?: string; date?: string };
+    }>;
+  };
+  return (json.items ?? [])
+    .filter((it) => it.status !== "cancelled" && (it.start?.dateTime || it.start?.date))
+    .map((it) => {
+      const allDay = !it.start?.dateTime;
+      const start = String(it.start?.dateTime ?? it.start?.date);
+      return {
+        id: String(it.id ?? ""),
+        title: String(it.summary ?? "(no title)"),
+        start,
+        end: String(it.end?.dateTime ?? it.end?.date ?? start),
+        allDay,
+        location: String(it.location ?? ""),
+        htmlLink: it.htmlLink ? String(it.htmlLink) : undefined,
+      };
+    });
+}
+
 /** A short human label for an event's time, in the workspace timezone. */
 export function formatEventWhen(iso: string, allDay: boolean, tz?: string): string {
   const d = new Date(iso);

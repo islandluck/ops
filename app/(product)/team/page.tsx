@@ -915,7 +915,7 @@ export default function TeamPage() {
         ) : view === "chat" ? (
           <ChatView canManage />
         ) : view === "calendar" ? (
-          <CalendarView canManage members={members} />
+          <CalendarView canManage members={members} googleCalendar />
         ) : view === "meetings" ? (
           <MeetingsView canManage members={members} />
         ) : members.length === 0 ? (
