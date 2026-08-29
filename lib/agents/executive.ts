@@ -12,6 +12,7 @@ import {
   executiveBriefs,
   executiveMemory,
   executiveMessages,
+  executiveSavedMessages,
   investorUpdates,
   pages,
   posts,
@@ -36,7 +37,7 @@ import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
-import { executiveReply, generateBrief, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
+import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
@@ -49,6 +50,7 @@ import type {
   ExecKpi,
   ExecMemory,
   ExecMessage,
+  ExecSavedMessage,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -1270,7 +1272,7 @@ export async function updateInvestorUpdate(
 
 export async function getExecutiveBundle(workspaceId: string): Promise<ExecutiveBundle> {
   // prettier-ignore
-  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, [brief]] = await Promise.all([
+  const [[execAgent], messages, memory, goals, kpis, nudges, briefs, metricValues, invUpdates, [brief], savedRows] = await Promise.all([
     db
       .select({ name: agents.name })
       .from(agents)
@@ -1305,6 +1307,12 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
       .from(businessBriefs)
       .where(eq(businessBriefs.workspace_id, workspaceId))
       .limit(1),
+    db
+      .select()
+      .from(executiveSavedMessages)
+      .where(eq(executiveSavedMessages.workspace_id, workspaceId))
+      .orderBy(desc(executiveSavedMessages.pinned), desc(executiveSavedMessages.created_at))
+      .limit(200),
   ]);
 
   return {
@@ -1317,6 +1325,7 @@ export async function getExecutiveBundle(workspaceId: string): Promise<Executive
     nudges,
     briefs,
     investorUpdates: invUpdates,
+    saved: savedRows.map(toSaved),
   };
 }
 
@@ -1356,6 +1365,114 @@ export async function deleteMemory(workspaceId: string, id: string): Promise<{ o
     .delete(executiveMemory)
     .where(and(eq(executiveMemory.workspace_id, workspaceId), eq(executiveMemory.id, id)));
   return { ok: true };
+}
+
+/* --------------------------- saved messages ----------------------------- */
+
+function toSaved(r: typeof executiveSavedMessages.$inferSelect): ExecSavedMessage {
+  return {
+    id: r.id,
+    message_id: r.message_id ?? null,
+    role: r.role,
+    content: r.content,
+    title: r.title,
+    category: r.category,
+    pinned: r.pinned,
+    created_at: iso(r.created_at),
+  };
+}
+
+/** Save a chat message to revisit later (idempotent per source message). */
+export async function saveExecutiveMessage(
+  workspaceId: string,
+  input: { messageId?: string | null; role: "user" | "assistant"; content: string },
+): Promise<{ ok: boolean; error?: string }> {
+  const content = (input.content ?? "").trim();
+  if (!content) return { ok: false, error: "Nothing to save." };
+  if (input.messageId) {
+    const [existing] = await db
+      .select({ id: executiveSavedMessages.id })
+      .from(executiveSavedMessages)
+      .where(
+        and(
+          eq(executiveSavedMessages.workspace_id, workspaceId),
+          eq(executiveSavedMessages.message_id, input.messageId),
+        ),
+      )
+      .limit(1);
+    if (existing) return { ok: true }; // already saved — no-op
+  }
+  await db.insert(executiveSavedMessages).values({
+    id: uid(),
+    workspace_id: workspaceId,
+    message_id: input.messageId ?? null,
+    role: input.role === "user" ? "user" : "assistant",
+    content: content.slice(0, 12000),
+    title: "",
+    category: "",
+    pinned: false,
+    created_at: new Date(),
+  });
+  return { ok: true };
+}
+
+export async function listSavedMessages(workspaceId: string): Promise<ExecSavedMessage[]> {
+  const rows = await db
+    .select()
+    .from(executiveSavedMessages)
+    .where(eq(executiveSavedMessages.workspace_id, workspaceId))
+    .orderBy(desc(executiveSavedMessages.pinned), desc(executiveSavedMessages.created_at))
+    .limit(200);
+  return rows.map(toSaved);
+}
+
+export async function deleteSavedMessage(workspaceId: string, id: string): Promise<{ ok: boolean }> {
+  await db
+    .delete(executiveSavedMessages)
+    .where(and(eq(executiveSavedMessages.workspace_id, workspaceId), eq(executiveSavedMessages.id, id)));
+  return { ok: true };
+}
+
+export async function togglePinSaved(workspaceId: string, id: string, pinned: boolean): Promise<{ ok: boolean }> {
+  await db
+    .update(executiveSavedMessages)
+    .set({ pinned })
+    .where(and(eq(executiveSavedMessages.workspace_id, workspaceId), eq(executiveSavedMessages.id, id)));
+  return { ok: true };
+}
+
+/** Have the Executive title + categorize the saved messages so they group cleanly. */
+export async function organizeSavedMessages(workspaceId: string): Promise<{ ok: boolean; organized: number }> {
+  return runWithUsage(workspaceId, "executive-organize-saved", async () => {
+    const rows = await db
+      .select({ id: executiveSavedMessages.id, content: executiveSavedMessages.content })
+      .from(executiveSavedMessages)
+      .where(eq(executiveSavedMessages.workspace_id, workspaceId))
+      .limit(200);
+    if (!rows.length) return { ok: true, organized: 0 };
+    const result = await organizeSaved(rows.map((r) => ({ id: r.id, content: r.content })));
+    let organized = 0;
+    for (const r of result) {
+      await db
+        .update(executiveSavedMessages)
+        .set({ title: r.title, category: r.category })
+        .where(and(eq(executiveSavedMessages.workspace_id, workspaceId), eq(executiveSavedMessages.id, r.id)));
+      organized++;
+    }
+    return { ok: true, organized };
+  });
+}
+
+/** Promote a saved message into the Executive's durable memory. */
+export async function promoteSavedToMemory(workspaceId: string, id: string): Promise<{ ok: boolean; error?: string }> {
+  const [row] = await db
+    .select()
+    .from(executiveSavedMessages)
+    .where(and(eq(executiveSavedMessages.workspace_id, workspaceId), eq(executiveSavedMessages.id, id)))
+    .limit(1);
+  if (!row) return { ok: false, error: "That saved item no longer exists." };
+  const content = (row.title ? `${row.title}: ` : "") + row.content;
+  return addMemory(workspaceId, content, "fact");
 }
 
 export async function addGoal(

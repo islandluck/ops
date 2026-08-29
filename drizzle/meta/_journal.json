@@ -407,6 +407,13 @@
       "when": 1788020671729,
       "tag": "0057_dusty_roulette",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1788040435465,
+      "tag": "0058_long_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }

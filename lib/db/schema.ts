@@ -1333,6 +1333,28 @@ export const executiveMemory = pgTable("executive_memory", {
   updated_at: updatedAt,
 }, (t) => [index("executive_memory_ws_idx").on(t.workspace_id, t.pinned, t.created_at)]);
 
+/** A chat message the founder saved to revisit. The Executive can organize + title
+ *  these (category), and any one can be promoted into executive_memory. */
+export const executiveSavedMessages = pgTable(
+  "executive_saved_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // The source chat message (app-enforced; content is copied so it survives archive).
+    message_id: uuid("message_id"),
+    role: text("role").$type<ExecRole>().notNull().default("assistant"),
+    content: text("content").notNull().default(""),
+    // Agent-assigned when organizing.
+    title: text("title").notNull().default(""),
+    category: text("category").notNull().default(""),
+    pinned: boolean("pinned").notNull().default(false),
+    created_at: createdAt,
+  },
+  (t) => [index("executive_saved_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
 /** A generated monthly investor / stakeholder update (outward-facing). */
 // Holds stakeholder updates for every audience (investor / team / advisor);
 // the `audience` column discriminates. Table name is historical.

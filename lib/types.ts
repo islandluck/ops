@@ -1310,6 +1310,19 @@ export interface ExecMemory {
   created_at: string;
 }
 
+/** A chat message the founder saved to revisit. `title`/`category` are filled in
+ *  when the Executive organizes the saved list. */
+export interface ExecSavedMessage {
+  id: string;
+  message_id: string | null;
+  role: ExecRole;
+  content: string;
+  title: string;
+  category: string;
+  pinned: boolean;
+  created_at: string;
+}
+
 export type GoalStatus = "active" | "achieved" | "archived";
 /** Time horizon — a "month"/"quarter" goal is a north star the agent cascades
  *  down to the weekly review + daily brief; "ongoing" is untimed. */
@@ -1477,6 +1490,8 @@ export interface ExecutiveBundle {
   briefs: ExecBrief[];
   /** Recent investor updates, newest first. */
   investorUpdates: InvestorUpdate[];
+  /** Messages the founder saved to revisit (organized by the Executive). */
+  saved: ExecSavedMessage[];
 }
 
 /* ----------------------------- Deep Dive -------------------------------- */

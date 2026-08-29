@@ -282,6 +282,11 @@ import {
   generateInvestorUpdate,
   getExecutiveBundle,
   sendExecutiveMessage,
+  saveExecutiveMessage,
+  deleteSavedMessage,
+  togglePinSaved,
+  organizeSavedMessages,
+  promoteSavedToMemory,
   setGoalStatus,
   setInvestorUpdateArchived,
   startNewExecutiveChat,
@@ -1367,6 +1372,54 @@ export async function deleteMemoryAction(id: string): Promise<{ ok: boolean }> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   return deleteMemory(ws, id);
+}
+
+export async function saveExecutiveMessageAction(input: {
+  messageId?: string | null;
+  role: "user" | "assistant";
+  content: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return saveExecutiveMessage(ws, input);
+}
+
+export async function deleteSavedMessageAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteSavedMessage(ws, id);
+}
+
+export async function togglePinSavedAction(id: string, pinned: boolean): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return togglePinSaved(ws, id, pinned);
+}
+
+export async function organizeSavedMessagesAction(): Promise<{ ok: boolean; organized: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, organized: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, organized: 0 };
+  try {
+    return await organizeSavedMessages(ws);
+  } catch {
+    return { ok: false, organized: 0 };
+  }
+}
+
+export async function promoteSavedToMemoryAction(id: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return promoteSavedToMemory(ws, id);
 }
 
 /* --------------------------- pages & commerce ---------------------------- */

@@ -68,7 +68,10 @@ export async function executiveReply(opts: {
   for (let round = 0; round < 5; round++) {
     const res = await client.messages.create({
       model: MODEL,
-      max_tokens: 2000,
+      // Generous ceiling so long, structured replies (plans, summaries, lists the
+      // founder wants to save) aren't cut off mid-thought. It's only a cap —
+      // short answers stay short.
+      max_tokens: 8000,
       system: opts.system,
       ...(toolDefs.length ? { tools: toolDefs } : {}),
       messages,
@@ -110,6 +113,46 @@ export async function executiveReply(opts: {
 
 function stripFences(s: string): string {
   return s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+/**
+ * Organize a founder's saved chat messages: give each a short title and group
+ * related ones under the SAME concise category. Returns [] on any failure so the
+ * caller leaves the items untouched.
+ */
+export async function organizeSaved(
+  items: { id: string; content: string }[],
+): Promise<{ id: string; title: string; category: string }[]> {
+  if (!process.env.ANTHROPIC_API_KEY || !items.length) return [];
+  const client = getAnthropic();
+  const list = items.map((it) => `id=${it.id}\n${it.content.slice(0, 1200)}`).join("\n\n---\n\n");
+  const system = [
+    "You organize a founder's SAVED messages from their chat with their Chief of Staff — things they want to revisit.",
+    "For EACH item return: a short title (<= 8 words, specific to the content) and a category (a concise topic label in Title Case).",
+    "Reuse the SAME category for related items so they group cleanly (e.g. Strategy, Fundraising, Product, Hiring, Marketing, Finance, Operations, Personal). Keep the set of categories SMALL and consistent — don't invent a new one per item.",
+    'Respond with ONLY a JSON array (no prose, no code fences): [{"id": string, "title": string, "category": string}].',
+  ].join("\n");
+  try {
+    const msg = await client.messages.create({
+      model: MODEL,
+      max_tokens: 2500,
+      system,
+      messages: [{ role: "user", content: `Saved items:\n\n${list}\n\nOrganize them now.` }],
+    });
+    const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+    const arr = JSON.parse(stripFences(text)) as unknown;
+    if (!Array.isArray(arr)) return [];
+    const valid = new Set(items.map((i) => i.id));
+    return (arr as Record<string, unknown>[])
+      .map((r) => ({
+        id: typeof r.id === "string" ? r.id : "",
+        title: typeof r.title === "string" ? r.title.trim().slice(0, 100) : "",
+        category: typeof r.category === "string" ? r.category.trim().slice(0, 40) : "",
+      }))
+      .filter((r) => r.id && valid.has(r.id));
+  } catch {
+    return [];
+  }
 }
 
 const strArray = (v: unknown, cap = 8): string[] =>
