@@ -1413,7 +1413,8 @@ export async function deleteTeamEvent(
 }
 
 /** The team calendar: owner-set events + deadlines derived from projects & tasks. */
-export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem[]> {
+/** All calendar items (team events + derived project/assignment deadlines), unsorted. */
+async function buildCalendarItems(workspaceId: string): Promise<CalendarItem[]> {
   const memberRows = await db
     .select({ id: teamMembers.id, name: teamMembers.name })
     .from(teamMembers)
@@ -1462,11 +1463,34 @@ export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem
       recurrence: "",
     });
   }
+  return items;
+}
+
+/** Upcoming items (from ~2 days ago forward), sorted + capped — for the Upcoming list. */
+export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem[]> {
+  const items = await buildCalendarItems(workspaceId);
   const cutoff = Date.now() - 2 * 86_400_000;
   return items
     .filter((i) => new Date(i.when).getTime() >= cutoff)
     .sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime())
     .slice(0, 100);
+}
+
+/** Items whose time falls in [fromISO, toISO) — for the week-grid view (any week). */
+export async function getTeamCalendarRange(
+  workspaceId: string,
+  fromISO: string,
+  toISO: string,
+): Promise<CalendarItem[]> {
+  const items = await buildCalendarItems(workspaceId);
+  const from = new Date(fromISO).getTime();
+  const to = new Date(toISO).getTime();
+  return items
+    .filter((i) => {
+      const t = new Date(i.when).getTime();
+      return t >= from && t < to;
+    })
+    .sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime());
 }
 
 // ── Meetings (manual notes + Notion import → assigned tasks, see below) ───────

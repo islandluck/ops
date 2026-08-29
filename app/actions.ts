@@ -181,6 +181,7 @@ import {
   assignProjectToMember,
   getMyGoals,
   getTeamCalendar,
+  getTeamCalendarRange,
   getTeamDriveFolder,
   setTeamDriveFolder,
   clearTeamDriveFolder,
@@ -3408,6 +3409,18 @@ export async function getTeamCalendarAction() {
   if (!ws) return [];
   try {
     return await getTeamCalendar(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function getTeamCalendarRangeAction(fromISO: string, toISO: string) {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await getTeamCalendarRange(ws, fromISO, toISO);
   } catch {
     return [];
   }
