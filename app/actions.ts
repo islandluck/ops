@@ -171,6 +171,9 @@ import {
   createTeamEvent,
   updateTeamEvent,
   getTeamEvent,
+  listMyNotifications,
+  markMyNotificationsRead,
+  getNotifyChannels,
   createTeamMeeting,
   createTeamMember,
   deleteAssignment,
@@ -3447,7 +3450,7 @@ export async function createTeamEventAction(input: TeamEventInput) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   try {
-    return await createTeamEvent(ws, user.id, input);
+    return await createTeamEvent(ws, user.id, input, displayName(user));
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the entry." };
   }
@@ -3459,9 +3462,45 @@ export async function updateTeamEventAction(id: string, patch: TeamEventPatch) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   try {
-    return await updateTeamEvent(ws, user.id, id, patch);
+    return await updateTeamEvent(ws, user.id, id, patch, displayName(user));
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the entry." };
+  }
+}
+
+export async function getMyNotificationsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { items: [], unread: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { items: [], unread: 0 };
+  try {
+    return await listMyNotifications(ws, user.id);
+  } catch {
+    return { items: [], unread: 0 };
+  }
+}
+
+export async function markNotificationsReadAction() {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await markMyNotificationsRead(ws, user.id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function getNotifyChannelsAction() {
+  const user = await getCurrentUser();
+  if (!user) return { slack: false, email: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { slack: false, email: false };
+  try {
+    return await getNotifyChannels(ws);
+  } catch {
+    return { slack: false, email: false };
   }
 }
 

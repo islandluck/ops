@@ -12,6 +12,7 @@ import {
   Repeat,
   Trash2,
   User,
+  Users,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import { cn } from "@/lib/cn";
 import {
   createTeamEventAction,
   deleteTeamEventAction,
+  getNotifyChannelsAction,
   getTeamCalendarAction,
   getTeamCalendarRangeAction,
   getTeamEventAction,
@@ -191,6 +193,7 @@ function EventFormDialog({
   event,
   defaultDate,
   members,
+  channels,
   onClose,
   onSaved,
 }: {
@@ -198,6 +201,7 @@ function EventFormDialog({
   event: TeamEvent | null;
   defaultDate: Date;
   members: TeamMember[];
+  channels: { slack: boolean; email: boolean };
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -208,13 +212,20 @@ function EventFormDialog({
   const [repeats, setRepeats] = useState("none");
   const [until, setUntil] = useState("");
   const [memberId, setMemberId] = useState("");
+  const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+  const [allTeam, setAllTeam] = useState(false);
   const [detail, setDetail] = useState("");
+  const [notifyOn, setNotifyOn] = useState(true);
+  const [notifySlack, setNotifySlack] = useState(false);
+  const [notifyEmail, setNotifyEmail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setError(null);
+    setNotifySlack(false);
+    setNotifyEmail(false);
     if (event) {
       setTitle(event.title);
       setKind(event.kind);
@@ -223,7 +234,10 @@ function EventFormDialog({
       setRepeats(freqValue(event.recurrence));
       setUntil(event.recurrence_until ? toLocalDate(new Date(event.recurrence_until)) : "");
       setMemberId(event.member_id ?? members[0]?.id ?? "");
+      setAttendeeIds(event.all_team ? [] : event.attendee_ids ?? []);
+      setAllTeam(event.all_team);
       setDetail(event.detail);
+      setNotifyOn(false); // don't spam attendees on every edit — opt in
     } else {
       const d = new Date(defaultDate);
       d.setHours(9, 0, 0, 0);
@@ -234,9 +248,18 @@ function EventFormDialog({
       setRepeats("none");
       setUntil("");
       setMemberId(members[0]?.id ?? "");
+      setAttendeeIds([]);
+      setAllTeam(false);
       setDetail("");
+      setNotifyOn(true);
     }
   }, [open, event, defaultDate, members]);
+
+  const hasRecipients = kind === "one_on_one" ? !!memberId : allTeam || attendeeIds.length > 0;
+
+  function toggleAttendee(id: string) {
+    setAttendeeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
 
   async function save() {
     if (!title.trim()) return setError("Give the entry a title.");
@@ -252,6 +275,9 @@ function EventFormDialog({
       recurrence: repeats === "none" ? "" : repeats,
       recurrence_until: repeats !== "none" && until ? new Date(`${until}T23:59:59`).toISOString() : null,
       member_id: kind === "one_on_one" ? memberId || null : null,
+      attendee_ids: kind === "one_on_one" ? [] : attendeeIds,
+      all_team: kind === "one_on_one" ? false : allTeam,
+      notify: notifyOn && hasRecipients ? { inApp: true, slack: notifySlack, email: notifyEmail } : undefined,
     };
     const r = event ? await updateTeamEventAction(event.id, payload) : await createTeamEventAction(payload);
     setSaving(false);
@@ -317,7 +343,8 @@ function EventFormDialog({
             </p>
           </div>
         )}
-        {kind === "one_on_one" && (
+
+        {kind === "one_on_one" ? (
           <div>
             <Label>With</Label>
             <Select value={memberId} onChange={(e) => setMemberId(e.target.value)}>
@@ -328,11 +355,80 @@ function EventFormDialog({
               ))}
             </Select>
           </div>
+        ) : (
+          <div>
+            <Label>Attendees</Label>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setAllTeam((v) => !v)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition",
+                  allTeam ? "border-primary bg-primary/12 text-primary" : "border-border text-muted-foreground hover:border-foreground",
+                )}
+              >
+                <Users className="h-3.5 w-3.5" /> Whole team
+              </button>
+              {members.map((m) => {
+                const on = !allTeam && attendeeIds.includes(m.id);
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    disabled={allTeam}
+                    onClick={() => toggleAttendee(m.id)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-xs transition",
+                      allTeam
+                        ? "cursor-not-allowed border-border text-muted-foreground/50"
+                        : on
+                          ? "border-primary bg-primary/12 text-primary"
+                          : "border-border text-muted-foreground hover:border-foreground",
+                    )}
+                  >
+                    {m.name}
+                  </button>
+                );
+              })}
+            </div>
+            {allTeam && <p className="mt-1 text-[11px] text-muted-foreground">Everyone on the team is invited.</p>}
+          </div>
         )}
+
         <div>
           <Label>Details (optional)</Label>
           <Textarea rows={3} value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="Agenda, location, or notes." />
         </div>
+
+        {hasRecipients && (
+          <div className="rounded-lg border border-border bg-muted/20 p-2.5">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={notifyOn} onChange={(e) => setNotifyOn(e.target.checked)} className="h-4 w-4 accent-primary" />
+              Notify attendees{event ? " of changes" : ""}
+            </label>
+            {notifyOn && (
+              <div className="mt-2 flex flex-col gap-1.5 pl-6 text-[13px]">
+                <span className="text-muted-foreground">They&apos;ll get an in-app notification.</span>
+                {channels.slack && (
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={notifySlack} onChange={(e) => setNotifySlack(e.target.checked)} className="h-4 w-4 accent-primary" />
+                    Also post to Slack
+                  </label>
+                )}
+                {channels.email && (
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={notifyEmail} onChange={(e) => setNotifyEmail(e.target.checked)} className="h-4 w-4 accent-primary" />
+                    Also email attendees
+                  </label>
+                )}
+                {!channels.slack && !channels.email && (
+                  <span className="text-[11px] text-muted-foreground">Connect Slack or Gmail in Integrations to also notify there.</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="mt-1 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
@@ -390,12 +486,22 @@ function EventViewDialog({
             <span>Repeats {repeatLabel(item.recurrence).toLowerCase()}</span>
           </div>
         )}
-        {item.who && (
-          <div className="flex items-center gap-2">
-            <User className="h-4 w-4 text-muted-foreground" />
+        {item.all_team ? (
+          <div className="flex items-start gap-2">
+            <Users className="mt-0.5 h-4 w-4 text-muted-foreground" />
+            <span>Whole team</span>
+          </div>
+        ) : item.attendees.length > 0 ? (
+          <div className="flex items-start gap-2">
+            <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
+            <span>{item.attendees.join(", ")}</span>
+          </div>
+        ) : item.who ? (
+          <div className="flex items-start gap-2">
+            <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
             <span>{item.who}</span>
           </div>
-        )}
+        ) : null}
         {item.detail && (
           <div className="mt-1 whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-2.5 text-[13px]">
             {item.detail}
@@ -456,6 +562,7 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
     event: null,
     defaultDate: new Date(),
   });
+  const [channels, setChannels] = useState<{ slack: boolean; email: boolean }>({ slack: false, email: false });
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const loadGrid = useCallback((ws: Date) => {
@@ -480,6 +587,9 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = (8 - START_HOUR) * ROW_H;
   }, []);
+  useEffect(() => {
+    if (canManage) getNotifyChannelsAction().then(setChannels).catch(() => {});
+  }, [canManage]);
 
   function refreshAll() {
     loadGrid(weekStart);
@@ -715,6 +825,7 @@ export function CalendarView({ canManage, members }: { canManage: boolean; membe
         event={form.event}
         defaultDate={form.defaultDate}
         members={members}
+        channels={channels}
         onClose={() => setForm((f) => ({ ...f, open: false }))}
         onSaved={refreshAll}
       />

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gt, isNotNull, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNotNull, isNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   chatChannels,
@@ -15,11 +15,13 @@ import {
   teamGoals,
   teamMeetings,
   teamMembers,
+  teamNotifications,
   teamSettings,
   workspaceMembers,
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
-import { getDriveMeta, isWithinDriveFolder, listDriveFolder, type DriveEntry } from "@/lib/integrations/google";
+import { getDriveMeta, isWithinDriveFolder, listDriveFolder, sendGmail, type DriveEntry } from "@/lib/integrations/google";
+import { notifySlack } from "@/lib/integrations/slack";
 import { getNotionPageContent, searchNotionPages } from "@/lib/integrations/notion";
 import { extractMeeting, type MeetingExtraction } from "@/lib/ai/meeting-extract";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -41,6 +43,7 @@ import type {
   TeamGoalStatus,
   TeamMeeting,
   TeamMember,
+  TeamNotification,
   TeamRole,
   WorkspaceRole,
 } from "@/lib/types";
@@ -1322,7 +1325,15 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
 
 // ── Team calendar (Phase: refinements) ───────────────────────────────────────
 
-function toEvent(r: typeof teamEvents.$inferSelect, memberName: string | null = null): TeamEvent {
+/** Effective attendee ids: the explicit list, or the legacy single member (old 1:1s). */
+function effectiveAttendees(r: { attendee_ids: string[]; member_id: string | null }): string[] {
+  if (r.attendee_ids && r.attendee_ids.length) return r.attendee_ids;
+  return r.member_id ? [r.member_id] : [];
+}
+
+function toEvent(r: typeof teamEvents.$inferSelect, nameById?: Map<string, string>): TeamEvent {
+  const ids = effectiveAttendees(r);
+  const names = nameById ? ids.map((id) => nameById.get(id)).filter((n): n is string => !!n) : [];
   return {
     id: r.id,
     title: r.title,
@@ -1333,7 +1344,10 @@ function toEvent(r: typeof teamEvents.$inferSelect, memberName: string | null = 
     recurrence: r.recurrence,
     recurrence_until: r.recurrence_until ? new Date(r.recurrence_until).toISOString() : null,
     member_id: r.member_id ?? null,
-    member_name: memberName,
+    member_name: r.member_id && nameById ? nameById.get(r.member_id) ?? null : null,
+    attendee_ids: ids,
+    attendee_names: names,
+    all_team: r.all_team,
     created_at: new Date(r.created_at).toISOString(),
   };
 }
@@ -1350,7 +1364,14 @@ export async function listTeamEvents(workspaceId: string): Promise<TeamEvent[]> 
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId));
   const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
-  return rows.map((r) => toEvent(r, r.member_id ? nameById.get(r.member_id) ?? null : null));
+  return rows.map((r) => toEvent(r, nameById));
+}
+
+/** Which channels to notify attendees on when an event is created/updated. */
+export interface NotifyChannels {
+  inApp?: boolean;
+  slack?: boolean;
+  email?: boolean;
 }
 
 export interface TeamEventInput {
@@ -1362,6 +1383,12 @@ export interface TeamEventInput {
   recurrence?: string;
   recurrence_until?: string | null;
   member_id?: string | null;
+  /** Attendees (meeting/event). Ignored when all_team is true. */
+  attendee_ids?: string[];
+  /** Invite the whole team (all-hands). */
+  all_team?: boolean;
+  /** How to notify the attendees; omit for no notification. */
+  notify?: NotifyChannels;
 }
 
 /** Clamp a duration to a sane 15 min – 24 h window (default 1 h). */
@@ -1374,11 +1401,98 @@ function ruleKeyword(rule?: string): string {
   const f = normFreq(rule ?? "");
   return f === "none" ? "" : f;
 }
+/** Keep only real, deduped member ids from the workspace. */
+function cleanAttendees(ids: string[] | undefined, valid: Set<string>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids ?? []) {
+    if (valid.has(id) && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Notify an event's attendees. Always writes in-app notifications (unless
+ * notify.inApp === false); optionally posts a Slack summary and emails each
+ * attendee. Best-effort — external failures never block the calendar write.
+ */
+async function notifyEventAttendees(
+  workspaceId: string,
+  event: {
+    id: string;
+    title: string;
+    starts_at: Date;
+    recurrence: string;
+    attendee_ids: string[];
+    all_team: boolean;
+  },
+  channels: NotifyChannels,
+  actorName: string,
+): Promise<void> {
+  try {
+    const members = await db
+      .select({ id: teamMembers.id, name: teamMembers.name, email: teamMembers.email })
+      .from(teamMembers)
+      .where(eq(teamMembers.workspace_id, workspaceId));
+    const recipIds = event.all_team ? new Set(members.map((m) => m.id)) : new Set(event.attendee_ids);
+    const recipients = members.filter((m) => recipIds.has(m.id));
+    if (!recipients.length) return;
+
+    const start = new Date(event.starts_at);
+    const dateLabel = start.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    const timeLabel = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    const freq = normFreq(event.recurrence);
+    const repeatSuffix = freq !== "none" ? `, repeats ${freq}` : "";
+    const title = `You're on the calendar: ${event.title}`;
+    const body = `${actorName} added you to "${event.title}" — ${dateLabel} at ${timeLabel}${repeatSuffix}.`;
+
+    if (channels.inApp !== false) {
+      const now = new Date();
+      await db.insert(teamNotifications).values(
+        recipients.map((r) => ({
+          id: randomUUID(),
+          workspace_id: workspaceId,
+          member_id: r.id,
+          kind: "event_invite",
+          title,
+          body,
+          ref_type: "event",
+          ref_id: event.id,
+          created_at: now,
+        })),
+      );
+    }
+
+    if (channels.slack) {
+      const who = event.all_team ? "the whole team" : recipients.map((r) => r.name).join(", ");
+      const msg = `📅 ${actorName} scheduled *${event.title}* — ${dateLabel} at ${timeLabel}${repeatSuffix}. Attendees: ${who}.`;
+      await notifySlack(workspaceId, msg).catch(() => {});
+    }
+
+    if (channels.email) {
+      const token = await getValidAccessToken(workspaceId, "Gmail").catch(() => null);
+      const withEmail = recipients.filter((r) => r.email && r.email.includes("@")).slice(0, 50);
+      if (token && withEmail.length) {
+        const subject = `Invite: ${event.title} — ${dateLabel}`;
+        const emailBody = `${body}\n\nWhen: ${dateLabel} at ${timeLabel}${repeatSuffix}\n\n— Sent from your team calendar`;
+        await Promise.all(
+          withEmail.map((r) => sendGmail(token, { to: r.email, subject, body: emailBody }).catch(() => null)),
+        );
+      }
+    }
+  } catch {
+    // Notification is best-effort; the event itself is already saved.
+  }
+}
 
 export async function createTeamEvent(
   workspaceId: string,
   userId: string,
   input: TeamEventInput,
+  actorName?: string,
 ): Promise<{ ok: true; event: TeamEvent } | { ok: false; error: string }> {
   const role = await getWorkspaceRole(workspaceId, userId);
   if (role !== "owner" && role !== "manager") {
@@ -1389,11 +1503,25 @@ export async function createTeamEvent(
   const when = new Date(input.starts_at);
   if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid date & time." };
   const kind: TeamEventKind = input.kind === "one_on_one" || input.kind === "event" ? input.kind : "meeting";
-  const [me] = await db
-    .select({ id: teamMembers.id })
+
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name, user_id: teamMembers.user_id })
     .from(teamMembers)
-    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
-    .limit(1);
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
+  const valid = new Set(memberRows.map((m) => m.id));
+  const me = memberRows.find((m) => m.user_id === userId) ?? null;
+
+  const allTeam = kind !== "one_on_one" && !!input.all_team;
+  let attendeeIds: string[];
+  if (kind === "one_on_one") {
+    const one = input.member_id && valid.has(input.member_id) ? input.member_id : cleanAttendees(input.attendee_ids, valid)[0];
+    attendeeIds = one ? [one] : [];
+  } else {
+    attendeeIds = allTeam ? [] : cleanAttendees(input.attendee_ids, valid);
+  }
+  const memberId = kind === "one_on_one" ? attendeeIds[0] ?? null : null;
+
   const now = new Date();
   const [row] = await db
     .insert(teamEvents)
@@ -1407,13 +1535,31 @@ export async function createTeamEvent(
       duration_minutes: clampDuration(input.duration_minutes),
       recurrence: ruleKeyword(input.recurrence),
       recurrence_until: input.recurrence_until ? new Date(input.recurrence_until) : null,
-      member_id: kind === "one_on_one" ? input.member_id || null : null,
+      member_id: memberId,
+      attendee_ids: attendeeIds,
+      all_team: allTeam,
       created_by_member_id: me?.id ?? null,
       created_at: now,
       updated_at: now,
     })
     .returning();
-  return { ok: true, event: toEvent(row) };
+
+  if (input.notify) {
+    await notifyEventAttendees(
+      workspaceId,
+      {
+        id: row.id,
+        title: row.title,
+        starts_at: row.starts_at,
+        recurrence: row.recurrence,
+        attendee_ids: row.attendee_ids,
+        all_team: row.all_team,
+      },
+      input.notify,
+      actorName || me?.name || "A teammate",
+    );
+  }
+  return { ok: true, event: toEvent(row, nameById) };
 }
 
 export async function deleteTeamEvent(
@@ -1438,6 +1584,9 @@ export interface TeamEventPatch {
   recurrence?: string;
   recurrence_until?: string | null;
   member_id?: string | null;
+  attendee_ids?: string[];
+  all_team?: boolean;
+  notify?: NotifyChannels;
 }
 
 export async function updateTeamEvent(
@@ -1445,11 +1594,19 @@ export async function updateTeamEvent(
   userId: string,
   id: string,
   patch: TeamEventPatch,
+  actorName?: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const role = await getWorkspaceRole(workspaceId, userId);
   if (role !== "owner" && role !== "manager") {
     return { ok: false, error: "Only owners and managers can edit calendar entries." };
   }
+  const [current] = await db
+    .select()
+    .from(teamEvents)
+    .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)))
+    .limit(1);
+  if (!current) return { ok: false, error: "That entry no longer exists." };
+
   const set: Record<string, unknown> = { updated_at: new Date() };
   if (typeof patch.title === "string") {
     if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
@@ -1467,8 +1624,46 @@ export async function updateTeamEvent(
   if (patch.recurrence_until !== undefined) {
     set.recurrence_until = patch.recurrence_until ? new Date(patch.recurrence_until) : null;
   }
-  if (patch.member_id !== undefined) set.member_id = patch.member_id || null;
+
+  // Recompute attendees from the resulting kind (the edit form sends these together).
+  const kind: TeamEventKind = (set.kind as TeamEventKind | undefined) ?? (current.kind as TeamEventKind);
+  const memberRows = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const valid = new Set(memberRows.map((m) => m.id));
+  if (kind === "one_on_one") {
+    const one =
+      (patch.member_id && valid.has(patch.member_id) ? patch.member_id : undefined) ??
+      cleanAttendees(patch.attendee_ids, valid)[0] ??
+      (current.member_id && valid.has(current.member_id) ? current.member_id : undefined);
+    set.all_team = false;
+    set.attendee_ids = one ? [one] : [];
+    set.member_id = one ?? null;
+  } else {
+    const allTeam = patch.all_team !== undefined ? !!patch.all_team : current.all_team;
+    set.all_team = allTeam;
+    set.attendee_ids = allTeam ? [] : cleanAttendees(patch.attendee_ids ?? (current.attendee_ids as string[]), valid);
+    set.member_id = null;
+  }
+
   await db.update(teamEvents).set(set).where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
+
+  if (patch.notify) {
+    await notifyEventAttendees(
+      workspaceId,
+      {
+        id,
+        title: (set.title as string) ?? current.title,
+        starts_at: (set.starts_at as Date) ?? new Date(current.starts_at),
+        recurrence: (set.recurrence as string) ?? current.recurrence,
+        attendee_ids: (set.attendee_ids as string[]) ?? current.attendee_ids,
+        all_team: (set.all_team as boolean) ?? current.all_team,
+      },
+      patch.notify,
+      actorName || "A teammate",
+    );
+  }
   return { ok: true };
 }
 
@@ -1480,16 +1675,11 @@ export async function getTeamEvent(workspaceId: string, id: string): Promise<Tea
     .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)))
     .limit(1);
   if (!r) return null;
-  let name: string | null = null;
-  if (r.member_id) {
-    const [m] = await db
-      .select({ name: teamMembers.name })
-      .from(teamMembers)
-      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, r.member_id)))
-      .limit(1);
-    name = m?.name ?? null;
-  }
-  return toEvent(r, name);
+  const memberRows = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  return toEvent(r, new Map(memberRows.map((m) => [m.id, m.name])));
 }
 
 /* ── Recurrence expansion ─────────────────────────────────────────────────── */
@@ -1555,9 +1745,19 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
   const items: CalendarItem[] = [];
   const inRange = (d: Date) => d.getTime() >= from.getTime() && d.getTime() < to.getTime();
 
+  const allNames = memberRows.map((m) => m.name);
   const events = await db.select().from(teamEvents).where(eq(teamEvents.workspace_id, workspaceId));
   for (const e of events) {
-    const who = e.member_id ? nameById.get(e.member_id) ?? null : null;
+    const attNames = e.all_team
+      ? allNames
+      : effectiveAttendees(e).map((mid) => nameById.get(mid)).filter((n): n is string => !!n);
+    const who = e.all_team
+      ? "Whole team"
+      : attNames.length === 0
+        ? null
+        : attNames.length <= 2
+          ? attNames.join(", ")
+          : `${attNames[0]}, ${attNames[1]} +${attNames.length - 2}`;
     const until = e.recurrence_until ? new Date(e.recurrence_until) : null;
     for (const occ of expandOccurrences(new Date(e.starts_at), e.recurrence, until, from, to)) {
       items.push({
@@ -1568,6 +1768,8 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
         when: occ.toISOString(),
         duration_min: e.duration_minutes,
         who,
+        attendees: attNames,
+        all_team: e.all_team,
         recurrence: e.recurrence,
         detail: e.detail,
         editable: true,
@@ -1591,6 +1793,8 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
       when: when.toISOString(),
       duration_min: 0,
       who: p.lead ? nameById.get(p.lead) ?? null : null,
+      attendees: [],
+      all_team: false,
       recurrence: "",
       detail: "",
       editable: false,
@@ -1613,6 +1817,8 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
       when: when.toISOString(),
       duration_min: 0,
       who: t.member ? nameById.get(t.member) ?? null : null,
+      attendees: [],
+      all_team: false,
       recurrence: "",
       detail: "",
       editable: false,
@@ -1647,6 +1853,77 @@ export async function getTeamCalendarRange(
 ): Promise<CalendarItem[]> {
   const items = await buildCalendarItems(workspaceId, new Date(fromISO), new Date(toISO));
   return items.sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime());
+}
+
+/* ── Notifications ────────────────────────────────────────────────────────── */
+
+function toNotification(r: typeof teamNotifications.$inferSelect): TeamNotification {
+  return {
+    id: r.id,
+    kind: r.kind,
+    title: r.title,
+    body: r.body,
+    ref_type: r.ref_type ?? null,
+    ref_id: r.ref_id ?? null,
+    read: !!r.read_at,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
+/** The signed-in member's notifications (most recent first) + unread count. */
+export async function listMyNotifications(
+  workspaceId: string,
+  userId: string,
+): Promise<{ items: TeamNotification[]; unread: number }> {
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (!me) return { items: [], unread: 0 };
+  const rows = await db
+    .select()
+    .from(teamNotifications)
+    .where(and(eq(teamNotifications.workspace_id, workspaceId), eq(teamNotifications.member_id, me.id)))
+    .orderBy(desc(teamNotifications.created_at))
+    .limit(50);
+  const items = rows.map(toNotification);
+  return { items, unread: items.filter((n) => !n.read).length };
+}
+
+/** Mark all of the signed-in member's notifications read. */
+export async function markMyNotificationsRead(workspaceId: string, userId: string): Promise<{ ok: true }> {
+  const [me] = await db
+    .select({ id: teamMembers.id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
+    .limit(1);
+  if (me) {
+    await db
+      .update(teamNotifications)
+      .set({ read_at: new Date() })
+      .where(
+        and(
+          eq(teamNotifications.workspace_id, workspaceId),
+          eq(teamNotifications.member_id, me.id),
+          isNull(teamNotifications.read_at),
+        ),
+      );
+  }
+  return { ok: true };
+}
+
+/** Which optional notify channels are connected for this workspace (Slack / Gmail). */
+export async function getNotifyChannels(workspaceId: string): Promise<{ slack: boolean; email: boolean }> {
+  const [slack, email] = await Promise.all([
+    getValidAccessToken(workspaceId, "Slack")
+      .then((t) => !!t)
+      .catch(() => false),
+    getValidAccessToken(workspaceId, "Gmail")
+      .then((t) => !!t)
+      .catch(() => false),
+  ]);
+  return { slack, email };
 }
 
 // ── Meetings (manual notes + Notion import → assigned tasks, see below) ───────

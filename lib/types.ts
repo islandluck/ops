@@ -335,6 +335,11 @@ export interface TeamEvent {
   recurrence_until: string | null;
   member_id: string | null;
   member_name: string | null;
+  /** Attendee member ids (a 1:1 falls back to [member_id]). */
+  attendee_ids: string[];
+  attendee_names: string[];
+  /** Whole-team event (all-hands) — attendees resolve to everyone. */
+  all_team: boolean;
   created_at: string;
 }
 
@@ -349,11 +354,27 @@ export interface CalendarItem {
   when: string;
   /** Minutes; 0 for point-in-time deadlines. */
   duration_min: number;
+  /** Short attendee summary for the grid/upcoming (e.g. "Whole team", "Maya, Alex +2"). */
   who: string | null;
+  /** Full attendee names (for the details view). */
+  attendees: string[];
+  all_team: boolean;
   recurrence: string;
   detail: string;
   /** True only for team events (deadlines are derived and not editable here). */
   editable: boolean;
+}
+
+/** An in-app notification for a team member (shown in the portal). */
+export interface TeamNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  ref_type: string | null;
+  ref_id: string | null;
+  read: boolean;
+  created_at: string;
 }
 
 /** A meeting record — notes now; action-items → tasks come later. */

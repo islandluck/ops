@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/supabase/server";
 import { getUserRoleInWorkspace, workspaceIdForUser } from "@/lib/db/queries";
 import { signOutAction } from "@/app/actions";
 import { Logo } from "@/components/brand";
+import { NotificationsBell } from "@/components/portal/notifications-bell";
 
 /**
  * The team-member portal shell — a stripped-down area with none of the owner app.
@@ -31,11 +32,14 @@ export default async function PortalLayout({ children }: { children: React.React
           <Logo />
           <span className="text-sm font-medium text-muted-foreground">Team portal</span>
         </div>
-        <form action={signOutAction}>
-          <button type="submit" className="text-sm text-muted-foreground hover:text-foreground">
-            Sign out
-          </button>
-        </form>
+        <div className="flex items-center gap-3">
+          <NotificationsBell />
+          <form action={signOutAction}>
+            <button type="submit" className="text-sm text-muted-foreground hover:text-foreground">
+              Sign out
+            </button>
+          </form>
+        </div>
       </header>
       <main className="mx-auto w-full max-w-3xl flex-1 px-5 py-8">{children}</main>
     </div>

@@ -886,12 +886,39 @@ export const teamEvents = pgTable(
     duration_minutes: integer("duration_minutes").notNull().default(60),
     // When a recurring event stops repeating (null = one-off or no end).
     recurrence_until: timestamp("recurrence_until", { withTimezone: true }),
+    // Legacy single attendee (1:1 "with"); attendee_ids is the source of truth now.
     member_id: uuid("member_id"),
+    // Meeting attendees — team_members ids (app-enforced, no DB FK).
+    attendee_ids: uuid("attendee_ids").array().notNull().default([]),
+    // Whole-team event (all-hands): attendees resolve to every member at read time.
+    all_team: boolean("all_team").notNull().default(false),
     created_by_member_id: uuid("created_by_member_id"),
     created_at: createdAt,
     updated_at: updatedAt,
   },
   (t) => [index("team_events_ws_idx").on(t.workspace_id, t.starts_at)],
+);
+
+/** A notification for a team member (e.g. "you were added to a meeting"). Shown in
+ *  the member portal; Slack/email are sent separately at creation, best-effort. */
+export const teamNotifications = pgTable(
+  "team_notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Recipient team_member (app-enforced, no DB FK).
+    member_id: uuid("member_id").notNull(),
+    kind: text("kind").notNull().default("info"),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    ref_type: text("ref_type"),
+    ref_id: uuid("ref_id"),
+    read_at: timestamp("read_at", { withTimezone: true }),
+    created_at: createdAt,
+  },
+  (t) => [index("team_notifications_member_idx").on(t.workspace_id, t.member_id, t.created_at)],
 );
 
 /** A meeting record — notes now; action-items → tasks come in a later pass. */
