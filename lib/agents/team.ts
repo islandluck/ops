@@ -1329,7 +1329,9 @@ function toEvent(r: typeof teamEvents.$inferSelect, memberName: string | null = 
     detail: r.detail,
     kind: r.kind as TeamEventKind,
     starts_at: new Date(r.starts_at).toISOString(),
+    duration_minutes: r.duration_minutes,
     recurrence: r.recurrence,
+    recurrence_until: r.recurrence_until ? new Date(r.recurrence_until).toISOString() : null,
     member_id: r.member_id ?? null,
     member_name: memberName,
     created_at: new Date(r.created_at).toISOString(),
@@ -1356,8 +1358,21 @@ export interface TeamEventInput {
   detail?: string;
   kind: TeamEventKind;
   starts_at: string;
+  duration_minutes?: number;
   recurrence?: string;
+  recurrence_until?: string | null;
   member_id?: string | null;
+}
+
+/** Clamp a duration to a sane 15 min – 24 h window (default 1 h). */
+function clampDuration(n?: number): number {
+  const v = typeof n === "number" && Number.isFinite(n) ? Math.round(n) : 60;
+  return Math.min(Math.max(v, 15), 24 * 60);
+}
+/** Normalize any recurrence label to a stored keyword ("" when non-recurring). */
+function ruleKeyword(rule?: string): string {
+  const f = normFreq(rule ?? "");
+  return f === "none" ? "" : f;
 }
 
 export async function createTeamEvent(
@@ -1389,7 +1404,9 @@ export async function createTeamEvent(
       detail: (input.detail ?? "").slice(0, 2000),
       kind,
       starts_at: when,
-      recurrence: (input.recurrence ?? "").slice(0, 60),
+      duration_minutes: clampDuration(input.duration_minutes),
+      recurrence: ruleKeyword(input.recurrence),
+      recurrence_until: input.recurrence_until ? new Date(input.recurrence_until) : null,
       member_id: kind === "one_on_one" ? input.member_id || null : null,
       created_by_member_id: me?.id ?? null,
       created_at: now,
@@ -1412,85 +1429,224 @@ export async function deleteTeamEvent(
   return { ok: true };
 }
 
-/** The team calendar: owner-set events + deadlines derived from projects & tasks. */
-/** All calendar items (team events + derived project/assignment deadlines), unsorted. */
-async function buildCalendarItems(workspaceId: string): Promise<CalendarItem[]> {
+export interface TeamEventPatch {
+  title?: string;
+  detail?: string;
+  kind?: TeamEventKind;
+  starts_at?: string;
+  duration_minutes?: number;
+  recurrence?: string;
+  recurrence_until?: string | null;
+  member_id?: string | null;
+}
+
+export async function updateTeamEvent(
+  workspaceId: string,
+  userId: string,
+  id: string,
+  patch: TeamEventPatch,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const role = await getWorkspaceRole(workspaceId, userId);
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Only owners and managers can edit calendar entries." };
+  }
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (typeof patch.title === "string") {
+    if (!patch.title.trim()) return { ok: false, error: "Title can't be empty." };
+    set.title = patch.title.trim().slice(0, 200);
+  }
+  if (typeof patch.detail === "string") set.detail = patch.detail.slice(0, 2000);
+  if (patch.kind === "meeting" || patch.kind === "one_on_one" || patch.kind === "event") set.kind = patch.kind;
+  if (patch.starts_at) {
+    const d = new Date(patch.starts_at);
+    if (Number.isNaN(d.getTime())) return { ok: false, error: "Pick a valid date & time." };
+    set.starts_at = d;
+  }
+  if (patch.duration_minutes !== undefined) set.duration_minutes = clampDuration(patch.duration_minutes);
+  if (patch.recurrence !== undefined) set.recurrence = ruleKeyword(patch.recurrence);
+  if (patch.recurrence_until !== undefined) {
+    set.recurrence_until = patch.recurrence_until ? new Date(patch.recurrence_until) : null;
+  }
+  if (patch.member_id !== undefined) set.member_id = patch.member_id || null;
+  await db.update(teamEvents).set(set).where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
+  return { ok: true };
+}
+
+/** One event by id (for the details / edit view). */
+export async function getTeamEvent(workspaceId: string, id: string): Promise<TeamEvent | null> {
+  const [r] = await db
+    .select()
+    .from(teamEvents)
+    .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)))
+    .limit(1);
+  if (!r) return null;
+  let name: string | null = null;
+  if (r.member_id) {
+    const [m] = await db
+      .select({ name: teamMembers.name })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, r.member_id)))
+      .limit(1);
+    name = m?.name ?? null;
+  }
+  return toEvent(r, name);
+}
+
+/* ── Recurrence expansion ─────────────────────────────────────────────────── */
+
+type Freq = "none" | "daily" | "weekly" | "biweekly" | "monthly";
+
+/** Interpret a stored recurrence keyword/label into a frequency. */
+function normFreq(rule: string): Freq {
+  const s = (rule || "").toLowerCase();
+  if (/bi.?week|every other|fortnight|2\s*week/.test(s)) return "biweekly";
+  if (/week/.test(s)) return "weekly";
+  if (/dail|day/.test(s)) return "daily";
+  if (/month/.test(s)) return "monthly";
+  return "none";
+}
+function stepFreq(d: Date, freq: Freq): Date {
+  const x = new Date(d);
+  if (freq === "daily") x.setDate(x.getDate() + 1);
+  else if (freq === "weekly") x.setDate(x.getDate() + 7);
+  else if (freq === "biweekly") x.setDate(x.getDate() + 14);
+  else if (freq === "monthly") x.setMonth(x.getMonth() + 1);
+  return x;
+}
+/** Start times of an event's occurrences within [from, to), respecting an until date. */
+function expandOccurrences(
+  start: Date,
+  rule: string,
+  until: Date | null | undefined,
+  from: Date,
+  to: Date,
+): Date[] {
+  const freq = normFreq(rule);
+  if (freq === "none") {
+    return start.getTime() >= from.getTime() && start.getTime() < to.getTime() ? [start] : [];
+  }
+  const stop = until ?? null;
+  const res: Date[] = [];
+  let cur = new Date(start);
+  // Fast-forward fixed-interval series close to `from` so an old daily event
+  // doesn't iterate thousands of times before reaching the window.
+  const stepMs =
+    freq === "daily" ? 86_400_000 : freq === "weekly" ? 7 * 86_400_000 : freq === "biweekly" ? 14 * 86_400_000 : 0;
+  if (stepMs && cur.getTime() < from.getTime()) {
+    const jumps = Math.floor((from.getTime() - cur.getTime()) / stepMs);
+    cur = new Date(cur.getTime() + jumps * stepMs);
+  }
+  let guard = 0;
+  while (cur.getTime() < to.getTime() && guard++ < 1000) {
+    if (stop && cur.getTime() > stop.getTime()) break;
+    if (cur.getTime() >= from.getTime()) res.push(new Date(cur));
+    cur = stepFreq(cur, freq);
+  }
+  return res;
+}
+
+/** All calendar items in [from, to): team events (recurrences expanded) + derived deadlines. */
+async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Promise<CalendarItem[]> {
   const memberRows = await db
     .select({ id: teamMembers.id, name: teamMembers.name })
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId));
   const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
   const items: CalendarItem[] = [];
+  const inRange = (d: Date) => d.getTime() >= from.getTime() && d.getTime() < to.getTime();
 
   const events = await db.select().from(teamEvents).where(eq(teamEvents.workspace_id, workspaceId));
   for (const e of events) {
-    items.push({
-      id: e.id,
-      kind: e.kind as CalendarItem["kind"],
-      title: e.title,
-      when: new Date(e.starts_at).toISOString(),
-      who: e.member_id ? nameById.get(e.member_id) ?? null : null,
-      recurrence: e.recurrence,
-    });
+    const who = e.member_id ? nameById.get(e.member_id) ?? null : null;
+    const until = e.recurrence_until ? new Date(e.recurrence_until) : null;
+    for (const occ of expandOccurrences(new Date(e.starts_at), e.recurrence, until, from, to)) {
+      items.push({
+        id: `${e.id}@${occ.getTime()}`,
+        source_id: e.id,
+        kind: e.kind as CalendarItem["kind"],
+        title: e.title,
+        when: occ.toISOString(),
+        duration_min: e.duration_minutes,
+        who,
+        recurrence: e.recurrence,
+        detail: e.detail,
+        editable: true,
+      });
+    }
   }
+
   const hps = await db
     .select({ id: humanProjects.id, title: humanProjects.title, deadline: humanProjects.deadline, lead: humanProjects.lead_member_id })
     .from(humanProjects)
     .where(and(eq(humanProjects.workspace_id, workspaceId), isNotNull(humanProjects.deadline)));
   for (const p of hps) {
     if (!p.deadline) continue;
+    const when = new Date(p.deadline);
+    if (!inRange(when)) continue;
     items.push({
       id: `hp-${p.id}`,
+      source_id: `hp-${p.id}`,
       kind: "deadline",
       title: `${p.title} — due`,
-      when: new Date(p.deadline).toISOString(),
+      when: when.toISOString(),
+      duration_min: 0,
       who: p.lead ? nameById.get(p.lead) ?? null : null,
       recurrence: "",
+      detail: "",
+      editable: false,
     });
   }
+
   const tas = await db
     .select({ id: teamAssignments.id, title: teamAssignments.title, deadline: teamAssignments.deadline, member: teamAssignments.member_id })
     .from(teamAssignments)
     .where(and(eq(teamAssignments.workspace_id, workspaceId), isNotNull(teamAssignments.deadline)));
   for (const t of tas) {
     if (!t.deadline) continue;
+    const when = new Date(t.deadline);
+    if (!inRange(when)) continue;
     items.push({
       id: `ta-${t.id}`,
+      source_id: `ta-${t.id}`,
       kind: "deadline",
       title: `${t.title} — due`,
-      when: new Date(t.deadline).toISOString(),
+      when: when.toISOString(),
+      duration_min: 0,
       who: t.member ? nameById.get(t.member) ?? null : null,
       recurrence: "",
+      detail: "",
+      editable: false,
     });
   }
+
   return items;
 }
 
-/** Upcoming items (from ~2 days ago forward), sorted + capped — for the Upcoming list. */
+/** Upcoming items (next ~120 days), sorted; each recurring event collapses to its NEXT occurrence. */
 export async function getTeamCalendar(workspaceId: string): Promise<CalendarItem[]> {
-  const items = await buildCalendarItems(workspaceId);
-  const cutoff = Date.now() - 2 * 86_400_000;
-  return items
-    .filter((i) => new Date(i.when).getTime() >= cutoff)
-    .sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime())
-    .slice(0, 100);
+  const from = new Date(Date.now() - 2 * 86_400_000);
+  const to = new Date(Date.now() + 120 * 86_400_000);
+  const items = (await buildCalendarItems(workspaceId, from, to)).sort(
+    (a, b) => new Date(a.when).getTime() - new Date(b.when).getTime(),
+  );
+  const seen = new Set<string>();
+  const out: CalendarItem[] = [];
+  for (const it of items) {
+    if (seen.has(it.source_id)) continue; // one row per meeting/deadline, its soonest instance
+    seen.add(it.source_id);
+    out.push(it);
+  }
+  return out.slice(0, 100);
 }
 
-/** Items whose time falls in [fromISO, toISO) — for the week-grid view (any week). */
+/** Every occurrence whose start falls in [fromISO, toISO) — for the week-grid view (any week). */
 export async function getTeamCalendarRange(
   workspaceId: string,
   fromISO: string,
   toISO: string,
 ): Promise<CalendarItem[]> {
-  const items = await buildCalendarItems(workspaceId);
-  const from = new Date(fromISO).getTime();
-  const to = new Date(toISO).getTime();
-  return items
-    .filter((i) => {
-      const t = new Date(i.when).getTime();
-      return t >= from && t < to;
-    })
-    .sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime());
+  const items = await buildCalendarItems(workspaceId, new Date(fromISO), new Date(toISO));
+  return items.sort((a, b) => new Date(a.when).getTime() - new Date(b.when).getTime());
 }
 
 // ── Meetings (manual notes + Notion import → assigned tasks, see below) ───────

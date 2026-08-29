@@ -169,6 +169,8 @@ import {
   createTeamDocument,
   createTeamGoal,
   createTeamEvent,
+  updateTeamEvent,
+  getTeamEvent,
   createTeamMeeting,
   createTeamMember,
   deleteAssignment,
@@ -218,6 +220,7 @@ import {
   type HumanProjectInput,
   type TeamDocumentInput,
   type TeamEventInput,
+  type TeamEventPatch,
   type TeamGoalInput,
   type TeamMeetingInput,
   type TeamMemberInput,
@@ -3447,6 +3450,30 @@ export async function createTeamEventAction(input: TeamEventInput) {
     return await createTeamEvent(ws, user.id, input);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the entry." };
+  }
+}
+
+export async function updateTeamEventAction(id: string, patch: TeamEventPatch) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateTeamEvent(ws, user.id, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the entry." };
+  }
+}
+
+export async function getTeamEventAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getTeamEvent(ws, id);
+  } catch {
+    return null;
   }
 }
 

@@ -327,20 +327,33 @@ export interface TeamEvent {
   detail: string;
   kind: TeamEventKind;
   starts_at: string;
+  /** Length in minutes (drives the block height in the week grid). */
+  duration_minutes: number;
+  /** Recurrence rule keyword: "" | none | daily | weekly | biweekly | monthly. */
   recurrence: string;
+  /** When a recurring event stops repeating (null = one-off / no end). */
+  recurrence_until: string | null;
   member_id: string | null;
   member_name: string | null;
   created_at: string;
 }
 
-/** A row on the team calendar — an event OR a derived deadline. */
+/** A row on the team calendar — an event occurrence OR a derived deadline. */
 export interface CalendarItem {
+  /** Unique per rendered occurrence (recurring events expand to several). */
   id: string;
+  /** The underlying team_events row id (or hp-/ta- id) — the target of edit/delete. */
+  source_id: string;
   kind: "meeting" | "one_on_one" | "event" | "deadline";
   title: string;
   when: string;
+  /** Minutes; 0 for point-in-time deadlines. */
+  duration_min: number;
   who: string | null;
   recurrence: string;
+  detail: string;
+  /** True only for team events (deadlines are derived and not editable here). */
+  editable: boolean;
 }
 
 /** A meeting record — notes now; action-items → tasks come later. */

@@ -880,8 +880,12 @@ export const teamEvents = pgTable(
     detail: text("detail").notNull().default(""),
     kind: text("kind").$type<"meeting" | "one_on_one" | "event">().notNull().default("meeting"),
     starts_at: timestamp("starts_at", { withTimezone: true }).notNull().defaultNow(),
-    // Free-form recurrence label (display-only for now, e.g. "Weekly", "Every Monday").
+    // Recurrence rule keyword: "" | none | daily | weekly | biweekly | monthly.
     recurrence: text("recurrence").notNull().default(""),
+    // How long the event runs, in minutes — drives the block height in the grid.
+    duration_minutes: integer("duration_minutes").notNull().default(60),
+    // When a recurring event stops repeating (null = one-off or no end).
+    recurrence_until: timestamp("recurrence_until", { withTimezone: true }),
     member_id: uuid("member_id"),
     created_by_member_id: uuid("created_by_member_id"),
     created_at: createdAt,
