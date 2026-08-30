@@ -299,6 +299,8 @@ import {
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
 import type { ExecImage } from "@/lib/ai/executive";
+import { computeKpiTrends } from "@/lib/executive/kpis";
+import type { KpiTrendSeries } from "@/lib/types";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
@@ -1411,6 +1413,20 @@ export async function sendExecutiveMessageAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return sendExecutiveMessage(ws, text, threadId, image ? [image] : undefined);
+}
+
+/** KPI trend series (revenue / followers / shipped over recent weeks) for the
+ *  Executive Office sparklines. */
+export async function getKpiTrendsAction(): Promise<KpiTrendSeries[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await computeKpiTrends(ws);
+  } catch {
+    return [];
+  }
 }
 
 /** Extract plain text from an uploaded document (PDF / .docx / text) so the founder

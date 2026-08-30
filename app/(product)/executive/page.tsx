@@ -23,6 +23,7 @@ import {
   Image as ImageIcon,
   Info,
   Lightbulb,
+  LineChart,
   ListChecks,
   Loader2,
   Mail,
@@ -63,6 +64,7 @@ import {
   generateBriefAction,
   generateInvestorUpdateAction,
   getExecutiveBundleAction,
+  getKpiTrendsAction,
   sendExecutiveMessageAction,
   extractAttachmentTextAction,
   newExecutiveThreadAction,
@@ -91,6 +93,7 @@ import type {
   InvestorMetric,
   InvestorUpdate,
   InvestorUpdateContent,
+  KpiTrendSeries,
   UpdateAudience,
 } from "@/lib/types";
 
@@ -167,6 +170,7 @@ export default function ExecutivePage() {
   const [messages, setMessages] = useState<ExecMessage[]>([]);
   const [threads, setThreads] = useState<ExecThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [trends, setTrends] = useState<KpiTrendSeries[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"chat" | "brief" | "investor" | "team" | "advisor">("chat");
   const [briefs, setBriefs] = useState<ExecBrief[]>([]);
@@ -381,6 +385,12 @@ export default function ExecutivePage() {
   useEffect(() => {
     void loadBundle();
   }, [loadBundle]);
+
+  useEffect(() => {
+    getKpiTrendsAction()
+      .then(setTrends)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -693,6 +703,7 @@ export default function ExecutivePage() {
         <div className="space-y-6 p-5">
           <NudgesPanel nudges={bundle?.nudges ?? []} />
           <KpiStrip kpis={bundle?.kpis ?? []} />
+          <KpiTrends series={trends} />
           <GoalsPanel goals={bundle?.goals ?? []} onChanged={loadBundle} />
           <MemoryPanel memory={bundle?.memory ?? []} onChanged={loadBundle} />
         </div>
@@ -2200,6 +2211,89 @@ function KpiStrip({ kpis }: { kpis: ExecKpi[] }) {
             ) : (
               k.hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{k.hint}</p>
             )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------- KPI trends ---------------------------- */
+
+/** A tiny dependency-free chart: an area line for cumulative metrics, bars for
+ *  per-week counts. Scales to its container width. */
+function Sparkline({ points, chart }: { points: number[]; chart: "area" | "bars" }) {
+  const W = 240;
+  const H = 44;
+  const PAD = 3;
+  const n = points.length;
+  const max = Math.max(1, ...points);
+  const min = Math.min(0, ...points);
+  const range = max - min || 1;
+  const x = (i: number) => (n <= 1 ? W / 2 : PAD + (i / (n - 1)) * (W - 2 * PAD));
+  const y = (v: number) => H - PAD - ((v - min) / range) * (H - 2 * PAD);
+
+  if (chart === "bars") {
+    const slot = (W - 2 * PAD) / Math.max(1, n);
+    const bw = slot * 0.62;
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-11 w-full" aria-hidden>
+        {points.map((v, i) => {
+          const top = y(v);
+          return (
+            <rect
+              key={i}
+              x={PAD + i * slot + (slot - bw) / 2}
+              y={top}
+              width={bw}
+              height={Math.max(1.5, H - PAD - top)}
+              rx={1}
+              className="fill-primary/70"
+            />
+          );
+        })}
+      </svg>
+    );
+  }
+
+  const line = points.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const area = `${line} L${x(n - 1).toFixed(1)},${H - PAD} L${x(0).toFixed(1)},${H - PAD} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-11 w-full" aria-hidden>
+      <path d={area} className="fill-primary/10" />
+      <path d={line} className="fill-none stroke-primary" strokeWidth={1.75} vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function KpiTrends({ series }: { series: KpiTrendSeries[] }) {
+  if (!series.length) return null;
+  return (
+    <div>
+      <RailHeading icon={<LineChart className="h-3.5 w-3.5" />} label="Trends" />
+      <div className="mt-2 flex flex-col gap-2">
+        {series.map((s) => (
+          <div key={s.key} className="rounded-xl border border-border bg-card p-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
+              {s.changePct != null && (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-0.5 text-[11px] font-medium",
+                    s.changePct > 0 ? "text-emerald-600" : s.changePct < 0 ? "text-amber-600" : "text-muted-foreground",
+                  )}
+                >
+                  {s.changePct > 0 ? <TrendingUp className="h-3 w-3" /> : s.changePct < 0 ? <TrendingDown className="h-3 w-3" /> : null}
+                  {s.changePct >= 0 ? "+" : ""}
+                  {s.changePct}%
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[18px] font-semibold leading-tight tabular-nums">{s.current}</p>
+            <div className="mt-1.5">
+              <Sparkline points={s.points.map((p) => p.value)} chart={s.chart} />
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">last {s.points.length} weeks</p>
           </div>
         ))}
       </div>

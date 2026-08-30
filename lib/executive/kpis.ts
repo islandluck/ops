@@ -4,7 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { followerSnapshots, orders, pages, posts, projects, tasks } from "@/lib/db/schema";
 import { getHubSpotSnapshot } from "@/lib/integrations/hubspot";
-import type { ExecKpi, GoalMetric } from "@/lib/types";
+import type { ExecKpi, GoalMetric, KpiTrendSeries } from "@/lib/types";
 
 /**
  * Live business KPIs for the Executive Office — computed from real workspace data
@@ -43,6 +43,108 @@ export async function computeMetricValues(workspaceId: string): Promise<Record<G
     revenue: Math.round(orderRows.filter((o) => o.status === "paid").reduce((n, o) => n + o.amount, 0) / 100),
     followers: snapRows[0]?.followers ?? 0,
   };
+}
+
+/** Short label for a week bucket ending at `ms` (e.g. "8/24"). */
+function weekLabel(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * KPI history over the last `weeks` weeks, for sparklines. Cumulative metrics
+ * (revenue, followers) are area charts; per-week counts (shipped) are bars. A
+ * series is omitted when it has no signal, so early workspaces don't show flat
+ * zero charts. All derived from real timestamped data (no snapshot table needed).
+ */
+export async function computeKpiTrends(workspaceId: string, weeks = 8): Promise<KpiTrendSeries[]> {
+  const now = Date.now();
+  const buckets: { start: number; end: number; label: string }[] = [];
+  for (let i = weeks - 1; i >= 0; i--) {
+    const end = now - i * WEEK;
+    buckets.push({ start: end - WEEK, end, label: weekLabel(end) });
+  }
+
+  const [orderRows, snapRows, taskRows] = await Promise.all([
+    db
+      .select({ amount: orders.amount_cents, status: orders.status, created_at: orders.created_at })
+      .from(orders)
+      .where(eq(orders.workspace_id, workspaceId)),
+    db
+      .select({ followers: followerSnapshots.followers, created_at: followerSnapshots.created_at })
+      .from(followerSnapshots)
+      .where(eq(followerSnapshots.workspace_id, workspaceId)),
+    db
+      .select({ status: tasks.status, archived: tasks.archived, updated_at: tasks.updated_at })
+      .from(tasks)
+      .where(eq(tasks.workspace_id, workspaceId)),
+  ]);
+
+  const series: KpiTrendSeries[] = [];
+  const pctChange = (pts: number[]): number | null => {
+    const first = pts[0];
+    const last = pts[pts.length - 1];
+    return first > 0 ? Math.round(((last - first) / first) * 100) : null;
+  };
+
+  // Revenue — cumulative paid revenue (dollars) at each week's end.
+  const paid = orderRows
+    .filter((o) => o.status === "paid")
+    .map((o) => ({ t: new Date(o.created_at).getTime(), a: o.amount }));
+  if (paid.length) {
+    const points = buckets.map((b) => ({
+      label: b.label,
+      value: Math.round(paid.filter((p) => p.t <= b.end).reduce((n, p) => n + p.a, 0) / 100),
+    }));
+    series.push({
+      key: "revenue",
+      label: "Revenue",
+      points,
+      current: money(points[points.length - 1].value * 100),
+      changePct: pctChange(points.map((p) => p.value)),
+      chart: "area",
+    });
+  }
+
+  // Followers — latest snapshot at or before each week's end (carry forward).
+  const snaps = snapRows
+    .map((s) => ({ t: new Date(s.created_at).getTime(), v: s.followers }))
+    .sort((a, b) => a.t - b.t);
+  if (snaps.length) {
+    const points = buckets.map((b) => {
+      const upto = snaps.filter((s) => s.t <= b.end);
+      return { label: b.label, value: upto.length ? upto[upto.length - 1].v : 0 };
+    });
+    series.push({
+      key: "followers",
+      label: "Followers",
+      points,
+      current: points[points.length - 1].value.toLocaleString(),
+      changePct: pctChange(points.map((p) => p.value)),
+      chart: "area",
+    });
+  }
+
+  // Shipped — tasks completed within each week (per-week counts, not cumulative).
+  const doneAt = taskRows
+    .filter((t) => t.status === "done" && !t.archived)
+    .map((t) => new Date(t.updated_at).getTime());
+  if (doneAt.length) {
+    const points = buckets.map((b) => ({
+      label: b.label,
+      value: doneAt.filter((t) => t >= b.start && t < b.end).length,
+    }));
+    series.push({
+      key: "shipped",
+      label: "Shipped / week",
+      points,
+      current: String(points[points.length - 1].value),
+      changePct: null, // per-week counts read better without a % badge
+      chart: "bars",
+    });
+  }
+
+  return series;
 }
 
 export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {

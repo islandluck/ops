@@ -1383,6 +1383,26 @@ export interface ExecKpi {
   hint?: string;
 }
 
+/** One point in a KPI trend series (a weekly bucket). */
+export interface KpiTrendPoint {
+  /** Short bucket label, e.g. "8/24". */
+  label: string;
+  value: number;
+}
+
+/** A KPI's history over the last several weeks, for a sparkline. */
+export interface KpiTrendSeries {
+  key: string;
+  label: string;
+  points: KpiTrendPoint[];
+  /** Pre-formatted current (latest) value, e.g. "$4,200" or "1,830". */
+  current: string;
+  /** Percent change across the window (first→last), or null when undefined. */
+  changePct: number | null;
+  /** How to draw it — cumulative metrics as an area, per-week counts as bars. */
+  chart: "area" | "bars";
+}
+
 /** A forward-looking idea/observation in the daily brief. */
 export interface ExecBriefInsight {
   title: string;
