@@ -2,11 +2,14 @@ import "server-only";
 
 import { and, asc, desc, eq, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { boardAlerts, emailTriage, opportunities, tasks } from "@/lib/db/schema";
+import { boardAlerts, businessBriefs, emailTriage, opportunities, profiles, tasks, workspaces } from "@/lib/db/schema";
 import { computeKpis } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { listBriefs } from "@/lib/agents/executive";
 import { getTeamCalendar } from "@/lib/agents/team";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { notifySlack } from "@/lib/integrations/slack";
+import { sendGmail } from "@/lib/integrations/google";
 import type { TodayData, TodayItem } from "@/lib/types";
 
 /**
@@ -17,7 +20,7 @@ import type { TodayData, TodayItem } from "@/lib/types";
  */
 export async function getTodayData(workspaceId: string, name: string): Promise<TodayData> {
   const now = new Date();
-  const [kpis, nudges, alertRows, oppRows, briefs, calendar, overdueRows, emailRows] = await Promise.all([
+  const [kpis, nudges, alertRows, oppRows, briefs, calendar, overdueRows, emailRows, cfgRows] = await Promise.all([
     computeKpis(workspaceId),
     computeNudges(workspaceId),
     db
@@ -60,6 +63,11 @@ export async function getTodayData(workspaceId: string, name: string): Promise<T
       .from(emailTriage)
       .where(and(eq(emailTriage.workspace_id, workspaceId), eq(emailTriage.status, "triaged"), ne(emailTriage.draft_reply, "")))
       .limit(50),
+    db
+      .select({ digest_cadence: businessBriefs.digest_cadence })
+      .from(businessBriefs)
+      .where(eq(businessBriefs.workspace_id, workspaceId))
+      .limit(1),
   ]);
 
   const needsYou: TodayItem[] = [];
@@ -120,5 +128,113 @@ export async function getTodayData(workspaceId: string, name: string): Promise<T
   const daily = briefs.find((b) => b.kind === "daily") ?? briefs[0] ?? null;
   const brief = daily ? { id: daily.id, headline: daily.content.headline, created_at: daily.created_at } : null;
 
-  return { name, kpis, needsYou, schedule, opportunities: oppRows, brief };
+  return {
+    name,
+    kpis,
+    needsYou,
+    schedule,
+    opportunities: oppRows,
+    brief,
+    digestOn: (cfgRows[0]?.digest_cadence ?? "off") === "daily",
+  };
+}
+
+/* ------------------------------ morning digest -------------------------- */
+
+export async function setDigestCadence(workspaceId: string, cadence: "off" | "daily"): Promise<{ ok: boolean }> {
+  await db
+    .update(businessBriefs)
+    .set({ digest_cadence: cadence === "daily" ? "daily" : "off" })
+    .where(eq(businessBriefs.workspace_id, workspaceId));
+  return { ok: true };
+}
+
+/** Plain-text digest body used for both Slack and email. */
+function composeDigest(data: TodayData): string {
+  const lines: string[] = ["☀️ Your morning brief"];
+  if (data.brief?.headline) lines.push(data.brief.headline);
+  lines.push("");
+  if (data.needsYou.length) {
+    lines.push(`Needs you (${data.needsYou.length}):`);
+    for (const it of data.needsYou.slice(0, 6)) lines.push(`• ${it.title}`);
+  } else {
+    lines.push("Nothing needs you right now — you're clear.");
+  }
+  if (data.schedule.length) {
+    lines.push("", "Coming up:");
+    for (const s of data.schedule.slice(0, 4)) {
+      const when =
+        s.kind === "deadline"
+          ? ""
+          : ` at ${new Date(s.when).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
+      lines.push(`• ${s.title}${when}`);
+    }
+  }
+  if (data.opportunities.length) {
+    lines.push(
+      "",
+      `${data.opportunities.length} fresh opportunit${data.opportunities.length === 1 ? "y" : "ies"} — top: ${data.opportunities[0].title}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Send the morning digest to Slack + the owner's email (best-effort); records the send. */
+export async function sendMorningDigest(workspaceId: string): Promise<{ ok: boolean; slack: boolean; email: boolean }> {
+  const data = await getTodayData(workspaceId, "");
+  const body = composeDigest(data);
+
+  const slack = await notifySlack(workspaceId, body).catch(() => ({ ok: false }));
+  const slackOk = !!slack.ok;
+
+  let emailOk = false;
+  try {
+    const token = await getValidAccessToken(workspaceId, "Gmail");
+    if (token) {
+      const [owner] = await db
+        .select({ email: profiles.email })
+        .from(workspaces)
+        .innerJoin(profiles, eq(workspaces.owner_id, profiles.id))
+        .where(eq(workspaces.id, workspaceId))
+        .limit(1);
+      if (owner?.email) {
+        const subject = `Your morning brief — ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}`;
+        await sendGmail(token, { to: owner.email, subject, body });
+        emailOk = true;
+      }
+    }
+  } catch {
+    /* email is best-effort */
+  }
+
+  await db
+    .update(businessBriefs)
+    .set({ digest_last_sent_at: new Date() })
+    .where(eq(businessBriefs.workspace_id, workspaceId));
+  return { ok: slackOk || emailOk, slack: slackOk, email: emailOk };
+}
+
+/** Cron: send the digest to each opted-in workspace, at most once per calendar day. */
+export async function sendDueDigests(limit = 20): Promise<{ sent: number }> {
+  // tenant-scope-exempt: cron scans opted-in workspaces; each digest is then sent
+  // via sendMorningDigest(workspace_id), which is workspace-scoped.
+  const rows = await db
+    .select({ workspace_id: businessBriefs.workspace_id, last: businessBriefs.digest_last_sent_at })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.digest_cadence, "daily"))
+    .limit(200);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  let sent = 0;
+  for (const r of rows) {
+    if (sent >= limit) break;
+    if (r.last && new Date(r.last).getTime() >= startOfToday) continue; // already sent today
+    try {
+      const res = await sendMorningDigest(r.workspace_id);
+      if (res.ok) sent += 1;
+    } catch {
+      /* one workspace never blocks the rest */
+    }
+  }
+  return { sent };
 }

@@ -421,6 +421,13 @@
       "when": 1788044231242,
       "tag": "0059_bitter_blockbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1788058223791,
+      "tag": "0060_nostalgic_starfox",
+      "breakpoints": true
     }
   ]
 }

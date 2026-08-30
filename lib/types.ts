@@ -1529,6 +1529,8 @@ export interface TodayData {
   schedule: CalendarItem[];
   opportunities: { id: string; title: string; org: string; type: string; fit_score: number; url: string }[];
   brief: { id: string; headline: string; created_at: string } | null;
+  /** Whether the proactive morning digest (Slack/email) is turned on. */
+  digestOn: boolean;
 }
 
 /* ----------------------------- Deep Dive -------------------------------- */

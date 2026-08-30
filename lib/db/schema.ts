@@ -135,6 +135,9 @@ export const businessBriefs = pgTable("business_briefs", {
   state: text("state").notNull().default(""),
   country: text("country").notNull().default(""),
   connected_systems: text("connected_systems").array().notNull().default([]),
+  // Proactive morning digest: "off" | "daily". last_sent dedups to once per day.
+  digest_cadence: text("digest_cadence").notNull().default("off"),
+  digest_last_sent_at: timestamp("digest_last_sent_at", { withTimezone: true }),
   updated_at: updatedAt,
 }, (t) => [index("business_briefs_ws_idx").on(t.workspace_id)]);
 

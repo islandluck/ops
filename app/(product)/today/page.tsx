@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlarmClock,
   ArrowRight,
+  Bell,
   CalendarClock,
   CheckCircle2,
   ClipboardCheck,
@@ -18,7 +19,7 @@ import {
 import { PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
-import { getTodayDataAction } from "@/app/actions";
+import { getTodayDataAction, setDigestCadenceAction, sendMorningDigestNowAction } from "@/app/actions";
 import type { TodayData, TodayItem } from "@/lib/types";
 
 const TONE: Record<TodayItem["tone"], { bar: string; chip: string }> = {
@@ -63,24 +64,79 @@ function timeStr(iso: string): string {
 export default function TodayPage() {
   const [data, setData] = useState<TodayData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [digestOn, setDigestOn] = useState(false);
+  const [sendingDigest, setSendingDigest] = useState(false);
+  const [sentMsg, setSentMsg] = useState("");
 
   useEffect(() => {
     getTodayDataAction()
-      .then((d) => setData(d))
+      .then((d) => {
+        setData(d);
+        setDigestOn(!!d?.digestOn);
+      })
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, []);
+
+  async function toggleDigest() {
+    const next = !digestOn;
+    setDigestOn(next);
+    setSentMsg("");
+    await setDigestCadenceAction(next ? "daily" : "off").catch(() => {});
+  }
+  async function sendNow() {
+    setSendingDigest(true);
+    setSentMsg("");
+    const r = await sendMorningDigestNowAction().catch(() => ({ ok: false, slack: false, email: false }));
+    setSendingDigest(false);
+    setSentMsg(
+      r.ok
+        ? `Sent${r.slack && r.email ? " to Slack + email" : r.slack ? " to Slack" : r.email ? " to your email" : ""}.`
+        : "Connect Slack or Gmail in Integrations to send the digest.",
+    );
+    setTimeout(() => setSentMsg(""), 5000);
+  }
 
   const firstName = (data?.name ?? "").split(" ")[0] || "there";
   const dateLine = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
   return (
     <>
-      <header className="shrink-0 border-b border-border bg-card px-5 py-5 sm:px-7">
-        <h1 className="text-xl font-semibold tracking-tight">
-          {greeting()}, {firstName}
-        </h1>
-        <p className="mt-0.5 text-sm text-muted-foreground">{dateLine} · here&apos;s what needs you today.</p>
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border bg-card px-5 py-5 sm:px-7">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight">
+            {greeting()}, {firstName}
+          </h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">{dateLine} · here&apos;s what needs you today.</p>
+        </div>
+        {data && (
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              {digestOn && (
+                <button
+                  onClick={sendNow}
+                  disabled={sendingDigest}
+                  className="text-[12px] font-medium text-muted-foreground transition hover:text-foreground disabled:opacity-60"
+                >
+                  {sendingDigest ? "Sending…" : "Send now"}
+                </button>
+              )}
+              <button
+                onClick={toggleDigest}
+                title="Get this brief pushed to Slack + email each morning"
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12.5px] font-medium transition",
+                  digestOn
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <Bell className="h-3.5 w-3.5" /> Morning digest {digestOn ? "on" : "off"}
+              </button>
+            </div>
+            {sentMsg && <p className="text-[11px] text-muted-foreground">{sentMsg}</p>}
+          </div>
+        )}
       </header>
       <PageBody>
         {loading ? (

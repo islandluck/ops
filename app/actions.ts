@@ -298,7 +298,7 @@ import {
   togglePinMemory,
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
-import { getTodayData } from "@/lib/agents/today";
+import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
   getCurrentContext,
@@ -1316,6 +1316,26 @@ export async function getTodayDataAction(): Promise<TodayData | null> {
     return await getTodayData(ws, displayName(user));
   } catch {
     return null;
+  }
+}
+
+export async function setDigestCadenceAction(cadence: "off" | "daily"): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return setDigestCadence(ws, cadence);
+}
+
+export async function sendMorningDigestNowAction(): Promise<{ ok: boolean; slack: boolean; email: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, slack: false, email: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, slack: false, email: false };
+  try {
+    return await sendMorningDigest(ws);
+  } catch {
+    return { ok: false, slack: false, email: false };
   }
 }
 

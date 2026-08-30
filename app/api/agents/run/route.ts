@@ -6,6 +6,7 @@ import { generateDueBriefs } from "@/lib/agents/executive";
 import { crmRadarSweep } from "@/lib/agents/crm";
 import { runDueEmailTriage } from "@/lib/agents/triage";
 import { runDueBoardScans } from "@/lib/agents/boardroom";
+import { sendDueDigests } from "@/lib/agents/today";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -40,6 +41,8 @@ async function handle(request: NextRequest) {
     const dueEmail = await runDueEmailTriage();
     // The board's autonomous market scan on its cadence → unprompted alerts.
     const board = await runDueBoardScans().catch(() => ({ scanned: 0, alerts: 0 }));
+    // Proactive morning digest (Slack/email) for owners who opted in — once/day.
+    const digests = await sendDueDigests().catch(() => ({ sent: 0 }));
     return NextResponse.json({
       ok: true,
       ...result,
@@ -50,6 +53,7 @@ async function handle(request: NextRequest) {
       emailTriaged: dueEmail.ran,
       boardScans: board.scanned,
       boardAlerts: board.alerts,
+      digestsSent: digests.sent,
     });
   } catch (e) {
     return NextResponse.json(
