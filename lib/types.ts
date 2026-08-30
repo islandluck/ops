@@ -1510,6 +1510,27 @@ export interface ExecutiveBundle {
   activeThreadId: string | null;
 }
 
+/** One thing needing the owner's attention on the Today hub. */
+export interface TodayItem {
+  id: string;
+  kind: "approval" | "board" | "nudge" | "email" | "deadline" | "opportunity";
+  title: string;
+  detail: string;
+  href: string;
+  tone: "urgent" | "attention" | "normal" | "positive";
+}
+
+/** The owner's daily home surface — everything needing them, in one place. */
+export interface TodayData {
+  name: string;
+  kpis: ExecKpi[];
+  needsYou: TodayItem[];
+  /** Upcoming calendar items (next few days). */
+  schedule: CalendarItem[];
+  opportunities: { id: string; title: string; org: string; type: string; fit_score: number; url: string }[];
+  brief: { id: string; headline: string; created_at: string } | null;
+}
+
 /* ----------------------------- Deep Dive -------------------------------- */
 
 /** A Deep Dive run's lifecycle. `wiring` = folding findings into brief + memory. */

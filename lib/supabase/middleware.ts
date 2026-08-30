@@ -4,6 +4,7 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, hasSupabaseClientEnv } from "@/lib/con
 
 const PROTECTED_PREFIXES = [
   "/admin",
+  "/today",
   "/approvals",
   "/dashboard",
   "/agents",
@@ -87,7 +88,7 @@ export async function updateSession(request: NextRequest) {
   // Signed in on an auth page, or an onboarded user revisiting onboarding → home.
   if (user && (isAuthPage || (onboarded && isOnboarding))) {
     const url = request.nextUrl.clone();
-    url.pathname = onboarded ? "/approvals" : "/onboarding";
+    url.pathname = onboarded ? "/today" : "/onboarding";
     url.search = "";
     return NextResponse.redirect(url);
   }

@@ -298,6 +298,7 @@ import {
   togglePinMemory,
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
+import { getTodayData } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
   getCurrentContext,
@@ -352,6 +353,7 @@ import type {
   ExecBrief,
   ExecMessage,
   ExecThreadHit,
+  TodayData,
   ExecutiveBundle,
   GoalHorizon,
   GoalMetric,
@@ -1305,6 +1307,18 @@ export async function dismissBriefSuggestionAction(
 }
 
 /** Start a fresh Executive conversation (archives the current one). */
+export async function getTodayDataAction(): Promise<TodayData | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getTodayData(ws, displayName(user));
+  } catch {
+    return null;
+  }
+}
+
 export async function startNewExecutiveChatAction(): Promise<{ ok: boolean; threadId?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false };

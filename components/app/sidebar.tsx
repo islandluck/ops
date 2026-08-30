@@ -27,6 +27,7 @@ import {
   Settings,
   ShieldAlert,
   SquareKanban,
+  Sun,
   Target,
   Telescope,
   Users,
@@ -46,6 +47,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
   {
     title: "Command",
     items: [
+      { href: "/today", label: "Today", icon: Sun },
       { href: "/approvals", label: "Approval Center", icon: SquareKanban },
       { href: "/executive", label: "Executive", icon: Compass },
       { href: "/boardroom", label: "Boardroom", icon: Gavel },
