@@ -2154,10 +2154,17 @@ const NUDGE_META: Record<ExecNudge["severity"], { card: string; icon: typeof Bel
 };
 
 function NudgesPanel({ nudges }: { nudges: ExecNudge[] }) {
+  const [collapsed, toggle] = useCollapsed("exec-rail-nudges");
   if (!nudges.length) return null;
   return (
     <div>
-      <RailHeading icon={<Bell className="h-3.5 w-3.5" />} label="Needs your attention" />
+      <RailHeading
+        icon={<Bell className="h-3.5 w-3.5" />}
+        label="Needs your attention"
+        collapsed={collapsed}
+        onToggle={toggle}
+      />
+      {!collapsed && (
       <div className="mt-2 space-y-2">
         {nudges.map((n) => {
           const m = NUDGE_META[n.severity];
@@ -2182,6 +2189,7 @@ function NudgesPanel({ nudges }: { nudges: ExecNudge[] }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -2189,10 +2197,12 @@ function NudgesPanel({ nudges }: { nudges: ExecNudge[] }) {
 /* -------------------------------- KPIs ---------------------------------- */
 
 function KpiStrip({ kpis }: { kpis: ExecKpi[] }) {
+  const [collapsed, toggle] = useCollapsed("exec-rail-kpis");
   if (!kpis.length) return null;
   return (
     <div>
-      <RailHeading icon={<TrendingUp className="h-3.5 w-3.5" />} label="KPIs" />
+      <RailHeading icon={<TrendingUp className="h-3.5 w-3.5" />} label="KPIs" collapsed={collapsed} onToggle={toggle} />
+      {!collapsed && (
       <div className="mt-2 grid grid-cols-2 gap-2">
         {kpis.map((k) => (
           <div key={k.key} className="rounded-xl border border-border bg-card p-3">
@@ -2214,6 +2224,7 @@ function KpiStrip({ kpis }: { kpis: ExecKpi[] }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }
@@ -2267,10 +2278,12 @@ function Sparkline({ points, chart }: { points: number[]; chart: "area" | "bars"
 }
 
 function KpiTrends({ series }: { series: KpiTrendSeries[] }) {
+  const [collapsed, toggle] = useCollapsed("exec-rail-trends");
   return (
     <div>
-      <RailHeading icon={<LineChart className="h-3.5 w-3.5" />} label="Trends" />
-      {series.length === 0 ? (
+      <RailHeading icon={<LineChart className="h-3.5 w-3.5" />} label="Trends" collapsed={collapsed} onToggle={toggle} />
+      {!collapsed &&
+        (series.length === 0 ? (
         <div className="mt-2 rounded-xl border border-dashed border-border bg-card/50 p-3 text-[12px] leading-relaxed text-muted-foreground">
           Trends will chart here as history builds — revenue from paid orders, followers from snapshots, and work
           shipped week over week.
@@ -2302,7 +2315,7 @@ function KpiTrends({ series }: { series: KpiTrendSeries[] }) {
           </div>
           ))}
         </div>
-      )}
+        ))}
     </div>
   );
 }
@@ -2318,6 +2331,8 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
   const [horizon, setHorizon] = useState<GoalHorizon>("month");
   const [metric, setMetric] = useState<GoalMetric | "">("");
   const [busy, setBusy] = useState(false);
+  const [collapsed, toggle] = useCollapsed("exec-rail-goals");
+  const [ongoingCollapsed, toggleOngoing] = useCollapsed("exec-rail-goals-ongoing");
 
   const active = goals.filter((g) => g.status === "active");
   const focus = active.filter((g) => g.horizon === "month" || g.horizon === "quarter");
@@ -2348,12 +2363,23 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
       <RailHeading
         icon={<Target className="h-3.5 w-3.5" />}
         label="Goals"
+        collapsed={collapsed}
+        onToggle={toggle}
         action={
-          <button onClick={() => setAdding((v) => !v)} className="text-muted-foreground hover:text-foreground" title="Add goal">
+          <button
+            onClick={() => {
+              if (collapsed) toggle();
+              setAdding((v) => !v);
+            }}
+            className="text-muted-foreground hover:text-foreground"
+            title="Add goal"
+          >
             <Plus className="h-3.5 w-3.5" />
           </button>
         }
       />
+      {!collapsed && (
+        <>
       {adding && (
         <div className="mt-2 space-y-2 rounded-xl border border-border bg-card p-2.5">
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Goal (e.g. Reach $10k MRR)" className="h-8 text-[13px]" autoFocus />
@@ -2413,13 +2439,27 @@ function GoalsPanel({ goals, onChanged }: { goals: CompanyGoal[]; onChanged: () 
       )}
       {ongoing.length > 0 && (
         <div className="mt-3">
-          {focus.length > 0 && <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">Ongoing</p>}
-          <div className="space-y-2">
-            {ongoing.map((g) => (
-              <GoalItem key={g.id} goal={g} onChanged={onChanged} />
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={toggleOngoing}
+            aria-expanded={!ongoingCollapsed}
+            className="mb-1.5 flex w-full items-center gap-1 text-left"
+          >
+            <ChevronDown
+              className={cn("h-3 w-3 shrink-0 text-muted-foreground/50 transition-transform", ongoingCollapsed && "-rotate-90")}
+            />
+            <span className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground/70">Ongoing</span>
+          </button>
+          {!ongoingCollapsed && (
+            <div className="space-y-2">
+              {ongoing.map((g) => (
+                <GoalItem key={g.id} goal={g} onChanged={onChanged} />
+              ))}
+            </div>
+          )}
         </div>
+      )}
+        </>
       )}
     </div>
   );
@@ -2482,6 +2522,7 @@ function MemoryPanel({ memory, onChanged }: { memory: ExecMemory[]; onChanged: (
   const [adding, setAdding] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [collapsed, toggle] = useCollapsed("exec-rail-memory");
 
   async function add() {
     if (!note.trim() || busy) return;
@@ -2498,12 +2539,23 @@ function MemoryPanel({ memory, onChanged }: { memory: ExecMemory[]; onChanged: (
       <RailHeading
         icon={<Brain className="h-3.5 w-3.5" />}
         label="What it knows"
+        collapsed={collapsed}
+        onToggle={toggle}
         action={
-          <button onClick={() => setAdding((v) => !v)} className="text-muted-foreground hover:text-foreground" title="Add a note">
+          <button
+            onClick={() => {
+              if (collapsed) toggle();
+              setAdding((v) => !v);
+            }}
+            className="text-muted-foreground hover:text-foreground"
+            title="Add a note"
+          >
             <Plus className="h-3.5 w-3.5" />
           </button>
         }
       />
+      {!collapsed && (
+        <>
       {adding && (
         <div className="mt-2 space-y-1.5 rounded-xl border border-border bg-card p-2.5">
           <textarea
@@ -2551,6 +2603,8 @@ function MemoryPanel({ memory, onChanged }: { memory: ExecMemory[]; onChanged: (
           </div>
         ))}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2736,12 +2790,71 @@ function ThreadsSidebar({
   );
 }
 
-function RailHeading({ icon, label, action }: { icon: React.ReactNode; label: string; action?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5">
+/** Collapsed state for a rail section, remembered per-viewer in localStorage. */
+function useCollapsed(key: string, initial = false): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState(initial);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(key);
+      if (v != null) setCollapsed(v === "1");
+    } catch {
+      /* private mode / blocked storage — just use the default */
+    }
+  }, [key]);
+  const toggle = useCallback(() => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(key, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, [key]);
+  return [collapsed, toggle];
+}
+
+function RailHeading({
+  icon,
+  label,
+  action,
+  collapsed,
+  onToggle,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  action?: React.ReactNode;
+  /** When `onToggle` is provided the heading becomes a collapse toggle with a chevron. */
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
+  const inner = (
+    <>
       <span className="text-muted-foreground/70">{icon}</span>
       <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/80">{label}</h3>
-      {action && <span className="ml-auto">{action}</span>}
+      {onToggle && (
+        <ChevronDown
+          className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-transform", collapsed && "-rotate-90")}
+        />
+      )}
+    </>
+  );
+  return (
+    <div className="flex items-center gap-1.5">
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className="flex flex-1 items-center gap-1.5 text-left transition-colors hover:[&_h3]:text-foreground"
+        >
+          {inner}
+        </button>
+      ) : (
+        <div className="flex flex-1 items-center gap-1.5">{inner}</div>
+      )}
+      {action && <span className="shrink-0">{action}</span>}
     </div>
   );
 }
