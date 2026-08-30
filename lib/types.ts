@@ -1387,6 +1387,36 @@ export interface ExecKpi {
   hint?: string;
 }
 
+/** One subscription tier as the billing page renders it. */
+export interface BillingPlanView {
+  key: string;
+  name: string;
+  amountLabel: string;
+  cadence: string;
+  tagline: string;
+  features: string[];
+  anchor: boolean;
+  /** Has a Stripe Price ID configured, so it can actually be purchased. */
+  purchasable: boolean;
+  /** The workspace's current tier. */
+  current: boolean;
+}
+
+/** The workspace's subscription state for the billing surface. */
+export interface BillingState {
+  /** Platform Stripe key + at least one Price ID are set. */
+  configured: boolean;
+  tier: string;
+  tierName: string;
+  /** none | trialing | active | past_due | canceled. */
+  status: string;
+  /** Has a Stripe customer, so the billing portal can be opened. */
+  hasSubscription: boolean;
+  periodEnd: string | null;
+  trialEndsAt: string | null;
+  plans: BillingPlanView[];
+}
+
 /** One point in a KPI trend series (a weekly bucket). */
 export interface KpiTrendPoint {
   /** Short bucket label, e.g. "8/24". */

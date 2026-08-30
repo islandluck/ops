@@ -300,7 +300,9 @@ import {
 } from "@/lib/agents/executive";
 import type { ExecImage } from "@/lib/ai/executive";
 import { computeKpiTrends } from "@/lib/executive/kpis";
-import type { KpiTrendSeries } from "@/lib/types";
+import type { BillingState, KpiTrendSeries } from "@/lib/types";
+import { getBillingState, isWorkspaceOwner, openPortal, startCheckout } from "@/lib/billing/service";
+import type { PlanTier } from "@/lib/billing/plans";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
@@ -1413,6 +1415,47 @@ export async function sendExecutiveMessageAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   return sendExecutiveMessage(ws, text, threadId, image ? [image] : undefined);
+}
+
+/* ------------------------------- Billing -------------------------------- */
+
+/** The workspace's subscription state + the tiers to render on /billing. */
+export async function getBillingStateAction(): Promise<BillingState | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getBillingState(ws);
+  } catch {
+    return null;
+  }
+}
+
+/** Start a subscription — returns a Stripe Checkout URL to redirect to. Owner-only. */
+export async function startSubscriptionCheckoutAction(
+  tier: PlanTier,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!(await isWorkspaceOwner(ws, user.id))) {
+    return { ok: false, error: "Only the workspace owner can manage billing." };
+  }
+  return startCheckout(ws, tier, { email: user.email ?? "", name: displayName(user) });
+}
+
+/** Open the Stripe Billing Portal (manage / cancel). Owner-only. */
+export async function openBillingPortalAction(): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!(await isWorkspaceOwner(ws, user.id))) {
+    return { ok: false, error: "Only the workspace owner can manage billing." };
+  }
+  return openPortal(ws);
 }
 
 /** KPI trend series (revenue / followers / shipped over recent weeks) for the

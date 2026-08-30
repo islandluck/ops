@@ -130,3 +130,96 @@ export async function createDraftInvoice(
   });
   return { invoiceId: String(invoice.id), customerId };
 }
+
+/* ----------------------- Operator's own subscriptions ----------------------- */
+/* These run on the PLATFORM account and power Operator's tiered billing —        */
+/* separate from the per-workspace product-sales helpers above.                   */
+
+/** Create (or reuse) a Stripe customer for a workspace on the platform account. */
+export async function createStripeCustomer(
+  secretKey: string,
+  input: { email: string; name?: string; metadata?: Record<string, string> },
+): Promise<string> {
+  const body: Record<string, string | number> = { email: input.email };
+  if (input.name) body.name = input.name.slice(0, 250);
+  for (const [k, v] of Object.entries(input.metadata ?? {})) body[`metadata[${k}]`] = v;
+  const customer = await stripe("/customers", secretKey, body);
+  return String(customer.id);
+}
+
+/** Hosted Checkout for a recurring subscription; returns the URL to redirect to. */
+export async function createSubscriptionCheckout(
+  secretKey: string,
+  input: {
+    priceId: string;
+    customerId: string;
+    successUrl: string;
+    cancelUrl: string;
+    clientReferenceId?: string;
+    metadata?: Record<string, string>;
+    trialDays?: number;
+  },
+): Promise<{ id: string; url: string }> {
+  const body: Record<string, string | number> = {
+    mode: "subscription",
+    customer: input.customerId,
+    success_url: input.successUrl,
+    cancel_url: input.cancelUrl,
+    "line_items[0][price]": input.priceId,
+    "line_items[0][quantity]": 1,
+    allow_promotion_codes: "true",
+  };
+  if (input.clientReferenceId) body.client_reference_id = input.clientReferenceId;
+  if (input.trialDays && input.trialDays > 0) {
+    body["subscription_data[trial_period_days]"] = Math.round(input.trialDays);
+  }
+  for (const [k, v] of Object.entries(input.metadata ?? {})) {
+    body[`metadata[${k}]`] = v;
+    body[`subscription_data[metadata][${k}]`] = v;
+  }
+  const session = await stripe("/checkout/sessions", secretKey, body);
+  const url = typeof session.url === "string" ? session.url : "";
+  if (!url) throw new Error("Stripe did not return a checkout URL.");
+  return { id: String(session.id), url };
+}
+
+/** A Stripe Billing Portal session so the customer can self-serve manage/cancel. */
+export async function createBillingPortalSession(
+  secretKey: string,
+  input: { customerId: string; returnUrl: string },
+): Promise<{ url: string }> {
+  const session = await stripe("/billing_portal/sessions", secretKey, {
+    customer: input.customerId,
+    return_url: input.returnUrl,
+  });
+  const url = typeof session.url === "string" ? session.url : "";
+  if (!url) throw new Error("Stripe did not return a portal URL.");
+  return { url };
+}
+
+export interface StripeSubInfo {
+  id: string;
+  status: string; // active | trialing | past_due | canceled | ...
+  priceId: string | null;
+  currentPeriodEnd: number | null; // unix seconds
+  customerId: string | null;
+}
+
+/** Normalize a Stripe subscription object (from an API read or a webhook event). */
+export function parseSubscription(sub: Record<string, unknown>): StripeSubInfo {
+  const items = (sub.items as { data?: Array<{ price?: { id?: string } }> } | undefined)?.data ?? [];
+  const cpe = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
+  return {
+    id: String(sub.id ?? ""),
+    status: typeof sub.status === "string" ? sub.status : "active",
+    priceId: items[0]?.price?.id ?? null,
+    currentPeriodEnd: cpe,
+    customerId: typeof sub.customer === "string" ? sub.customer : null,
+  };
+}
+
+/** Fetch a subscription by id (used after a subscription-mode checkout completes). */
+export async function getSubscription(secretKey: string, subscriptionId: string): Promise<StripeSubInfo> {
+  const sub = await stripe(`/subscriptions/${encodeURIComponent(subscriptionId)}`, secretKey);
+  return parseSubscription(sub);
+}

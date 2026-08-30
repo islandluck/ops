@@ -442,6 +442,13 @@
       "when": 1788102155208,
       "tag": "0062_bright_expediter",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1788121614837,
+      "tag": "0063_friendly_jack_power",
+      "breakpoints": true
     }
   ]
 }

@@ -89,6 +89,16 @@ export const workspaces = pgTable("workspaces", {
   name: text("name").notNull(),
   owner_id: uuid("owner_id").notNull(),
   plan: text("plan").notNull().default("Operator Pro"),
+  // Operator's own subscription billing (the platform Stripe account) —
+  // distinct from the per-workspace Stripe a founder connects to sell products.
+  stripe_customer_id: text("stripe_customer_id"),
+  stripe_subscription_id: text("stripe_subscription_id"),
+  /** Entitlement tier: free | starter | operator | agency. */
+  subscription_tier: text("subscription_tier").notNull().default("free"),
+  /** Stripe subscription status: none | trialing | active | past_due | canceled. */
+  subscription_status: text("subscription_status").notNull().default("none"),
+  subscription_period_end: timestamp("subscription_period_end", { withTimezone: true }),
+  trial_ends_at: timestamp("trial_ends_at", { withTimezone: true }),
   created_at: createdAt,
   updated_at: updatedAt,
 });

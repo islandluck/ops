@@ -9,6 +9,7 @@ import {
   ChevronsUpDown,
   CircleDot,
   Compass,
+  CreditCard,
   Gavel,
   FileText,
   FolderKanban,
@@ -84,6 +85,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
       { href: "/brief", label: "Business brief", icon: FileText },
       { href: "/activity", label: "Activity log", icon: ScrollText },
       { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/billing", label: "Billing", icon: CreditCard },
     ],
   },
 ];

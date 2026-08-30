@@ -14,6 +14,7 @@ const PROTECTED_PREFIXES = [
   "/integrations",
   "/brief",
   "/settings",
+  "/billing",
   "/onboarding",
   "/team",
   "/portal",
