@@ -53,6 +53,9 @@ export async function sendGmail(
     to: string;
     subject: string;
     body: string;
+    /** Optional HTML alternative — sent as multipart/alternative with `body` as the
+     *  plain-text fallback (only for the no-attachment case). */
+    html?: string;
     cc?: string;
     bcc?: string;
     threadId?: string;
@@ -73,7 +76,24 @@ export async function sendGmail(
 
   const attachments = msg.attachments ?? [];
   let mimeMessage: string;
-  if (attachments.length === 0) {
+  if (attachments.length === 0 && msg.html) {
+    // multipart/alternative: plain-text fallback first, then the HTML body.
+    const boundary = `alt_${crypto.randomBytes(12).toString("hex")}`;
+    mimeMessage = [
+      ...headers,
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "",
+      msg.body,
+      `--${boundary}`,
+      "Content-Type: text/html; charset=UTF-8",
+      "",
+      msg.html,
+      `--${boundary}--`,
+    ].join("\r\n");
+  } else if (attachments.length === 0) {
     mimeMessage = [...headers, "Content-Type: text/plain; charset=UTF-8", "", msg.body].join("\r\n");
   } else {
     // multipart/mixed: the text body, then each attachment base64-encoded.
