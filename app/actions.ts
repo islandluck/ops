@@ -298,6 +298,7 @@ import {
   togglePinMemory,
   updateInvestorUpdate,
 } from "@/lib/agents/executive";
+import type { ExecImage } from "@/lib/ai/executive";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
@@ -1403,12 +1404,13 @@ export async function deleteThreadAction(id: string): Promise<{ ok: boolean }> {
 export async function sendExecutiveMessageAction(
   text: string,
   threadId?: string,
+  image?: ExecImage,
 ): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return sendExecutiveMessage(ws, text, threadId);
+  return sendExecutiveMessage(ws, text, threadId, image ? [image] : undefined);
 }
 
 export async function addGoalAction(input: {

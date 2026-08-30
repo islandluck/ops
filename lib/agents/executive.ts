@@ -19,9 +19,10 @@ import {
   posts,
   projects,
   tasks,
+  teamNotifications,
 } from "@/lib/db/schema";
-import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
-import { getTeamContext } from "@/lib/agents/team";
+import { createPlannedTask, getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
+import { createAssignment, getTeamContext, listTeamMembers } from "@/lib/agents/team";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
 import {
   createCalendarEvent,
@@ -38,7 +39,7 @@ import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
-import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecTool } from "@/lib/ai/executive";
+import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecImage, type ExecTool } from "@/lib/ai/executive";
 import { createProject } from "./project";
 import { createGrowthCampaign } from "./growth";
 import type {
@@ -61,6 +62,7 @@ import type {
   InvestorUpdate,
   InvestorUpdateContent,
   MemoryKind,
+  Priority,
   UpdateAudience,
 } from "@/lib/types";
 
@@ -217,6 +219,9 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
     "- PLANNING THE DAY: when the founder asks you to plan their day (or triage/sequence their tasks), call list_open_tasks FIRST to see what's actually open, then give a tight, decisive plan — group similar work into batches (e.g. all the emails together), order by priority + logical sequence, call out the quick wins, note what should be handed to an agent, and give a rough timeline. Keep it scannable (short groups + a one-line 'start here'), never a wall of text.",
     "- SCHEDULING: when the founder wants to meet someone, use schedule_meeting — it books the Zoom, adds it to their calendar, and drafts the invite in the Email Manager (never sends). Compute start_time as a full ISO 8601 timestamp from their words + today's date, and pass their timezone.",
     "- SLACK: when the founder wants to share an update, announcement, or note with their team, use post_to_slack — it posts to their connected Slack. Only post what they clearly want shared; don't send routine chatter or your own commentary there.",
+    "- DELEGATING: when the founder wants a teammate to own or handle something (e.g. 'have Sarah take the pricing page'), use delegate_to_teammate — it assigns the task to that person in the Team Room and notifies them. Resolve the person by the name the founder uses (a first name is fine). If the name doesn't match anyone, say who's on the team rather than guessing.",
+    "- CAPTURING TASKS: when the founder wants to add a to-do for THEMSELVES (e.g. 'add a task to follow up with Acme Friday', 'remind me to review the deck'), use create_task — a single discrete to-do that lands on their Approval Center board. Use create_project instead only for genuinely multi-step initiatives.",
+    "- SEEING IMAGES: the founder can attach an image (a screenshot, a photo, a chart, a page of a doc) to their message and you can SEE it. Read what's actually in the image and respond to it directly — describe a bug, pull the numbers off a chart, react to a design, transcribe text. Never say you can't view images.",
     "- Only act via tools when it genuinely helps; most turns are just good conversation and advice.",
   ];
 
@@ -224,6 +229,18 @@ async function buildSystemPrompt(workspaceId: string, kpis: ExecKpi[]): Promise<
 }
 
 /* -------------------------------- tools --------------------------------- */
+
+/** Resolve a teammate by the loose name the founder used (exact → first-name → unique substring). */
+function matchMember<T extends { name: string }>(members: T[], query: string): T | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const exact = members.find((m) => m.name.toLowerCase() === q);
+  if (exact) return exact;
+  const byFirst = members.find((m) => m.name.toLowerCase().split(/\s+/)[0] === q);
+  if (byFirst) return byFirst;
+  const contains = members.filter((m) => m.name.toLowerCase().includes(q));
+  return contains.length === 1 ? contains[0] : null;
+}
 
 function buildTools(workspaceId: string): ExecTool[] {
   return [
@@ -495,6 +512,113 @@ function buildTools(workspaceId: string): ExecTool[] {
           return { summary: `Open Approval Center tasks (${rows.length}):\n${lines.join("\n")}` };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't read the open tasks." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "delegate_to_teammate",
+        description:
+          "Hand a task off to a specific teammate — assigns it to them in the Team Room and notifies them. Use when the founder wants someone to own/handle/take something. Resolve the person by the name the founder uses (a first name is fine).",
+        input_schema: {
+          type: "object",
+          properties: {
+            to: { type: "string", description: "The teammate's name (a first name is fine)" },
+            task: { type: "string", description: "What they should do — a clear, self-contained task title" },
+            note: { type: "string", description: "Optional context or instructions for them" },
+          },
+          required: ["to", "task"],
+        },
+      },
+      run: async (input) => {
+        const toName = str(input.to).trim();
+        const task = str(input.task).trim();
+        if (!toName || !task) return { summary: "I need who to assign it to and what the task is." };
+        const members = await listTeamMembers(workspaceId);
+        if (!members.length) {
+          return { summary: "You haven't added any teammates yet — add them in Team and I can delegate.", href: "/team" };
+        }
+        const member = matchMember(members, toName);
+        if (!member) {
+          return {
+            summary: `I couldn't pin down "${toName}" on your team. Your teammates: ${members.map((m) => m.name).join(", ")}.`,
+            href: "/team",
+          };
+        }
+        const note = str(input.note).trim();
+        const res = await createAssignment(workspaceId, { member_id: member.id, title: task, handoff_note: note });
+        if (!res.ok) return { summary: `Couldn't assign that: ${res.error}` };
+        // In-app notification for the member (best-effort) + a Slack ping.
+        try {
+          await db.insert(teamNotifications).values({
+            id: uid(),
+            workspace_id: workspaceId,
+            member_id: member.id,
+            kind: "assignment",
+            title: `New task: ${task.slice(0, 80)}`,
+            body: note.slice(0, 500) || `You've been assigned "${task.slice(0, 200)}".`,
+            ref_type: "assignment",
+            ref_id: res.assignment.id,
+            created_at: new Date(),
+          });
+        } catch {
+          /* best-effort — the assignment still stands */
+        }
+        await notifySlack(workspaceId, `📌 New task for *${member.name}*: ${task}`).catch(() => {});
+        return {
+          summary: `Assigned to ${member.name}: "${task}". They'll see it in their portal and get a notification.`,
+          href: "/team",
+        };
+      },
+    },
+    {
+      definition: {
+        name: "create_task",
+        description:
+          "Add a single to-do to the founder's OWN Approval Center board — a discrete task, not a multi-step project and not for a teammate. Use when the founder wants to capture a task or reminder for themselves.",
+        input_schema: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "The task, phrased as a clear to-do" },
+            category: {
+              type: "string",
+              enum: ["growth", "admin", "content", "research", "finance"],
+              description: "Best-fit category (default admin)",
+            },
+            priority: { type: "string", enum: ["low", "medium", "high", "urgent"], description: "Urgency (default medium)" },
+            notes: { type: "string", description: "Optional extra detail / context" },
+          },
+          required: ["title"],
+        },
+      },
+      run: async (input) => {
+        const title = str(input.title).trim();
+        if (!title) return { summary: "What's the task?" };
+        const cat = str(input.category) as Category;
+        const category: Category = (["growth", "admin", "content", "research", "finance"] as Category[]).includes(cat)
+          ? cat
+          : "admin";
+        const pri = str(input.priority) as Priority;
+        const priority: Priority = (["low", "medium", "high", "urgent"] as Priority[]).includes(pri) ? pri : "medium";
+        try {
+          await createPlannedTask(
+            workspaceId,
+            {
+              title: title.slice(0, 140),
+              category,
+              affected_systems: [],
+              risk_level: "low",
+              priority,
+              requires_approval: false,
+              rationale: str(input.notes).trim() || "Captured from your Executive chat.",
+              draft: "",
+              needs_connection: [],
+            },
+            { name: "You" },
+          );
+          return { summary: `Added a task: "${title.slice(0, 80)}" — it's on your Approval Center board.`, href: "/approvals" };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't add the task." };
         }
       },
     },
@@ -796,16 +920,22 @@ export async function sendExecutiveMessage(
   workspaceId: string,
   text: string,
   threadId?: string,
+  images?: ExecImage[],
 ): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
-  return runWithUsage(workspaceId, "executive-chat", () => _sendExecutiveMessage(workspaceId, text, threadId));
+  return runWithUsage(workspaceId, "executive-chat", () => _sendExecutiveMessage(workspaceId, text, threadId, images));
 }
 async function _sendExecutiveMessage(
   workspaceId: string,
   text: string,
   threadId?: string,
+  images?: ExecImage[],
 ): Promise<{ ok: boolean; reply?: ExecMessage; threadId?: string; error?: string }> {
   const clean = text.trim();
-  if (!clean) return { ok: false, error: "Type a message first." };
+  const hasImages = !!(images && images.length);
+  if (!clean && !hasImages) return { ok: false, error: "Type a message first." };
+  // What we PERSIST for the thread: the text plus a marker when an image rode
+  // along (the bytes themselves aren't stored — the image informs this turn).
+  const storedUserContent = hasImages ? (clean ? `${clean}\n\n[Attached image]` : "[Attached image]") : clean;
   const tid = threadId || (await ensureActiveThread(workspaceId));
 
   // Prior turns in THIS thread (oldest→newest) before recording this one.
@@ -823,7 +953,7 @@ async function _sendExecutiveMessage(
     workspace_id: workspaceId,
     thread_id: tid,
     role: "user",
-    content: clean.slice(0, 4000),
+    content: storedUserContent.slice(0, 4000),
     actions: [],
     created_at: now,
   });
@@ -834,7 +964,7 @@ async function _sendExecutiveMessage(
 
   let result;
   try {
-    result = await executiveReply({ system, history, userMessage: clean, tools });
+    result = await executiveReply({ system, history, userMessage: clean, images, tools });
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "The Executive Agent couldn't respond." };
   }

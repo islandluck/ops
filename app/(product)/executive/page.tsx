@@ -20,6 +20,7 @@ import {
   FileText,
   FolderKanban,
   Handshake,
+  Image as ImageIcon,
   Info,
   Lightbulb,
   ListChecks,
@@ -110,8 +111,33 @@ function composeMessage(typed: string, att: { name: string; text: string } | nul
   if (!att) return typed;
   return `${typed}\n\n[Attached file: ${att.name}]\n\n${att.text}`;
 }
-/** Split a stored user message back into the typed part + any attached file. */
-function splitAttachment(content: string): { typed: string; file?: { name: string; text: string } } {
+
+/** An image the founder has attached but not yet sent (downscaled, base64-ready). */
+type PendingImage = { name: string; dataUrl: string; media_type: "image/jpeg"; data: string };
+
+/** Downscale an image client-side (cap the long side at 1568px) and encode it as
+ *  JPEG — keeps the payload small and legible for the model to read. */
+async function downscaleImage(file: File): Promise<Omit<PendingImage, "name">> {
+  const bitmap = await createImageBitmap(file);
+  const MAX = 1568;
+  const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("no 2d context");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+  return { dataUrl, media_type: "image/jpeg", data: dataUrl.split(",")[1] ?? "" };
+}
+
+const IMG_MARK = /(?:\n\n)?\[Attached image\]\s*$/;
+/** Split a stored user message back into the typed part + any attached file/image. */
+function splitAttachment(content: string): { typed: string; file?: { name: string; text: string }; image?: boolean } {
+  if (IMG_MARK.test(content)) return { typed: content.replace(IMG_MARK, "").trim(), image: true };
   const m = content.match(/\n\n\[Attached file: ([^\]]+)\]\n\n([\s\S]*)$/);
   if (!m || m.index === undefined) return { typed: content };
   return { typed: content.slice(0, m.index), file: { name: m[1], text: m[2] } };
@@ -136,6 +162,7 @@ export default function ExecutivePage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [attachment, setAttachment] = useState<{ name: string; text: string } | null>(null);
+  const [image, setImage] = useState<PendingImage | null>(null);
   const [attachErr, setAttachErr] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -148,8 +175,23 @@ export default function ExecutivePage() {
   const attachFile = useCallback(async (file: File | undefined | null) => {
     setAttachErr("");
     if (!file) return;
+    // Images → the Executive can SEE them (vision). Downscale + encode client-side.
+    if (file.type.startsWith("image/")) {
+      if (file.size > 15 * 1024 * 1024) {
+        setAttachErr("That image is too large (max 15 MB).");
+        return;
+      }
+      try {
+        const img = await downscaleImage(file);
+        setImage({ name: file.name, ...img });
+        setAttachment(null); // one attachment at a time
+      } catch {
+        setAttachErr("Couldn't read that image.");
+      }
+      return;
+    }
     if (!isTextFile(file)) {
-      setAttachErr("Only text files for now — .md, .txt, .csv, .json, code, etc.");
+      setAttachErr("Attach an image, or a text file — .md, .txt, .csv, .json, code, etc.");
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
@@ -160,6 +202,7 @@ export default function ExecutivePage() {
       const raw = await file.text();
       const text = raw.length > MAX_ATTACH_CHARS ? raw.slice(0, MAX_ATTACH_CHARS) + "\n…[truncated]" : raw;
       setAttachment({ name: file.name, text });
+      setImage(null); // one attachment at a time
     } catch {
       setAttachErr("Couldn't read that file.");
     }
@@ -300,18 +343,23 @@ export default function ExecutivePage() {
   }, [messages, sending]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, img?: PendingImage | null) => {
       const clean = text.trim();
-      if (!clean || sendingRef.current) return;
+      if ((!clean && !img) || sendingRef.current) return;
       sendingRef.current = true;
       setInput("");
+      const optimistic = img ? (clean ? `${clean}\n\n[Attached image]` : "[Attached image]") : clean;
       setMessages((m) => [
         ...m,
-        { id: `tmp-${m.length}`, role: "user", content: clean, actions: [], created_at: "" },
+        { id: `tmp-${m.length}`, role: "user", content: optimistic, actions: [], created_at: "" },
       ]);
       setSending(true); // hides the starter chips + shows "thinking" immediately
       try {
-        const res = await sendExecutiveMessageAction(clean, activeIdRef.current ?? undefined);
+        const res = await sendExecutiveMessageAction(
+          clean,
+          activeIdRef.current ?? undefined,
+          img ? { media_type: img.media_type, data: img.data } : undefined,
+        );
         if (res.ok && res.threadId) {
           activeIdRef.current = res.threadId;
           setActiveThreadId(res.threadId);
@@ -333,11 +381,13 @@ export default function ExecutivePage() {
 
   const submit = useCallback(() => {
     const composed = composeMessage(input.trim(), attachment);
-    if (!composed.trim() || sending) return;
+    if ((!composed.trim() && !image) || sending) return;
+    const img = image;
     setAttachment(null);
+    setImage(null);
     setAttachErr("");
-    void send(composed);
-  }, [input, attachment, sending, send]);
+    void send(composed, img);
+  }, [input, attachment, image, sending, send]);
 
   // "Plan my day" (from the Approval Center) opens this chat with ?plan=day and
   // auto-sends a planning prompt once — the Executive reads the open tasks + lays
@@ -488,6 +538,20 @@ export default function ExecutivePage() {
                 </button>
               </div>
             )}
+            {image && (
+              <div className="mb-2 inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/60 p-1 pr-1 text-[12px]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.dataUrl} alt={image.name} className="h-9 w-9 shrink-0 rounded object-cover" />
+                <span className="truncate font-medium">{image.name}</span>
+                <button
+                  onClick={() => setImage(null)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  aria-label="Remove image"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             <div
               className={cn(
                 "flex items-end gap-2 rounded-xl border bg-background px-2 py-1.5 transition-colors",
@@ -498,6 +562,7 @@ export default function ExecutivePage() {
                 ref={fileRef}
                 type="file"
                 hidden
+                accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.sh,.sql,.toml,.ini,.env"
                 onChange={(e) => {
                   void attachFile(e.target.files?.[0]);
                   if (fileRef.current) fileRef.current.value = "";
@@ -505,7 +570,7 @@ export default function ExecutivePage() {
               />
               <button
                 onClick={() => fileRef.current?.click()}
-                title="Attach a text file"
+                title="Attach an image or text file"
                 className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <Paperclip className="h-4.5 w-4.5" />
@@ -520,13 +585,13 @@ export default function ExecutivePage() {
                   }
                 }}
                 rows={1}
-                placeholder={dragOver ? "Drop the file here…" : `Message ${agentName}…`}
+                placeholder={dragOver ? "Drop an image or file here…" : `Message ${agentName}…`}
                 className="max-h-40 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14px] outline-none"
               />
               <Button
                 size="sm"
                 className="mb-0.5 h-9 shrink-0"
-                disabled={sending || (!input.trim() && !attachment)}
+                disabled={sending || (!input.trim() && !attachment && !image)}
                 onClick={submit}
               >
                 {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -667,12 +732,17 @@ function MessageBubble({ message, agentName }: { message: ExecMessage; agentName
 }
 
 function UserContent({ content }: { content: string }) {
-  const { typed, file } = splitAttachment(content);
+  const { typed, file, image } = splitAttachment(content);
   return (
     <div className="space-y-1.5">
       {typed.trim() && (
         <div className="whitespace-pre-wrap rounded-2xl bg-primary px-3.5 py-2.5 text-[13.5px] leading-relaxed text-primary-foreground">
           {typed.trim()}
+        </div>
+      )}
+      {image && (
+        <div className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-muted/50 px-2.5 py-1.5 text-[11.5px] font-medium text-muted-foreground">
+          <ImageIcon className="h-3.5 w-3.5 shrink-0" /> Image attached
         </div>
       )}
       {file && (

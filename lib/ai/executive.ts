@@ -37,6 +37,13 @@ export interface ExecTool {
   silent?: boolean;
 }
 
+/** An image the founder attached to their message — base64 bytes the model can see. */
+export interface ExecImage {
+  media_type: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+  /** base64-encoded bytes, WITHOUT the `data:...;base64,` prefix. */
+  data: string;
+}
+
 export interface ExecReplyResult {
   text: string;
   actions: { tool: string; summary: string; href?: string }[];
@@ -46,6 +53,8 @@ export async function executiveReply(opts: {
   system: string;
   history: { role: "user" | "assistant"; content: string }[];
   userMessage: string;
+  /** Optional images attached to THIS turn — the Executive can see them (vision). */
+  images?: ExecImage[];
   tools: ExecTool[];
 }): Promise<ExecReplyResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -55,9 +64,25 @@ export async function executiveReply(opts: {
   const toolDefs = opts.tools.map((t) => t.definition);
   const toolByName = new Map(opts.tools.map((t) => [t.definition.name, t]));
 
+  // When images are attached, the current turn becomes a content-block array
+  // (images first, then the text — the order Claude reads best). Otherwise a
+  // plain string, exactly as before.
+  const userContent: string | Anthropic.ContentBlockParam[] =
+    opts.images && opts.images.length
+      ? [
+          ...opts.images.map(
+            (img): Anthropic.ImageBlockParam => ({
+              type: "image",
+              source: { type: "base64", media_type: img.media_type, data: img.data },
+            }),
+          ),
+          ...(opts.userMessage.trim() ? [{ type: "text" as const, text: opts.userMessage }] : []),
+        ]
+      : opts.userMessage;
+
   const messages: Anthropic.MessageParam[] = [
     ...opts.history.map((m) => ({ role: m.role, content: m.content })),
-    { role: "user", content: opts.userMessage },
+    { role: "user", content: userContent },
   ];
 
   const actions: { tool: string; summary: string; href?: string }[] = [];
