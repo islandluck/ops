@@ -385,10 +385,12 @@ export async function createCalendarEvent(
     /** RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"]. */
     recurrence?: string[];
     attendees?: string[];
+    /** "all" → Google emails invites/updates to attendees; "none" → silent. */
+    sendUpdates?: "all" | "none";
   },
 ): Promise<{ id: string; htmlLink?: string }> {
   const res = await fetch(
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=${ev.sendUpdates ?? "none"}`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -408,6 +410,59 @@ export async function createCalendarEvent(
     throw new Error(`Calendar event failed: ${err ?? res.status}`);
   }
   return { id: String(json.id), htmlLink: json.htmlLink ? String(json.htmlLink) : undefined };
+}
+
+/** Update an existing Google Calendar event (PATCH — only the fields we manage). */
+export async function updateCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  ev: {
+    summary: string;
+    description: string;
+    startISO: string;
+    endISO: string;
+    timeZone?: string;
+    recurrence?: string[];
+    attendees?: string[];
+    sendUpdates?: "all" | "none";
+  },
+): Promise<{ id: string }> {
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}?sendUpdates=${ev.sendUpdates ?? "none"}`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary: ev.summary,
+        description: ev.description,
+        start: { dateTime: ev.startISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
+        end: { dateTime: ev.endISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
+        ...(ev.recurrence?.length ? { recurrence: ev.recurrence } : {}),
+        ...(ev.attendees?.length ? { attendees: ev.attendees.map((email) => ({ email })) } : {}),
+      }),
+    },
+  );
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = (json.error as { message?: string })?.message;
+    throw new Error(`Calendar update failed: ${err ?? res.status}`);
+  }
+  return { id: String(json.id) };
+}
+
+/** Delete a Google Calendar event. Swallows 404/410 (already gone). */
+export async function deleteCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  sendUpdates: "all" | "none" = "none",
+): Promise<void> {
+  const res = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}?sendUpdates=${sendUpdates}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error(`Calendar delete failed: ${res.status}`);
+  }
 }
 
 /* ---------------------------- Calendar read (senses) --------------------- */

@@ -1,0 +1,1 @@
+ALTER TABLE "team_events" ADD COLUMN "google_event_id" text;

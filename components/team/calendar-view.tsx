@@ -198,6 +198,7 @@ function EventFormDialog({
   defaultDate,
   members,
   channels,
+  googleConnected,
   onClose,
   onSaved,
 }: {
@@ -206,6 +207,7 @@ function EventFormDialog({
   defaultDate: Date;
   members: TeamMember[];
   channels: { slack: boolean; email: boolean };
+  googleConnected: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -222,6 +224,7 @@ function EventFormDialog({
   const [notifyOn, setNotifyOn] = useState(true);
   const [notifySlack, setNotifySlack] = useState(false);
   const [notifyEmail, setNotifyEmail] = useState(false);
+  const [addToGoogle, setAddToGoogle] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -242,6 +245,7 @@ function EventFormDialog({
       setAllTeam(event.all_team);
       setDetail(event.detail);
       setNotifyOn(false); // don't spam attendees on every edit — opt in
+      setAddToGoogle(event.google_synced); // reflect whether it's already on Google
     } else {
       const d = new Date(defaultDate);
       d.setHours(9, 0, 0, 0);
@@ -256,8 +260,9 @@ function EventFormDialog({
       setAllTeam(false);
       setDetail("");
       setNotifyOn(true);
+      setAddToGoogle(googleConnected); // default ON when Google is connected
     }
-  }, [open, event, defaultDate, members]);
+  }, [open, event, defaultDate, members, googleConnected]);
 
   const hasRecipients = kind === "one_on_one" ? !!memberId : allTeam || attendeeIds.length > 0;
 
@@ -282,6 +287,7 @@ function EventFormDialog({
       attendee_ids: kind === "one_on_one" ? [] : attendeeIds,
       all_team: kind === "one_on_one" ? false : allTeam,
       notify: notifyOn && hasRecipients ? { inApp: true, slack: notifySlack, email: notifyEmail } : undefined,
+      add_to_google: googleConnected ? addToGoogle : undefined,
     };
     const r = event ? await updateTeamEventAction(event.id, payload) : await createTeamEventAction(payload);
     setSaving(false);
@@ -431,6 +437,27 @@ function EventFormDialog({
               </div>
             )}
           </div>
+        )}
+
+        {googleConnected && (
+          <label className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-2.5 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={addToGoogle}
+              onChange={(e) => setAddToGoogle(e.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-primary"
+            />
+            <span>
+              Add to Google Calendar
+              <span className="mt-0.5 block text-[11px] font-normal text-muted-foreground">
+                {event
+                  ? addToGoogle
+                    ? "Changes sync to Google; attendees with an email address get the update."
+                    : "This will remove the event from your Google Calendar."
+                  : "Creates the event on your Google Calendar and emails invites to attendees with an address."}
+              </span>
+            </span>
+          </label>
         )}
 
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -967,6 +994,7 @@ export function CalendarView({
         defaultDate={form.defaultDate}
         members={members}
         channels={channels}
+        googleConnected={googleCalendar && google.connected}
         onClose={() => setForm((f) => ({ ...f, open: false }))}
         onSaved={refreshAll}
       />

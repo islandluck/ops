@@ -340,6 +340,8 @@ export interface TeamEvent {
   attendee_names: string[];
   /** Whole-team event (all-hands) — attendees resolve to everyone. */
   all_team: boolean;
+  /** Linked to a Google Calendar event (two-way sync is on for this entry). */
+  google_synced: boolean;
   created_at: string;
 }
 

@@ -21,11 +21,14 @@ import {
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import {
+  createCalendarEvent,
+  deleteCalendarEvent,
   getDriveMeta,
   isWithinDriveFolder,
   listCalendarEventsRange,
   listDriveFolder,
   sendGmail,
+  updateCalendarEvent,
   type DriveEntry,
 } from "@/lib/integrations/google";
 import { notifySlack } from "@/lib/integrations/slack";
@@ -1356,6 +1359,7 @@ function toEvent(r: typeof teamEvents.$inferSelect, nameById?: Map<string, strin
     attendee_ids: ids,
     attendee_names: names,
     all_team: r.all_team,
+    google_synced: !!r.google_event_id,
     created_at: new Date(r.created_at).toISOString(),
   };
 }
@@ -1397,6 +1401,9 @@ export interface TeamEventInput {
   all_team?: boolean;
   /** How to notify the attendees; omit for no notification. */
   notify?: NotifyChannels;
+  /** Owner-only: also create/sync this to the owner's Google Calendar (+ email real
+   *  invites to attendees who have addresses). */
+  add_to_google?: boolean;
 }
 
 /** Clamp a duration to a sane 15 min – 24 h window (default 1 h). */
@@ -1496,6 +1503,85 @@ async function notifyEventAttendees(
   }
 }
 
+/** App recurrence keyword → a Google RRULE array (respecting an optional until date). */
+function toRRule(recurrence: string, until: Date | null): string[] {
+  const freq = normFreq(recurrence);
+  if (freq === "none") return [];
+  const map: Record<Exclude<Freq, "none">, string> = {
+    daily: "FREQ=DAILY",
+    weekly: "FREQ=WEEKLY",
+    biweekly: "FREQ=WEEKLY;INTERVAL=2",
+    monthly: "FREQ=MONTHLY",
+  };
+  let rule = `RRULE:${map[freq]}`;
+  if (until) {
+    const u = new Date(until);
+    const stamp = `${u.getUTCFullYear()}${String(u.getUTCMonth() + 1).padStart(2, "0")}${String(u.getUTCDate()).padStart(2, "0")}T235959Z`;
+    rule += `;UNTIL=${stamp}`;
+  }
+  return [rule];
+}
+
+/** Emails to invite for an event's attendees (all_team → everyone with an address). */
+async function resolveAttendeeEmails(workspaceId: string, attendeeIds: string[], allTeam: boolean): Promise<string[]> {
+  const rows = await db
+    .select({ id: teamMembers.id, email: teamMembers.email })
+    .from(teamMembers)
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const wanted = allTeam ? rows : rows.filter((r) => attendeeIds.includes(r.id));
+  return wanted.map((r) => r.email).filter((e): e is string => !!e && e.includes("@"));
+}
+
+/**
+ * Two-way Google Calendar sync for one team event (OWNER-only, best-effort — the
+ * connected Google account is the owner's). Creates, updates, or removes the linked
+ * Google event and emails real invites/updates to attendees. Returns the
+ * google_event_id the row should now carry (unchanged on any error).
+ */
+async function syncEventToGoogle(
+  workspaceId: string,
+  actorRole: string,
+  row: typeof teamEvents.$inferSelect,
+  addToGoogle: boolean,
+): Promise<string | null> {
+  const current = row.google_event_id ?? null;
+  if (actorRole !== "owner") return current;
+  let token: string | null = null;
+  try {
+    token = await getValidAccessToken(workspaceId, "Google Calendar");
+  } catch {
+    token = null;
+  }
+  if (!token) return current;
+
+  try {
+    if (!addToGoogle) {
+      if (current) await deleteCalendarEvent(token, current, "all");
+      return null;
+    }
+    const start = new Date(row.starts_at);
+    const end = new Date(start.getTime() + (row.duration_minutes || 60) * 60000);
+    const attendees = await resolveAttendeeEmails(workspaceId, row.attendee_ids as string[], row.all_team);
+    const payload = {
+      summary: row.title,
+      description: row.detail || "",
+      startISO: start.toISOString(),
+      endISO: end.toISOString(),
+      recurrence: toRRule(row.recurrence, row.recurrence_until ? new Date(row.recurrence_until) : null),
+      attendees,
+      sendUpdates: "all" as const,
+    };
+    if (current) {
+      await updateCalendarEvent(token, current, payload);
+      return current;
+    }
+    const created = await createCalendarEvent(token, payload);
+    return created.id;
+  } catch {
+    return current; // best-effort — the local event always stands
+  }
+}
+
 export async function createTeamEvent(
   workspaceId: string,
   userId: string,
@@ -1567,7 +1653,20 @@ export async function createTeamEvent(
       actorName || me?.name || "A teammate",
     );
   }
-  return { ok: true, event: toEvent(row, nameById) };
+
+  // Two-way Google Calendar: push to the owner's Google + email invites (best-effort).
+  let synced = row;
+  if (input.add_to_google) {
+    const gid = await syncEventToGoogle(workspaceId, role, row, true);
+    if (gid !== (row.google_event_id ?? null)) {
+      await db
+        .update(teamEvents)
+        .set({ google_event_id: gid })
+        .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, row.id)));
+      synced = { ...row, google_event_id: gid };
+    }
+  }
+  return { ok: true, event: toEvent(synced, nameById) };
 }
 
 export async function deleteTeamEvent(
@@ -1578,6 +1677,20 @@ export async function deleteTeamEvent(
   const role = await getWorkspaceRole(workspaceId, userId);
   if (role !== "owner" && role !== "manager") {
     return { ok: false, error: "Only owners and managers can remove calendar entries." };
+  }
+  // Remove the linked Google Calendar event too (owner-only, best-effort, notifies).
+  const [row] = await db
+    .select({ google_event_id: teamEvents.google_event_id })
+    .from(teamEvents)
+    .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)))
+    .limit(1);
+  if (row?.google_event_id && role === "owner") {
+    try {
+      const token = await getValidAccessToken(workspaceId, "Google Calendar");
+      if (token) await deleteCalendarEvent(token, row.google_event_id, "all");
+    } catch {
+      /* best-effort — still remove locally */
+    }
   }
   await db.delete(teamEvents).where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
   return { ok: true };
@@ -1595,6 +1708,8 @@ export interface TeamEventPatch {
   attendee_ids?: string[];
   all_team?: boolean;
   notify?: NotifyChannels;
+  /** Owner-only: create/update/remove the linked Google Calendar event. */
+  add_to_google?: boolean;
 }
 
 export async function updateTeamEvent(
@@ -1671,6 +1786,25 @@ export async function updateTeamEvent(
       patch.notify,
       actorName || "A teammate",
     );
+  }
+
+  // Two-way Google sync: keep an already-linked event in step, or honor the toggle.
+  if (patch.add_to_google !== undefined || current.google_event_id) {
+    const [updated] = await db
+      .select()
+      .from(teamEvents)
+      .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)))
+      .limit(1);
+    if (updated) {
+      const wantGoogle = patch.add_to_google !== undefined ? !!patch.add_to_google : !!updated.google_event_id;
+      const gid = await syncEventToGoogle(workspaceId, role, updated, wantGoogle);
+      if (gid !== (updated.google_event_id ?? null)) {
+        await db
+          .update(teamEvents)
+          .set({ google_event_id: gid })
+          .where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
+      }
+    }
   }
   return { ok: true };
 }

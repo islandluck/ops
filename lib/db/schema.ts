@@ -896,6 +896,8 @@ export const teamEvents = pgTable(
     // Whole-team event (all-hands): attendees resolve to every member at read time.
     all_team: boolean("all_team").notNull().default(false),
     created_by_member_id: uuid("created_by_member_id"),
+    // Two-way Google Calendar: the linked Google event id (null = not synced to Google).
+    google_event_id: text("google_event_id"),
     created_at: createdAt,
     updated_at: updatedAt,
   },
