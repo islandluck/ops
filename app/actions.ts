@@ -1413,6 +1413,29 @@ export async function sendExecutiveMessageAction(
   return sendExecutiveMessage(ws, text, threadId, image ? [image] : undefined);
 }
 
+/** Extract plain text from an uploaded document (PDF / .docx / text) so the founder
+ *  can attach it in the Executive chat. Reuses the Deep Dive parse stack. */
+export async function extractAttachmentTextAction(
+  base64: string,
+  filename: string,
+  mime: string,
+): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  try {
+    if (!isSupportedDoc(mime, filename)) return { ok: false, error: "Unsupported file type." };
+    const bytes = Buffer.from(base64, "base64");
+    if (!bytes.length) return { ok: false, error: "That file came through empty." };
+    if (bytes.length > MAX_DOC_BYTES) return { ok: false, error: "That file is too large (max 20 MB)." };
+    const text = await extractDocText(filename, mime, bytes);
+    if (!text.trim()) return { ok: false, error: "Couldn't find any readable text in that document." };
+    return { ok: true, text: text.slice(0, 30_000) };
+  } catch (e) {
+    console.error("[extractAttachment] failed:", e instanceof Error ? e.message : e);
+    return { ok: false, error: "Couldn't read that document." };
+  }
+}
+
 export async function addGoalAction(input: {
   title: string;
   detail?: string;

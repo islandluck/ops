@@ -64,6 +64,7 @@ import {
   generateInvestorUpdateAction,
   getExecutiveBundleAction,
   sendExecutiveMessageAction,
+  extractAttachmentTextAction,
   newExecutiveThreadAction,
   getThreadMessagesAction,
   searchThreadsAction,
@@ -106,6 +107,24 @@ const TEXT_EXT =
   /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|xml|html?|css|js|jsx|ts|tsx|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql|env|toml|ini)$/i;
 function isTextFile(f: File): boolean {
   return f.type.startsWith("text/") || /json|xml|csv|yaml|javascript|typescript/.test(f.type) || TEXT_EXT.test(f.name);
+}
+/** PDF / Word docs — extracted to text SERVER-side (the browser can't parse them). */
+function isDocFile(f: File): boolean {
+  return (
+    f.type === "application/pdf" ||
+    f.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    /\.(pdf|docx)$/i.test(f.name)
+  );
+}
+/** Base64-encode a file's bytes for upload to the extract action. */
+async function fileToBase64(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 function composeMessage(typed: string, att: { name: string; text: string } | null): string {
   if (!att) return typed;
@@ -164,6 +183,7 @@ export default function ExecutivePage() {
   const [attachment, setAttachment] = useState<{ name: string; text: string } | null>(null);
   const [image, setImage] = useState<PendingImage | null>(null);
   const [attachErr, setAttachErr] = useState("");
+  const [extracting, setExtracting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -190,8 +210,32 @@ export default function ExecutivePage() {
       }
       return;
     }
+    // PDFs / Word docs → extract text on the server (browser can't parse them),
+    // then attach the text like any other document.
+    if (isDocFile(file)) {
+      if (file.size > 20 * 1024 * 1024) {
+        setAttachErr("That document is too large (max 20 MB).");
+        return;
+      }
+      setExtracting(true);
+      try {
+        const base64 = await fileToBase64(file);
+        const res = await extractAttachmentTextAction(base64, file.name, file.type || "");
+        if (!res.ok || !res.text) {
+          setAttachErr(res.error || "Couldn't read that document.");
+          return;
+        }
+        setAttachment({ name: file.name, text: res.text });
+        setImage(null); // one attachment at a time
+      } catch {
+        setAttachErr("Couldn't read that document.");
+      } finally {
+        setExtracting(false);
+      }
+      return;
+    }
     if (!isTextFile(file)) {
-      setAttachErr("Attach an image, or a text file — .md, .txt, .csv, .json, code, etc.");
+      setAttachErr("Attach an image, a PDF/Word doc, or a text file — .md, .txt, .csv, .json, code, etc.");
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
@@ -524,6 +568,11 @@ export default function ExecutivePage() {
         >
           <div className="mx-auto max-w-2xl">
             {attachErr && <p className="mb-1.5 text-[12px] text-destructive">{attachErr}</p>}
+            {extracting && (
+              <p className="mb-1.5 inline-flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" /> Reading document…
+              </p>
+            )}
             {attachment && (
               <div className="mb-2 inline-flex max-w-full items-center gap-2 rounded-lg border border-border bg-muted/60 py-1 pl-2 pr-1 text-[12px]">
                 <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -562,7 +611,7 @@ export default function ExecutivePage() {
                 ref={fileRef}
                 type="file"
                 hidden
-                accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.sh,.sql,.toml,.ini,.env"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.log,.yml,.yaml,.xml,.html,.css,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.c,.cpp,.h,.sh,.sql,.toml,.ini,.env"
                 onChange={(e) => {
                   void attachFile(e.target.files?.[0]);
                   if (fileRef.current) fileRef.current.value = "";
@@ -570,10 +619,11 @@ export default function ExecutivePage() {
               />
               <button
                 onClick={() => fileRef.current?.click()}
-                title="Attach an image or text file"
-                className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                disabled={extracting}
+                title="Attach an image, PDF, Word doc, or text file"
+                className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
               >
-                <Paperclip className="h-4.5 w-4.5" />
+                {extracting ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Paperclip className="h-4.5 w-4.5" />}
               </button>
               <textarea
                 value={input}
