@@ -898,6 +898,8 @@ export const teamEvents = pgTable(
     created_by_member_id: uuid("created_by_member_id"),
     // Two-way Google Calendar: the linked Google event id (null = not synced to Google).
     google_event_id: text("google_event_id"),
+    // Video/meeting join link (Zoom auto-created, or a manually pasted link).
+    meeting_link: text("meeting_link").notNull().default(""),
     created_at: createdAt,
     updated_at: updatedAt,
   },

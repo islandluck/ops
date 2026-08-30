@@ -342,6 +342,8 @@ export interface TeamEvent {
   all_team: boolean;
   /** Linked to a Google Calendar event (two-way sync is on for this entry). */
   google_synced: boolean;
+  /** Video/meeting join link (Zoom or a pasted link); "" when none. */
+  meeting_link: string;
   created_at: string;
 }
 
@@ -363,6 +365,8 @@ export interface CalendarItem {
   all_team: boolean;
   recurrence: string;
   detail: string;
+  /** Video/meeting join link (Zoom or a pasted link); "" when none. */
+  meeting_link: string;
   /** True only for team events (deadlines are derived and not editable here). */
   editable: boolean;
 }

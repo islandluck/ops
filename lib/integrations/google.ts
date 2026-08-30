@@ -385,6 +385,8 @@ export async function createCalendarEvent(
     /** RRULE strings, e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"]. */
     recurrence?: string[];
     attendees?: string[];
+    /** Location / join link shown on the event. */
+    location?: string;
     /** "all" → Google emails invites/updates to attendees; "none" → silent. */
     sendUpdates?: "all" | "none";
   },
@@ -397,6 +399,7 @@ export async function createCalendarEvent(
       body: JSON.stringify({
         summary: ev.summary,
         description: ev.description,
+        ...(ev.location ? { location: ev.location } : {}),
         start: { dateTime: ev.startISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
         end: { dateTime: ev.endISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
         ...(ev.recurrence?.length ? { recurrence: ev.recurrence } : {}),
@@ -424,6 +427,7 @@ export async function updateCalendarEvent(
     timeZone?: string;
     recurrence?: string[];
     attendees?: string[];
+    location?: string;
     sendUpdates?: "all" | "none";
   },
 ): Promise<{ id: string }> {
@@ -435,6 +439,7 @@ export async function updateCalendarEvent(
       body: JSON.stringify({
         summary: ev.summary,
         description: ev.description,
+        ...(ev.location ? { location: ev.location } : {}),
         start: { dateTime: ev.startISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
         end: { dateTime: ev.endISO, ...(ev.timeZone ? { timeZone: ev.timeZone } : {}) },
         ...(ev.recurrence?.length ? { recurrence: ev.recurrence } : {}),

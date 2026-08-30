@@ -2267,12 +2267,17 @@ function Sparkline({ points, chart }: { points: number[]; chart: "area" | "bars"
 }
 
 function KpiTrends({ series }: { series: KpiTrendSeries[] }) {
-  if (!series.length) return null;
   return (
     <div>
       <RailHeading icon={<LineChart className="h-3.5 w-3.5" />} label="Trends" />
-      <div className="mt-2 flex flex-col gap-2">
-        {series.map((s) => (
+      {series.length === 0 ? (
+        <div className="mt-2 rounded-xl border border-dashed border-border bg-card/50 p-3 text-[12px] leading-relaxed text-muted-foreground">
+          Trends will chart here as history builds — revenue from paid orders, followers from snapshots, and work
+          shipped week over week.
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-col gap-2">
+          {series.map((s) => (
           <div key={s.key} className="rounded-xl border border-border bg-card p-3">
             <div className="flex items-baseline justify-between gap-2">
               <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
@@ -2295,8 +2300,9 @@ function KpiTrends({ series }: { series: KpiTrendSeries[] }) {
             </div>
             <p className="mt-1 text-[10px] text-muted-foreground">last {s.points.length} weeks</p>
           </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

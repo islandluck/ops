@@ -1,0 +1,1 @@
+ALTER TABLE "team_events" ADD COLUMN "meeting_link" text DEFAULT '' NOT NULL;

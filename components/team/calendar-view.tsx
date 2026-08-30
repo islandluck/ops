@@ -15,6 +15,7 @@ import {
   Trash2,
   User,
   Users,
+  Video,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -206,7 +207,7 @@ function EventFormDialog({
   event: TeamEvent | null;
   defaultDate: Date;
   members: TeamMember[];
-  channels: { slack: boolean; email: boolean };
+  channels: { slack: boolean; email: boolean; zoom: boolean };
   googleConnected: boolean;
   onClose: () => void;
   onSaved: () => void;
@@ -225,6 +226,8 @@ function EventFormDialog({
   const [notifySlack, setNotifySlack] = useState(false);
   const [notifyEmail, setNotifyEmail] = useState(false);
   const [addToGoogle, setAddToGoogle] = useState(false);
+  const [meetingLink, setMeetingLink] = useState("");
+  const [addZoom, setAddZoom] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -246,6 +249,8 @@ function EventFormDialog({
       setDetail(event.detail);
       setNotifyOn(false); // don't spam attendees on every edit — opt in
       setAddToGoogle(event.google_synced); // reflect whether it's already on Google
+      setMeetingLink(event.meeting_link ?? "");
+      setAddZoom(false); // don't recreate a Zoom on every edit — opt in
     } else {
       const d = new Date(defaultDate);
       d.setHours(9, 0, 0, 0);
@@ -261,6 +266,8 @@ function EventFormDialog({
       setDetail("");
       setNotifyOn(true);
       setAddToGoogle(googleConnected); // default ON when Google is connected
+      setMeetingLink("");
+      setAddZoom(false);
     }
   }, [open, event, defaultDate, members, googleConnected]);
 
@@ -288,6 +295,9 @@ function EventFormDialog({
       all_team: kind === "one_on_one" ? false : allTeam,
       notify: notifyOn && hasRecipients ? { inApp: true, slack: notifySlack, email: notifyEmail } : undefined,
       add_to_google: googleConnected ? addToGoogle : undefined,
+      add_zoom: channels.zoom ? addZoom : undefined,
+      meeting_link: addZoom ? undefined : meetingLink.trim(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     };
     const r = event ? await updateTeamEventAction(event.id, payload) : await createTeamEventAction(payload);
     setSaving(false);
@@ -408,6 +418,33 @@ function EventFormDialog({
         <div>
           <Label>Details (optional)</Label>
           <Textarea rows={3} value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="Agenda, location, or notes." />
+        </div>
+
+        <div>
+          <Label>Meeting link (optional)</Label>
+          {channels.zoom && (
+            <label className="mb-1.5 mt-1 flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={addZoom}
+                onChange={(e) => setAddZoom(e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <Video className="h-3.5 w-3.5 text-muted-foreground" />
+              Create a Zoom meeting
+            </label>
+          )}
+          {addZoom ? (
+            <p className="text-[12px] text-muted-foreground">
+              A Zoom meeting will be created and its join link shared with attendees{event ? "" : " on the invite"}.
+            </p>
+          ) : (
+            <Input
+              value={meetingLink}
+              onChange={(e) => setMeetingLink(e.target.value)}
+              placeholder="Paste a Zoom / Meet / other link"
+            />
+          )}
         </div>
 
         {hasRecipients && (
@@ -533,6 +570,19 @@ function EventViewDialog({
             <span>{item.who}</span>
           </div>
         ) : null}
+        {item.meeting_link && (
+          <div className="flex items-center gap-2">
+            <Video className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <a
+              href={item.meeting_link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all font-medium text-primary hover:underline"
+            >
+              Join meeting
+            </a>
+          </div>
+        )}
         {item.detail && (
           <div className="mt-1 whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-2.5 text-[13px]">
             {item.detail}
@@ -650,7 +700,11 @@ export function CalendarView({
     event: null,
     defaultDate: new Date(),
   });
-  const [channels, setChannels] = useState<{ slack: boolean; email: boolean }>({ slack: false, email: false });
+  const [channels, setChannels] = useState<{ slack: boolean; email: boolean; zoom: boolean }>({
+    slack: false,
+    email: false,
+    zoom: false,
+  });
   const [google, setGoogle] = useState<{ connected: boolean; items: GoogleCalItem[] }>({ connected: false, items: [] });
   const [showGoogle, setShowGoogle] = useState(true);
   const [loadingGoogle, setLoadingGoogle] = useState(false);

@@ -31,6 +31,7 @@ import {
   updateCalendarEvent,
   type DriveEntry,
 } from "@/lib/integrations/google";
+import { createZoomMeeting } from "@/lib/integrations/zoom";
 import { notifySlack } from "@/lib/integrations/slack";
 import { getNotionPageContent, searchNotionPages } from "@/lib/integrations/notion";
 import { extractMeeting, type MeetingExtraction } from "@/lib/ai/meeting-extract";
@@ -1360,6 +1361,7 @@ function toEvent(r: typeof teamEvents.$inferSelect, nameById?: Map<string, strin
     attendee_names: names,
     all_team: r.all_team,
     google_synced: !!r.google_event_id,
+    meeting_link: r.meeting_link ?? "",
     created_at: new Date(r.created_at).toISOString(),
   };
 }
@@ -1404,6 +1406,12 @@ export interface TeamEventInput {
   /** Owner-only: also create/sync this to the owner's Google Calendar (+ email real
    *  invites to attendees who have addresses). */
   add_to_google?: boolean;
+  /** A meeting/join link to attach (used when add_zoom is false). */
+  meeting_link?: string;
+  /** Create a Zoom meeting and use its join link as the meeting_link. */
+  add_zoom?: boolean;
+  /** The creator's IANA timezone (from the browser) — needed for recurring Google events. */
+  timezone?: string;
 }
 
 /** Clamp a duration to a sane 15 min – 24 h window (default 1 h). */
@@ -1443,6 +1451,7 @@ async function notifyEventAttendees(
     recurrence: string;
     attendee_ids: string[];
     all_team: boolean;
+    meeting_link?: string;
   },
   channels: NotifyChannels,
   actorName: string,
@@ -1461,8 +1470,11 @@ async function notifyEventAttendees(
     const timeLabel = start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
     const freq = normFreq(event.recurrence);
     const repeatSuffix = freq !== "none" ? `, repeats ${freq}` : "";
+    const link = (event.meeting_link ?? "").trim();
     const title = `You're on the calendar: ${event.title}`;
-    const body = `${actorName} added you to "${event.title}" — ${dateLabel} at ${timeLabel}${repeatSuffix}.`;
+    const body = `${actorName} added you to "${event.title}" — ${dateLabel} at ${timeLabel}${repeatSuffix}.${
+      link ? ` Join: ${link}` : ""
+    }`;
 
     if (channels.inApp !== false) {
       const now = new Date();
@@ -1483,7 +1495,9 @@ async function notifyEventAttendees(
 
     if (channels.slack) {
       const who = event.all_team ? "the whole team" : recipients.map((r) => r.name).join(", ");
-      const msg = `📅 ${actorName} scheduled *${event.title}* — ${dateLabel} at ${timeLabel}${repeatSuffix}. Attendees: ${who}.`;
+      const msg = `📅 ${actorName} scheduled *${event.title}* — ${dateLabel} at ${timeLabel}${repeatSuffix}. Attendees: ${who}.${
+        link ? ` Join: ${link}` : ""
+      }`;
       await notifySlack(workspaceId, msg).catch(() => {});
     }
 
@@ -1492,7 +1506,9 @@ async function notifyEventAttendees(
       const withEmail = recipients.filter((r) => r.email && r.email.includes("@")).slice(0, 50);
       if (token && withEmail.length) {
         const subject = `Invite: ${event.title} — ${dateLabel}`;
-        const emailBody = `${body}\n\nWhen: ${dateLabel} at ${timeLabel}${repeatSuffix}\n\n— Sent from your team calendar`;
+        const emailBody = `${body}\n\nWhen: ${dateLabel} at ${timeLabel}${repeatSuffix}${
+          link ? `\nJoin: ${link}` : ""
+        }\n\n— Sent from your team calendar`;
         await Promise.all(
           withEmail.map((r) => sendGmail(token, { to: r.email, subject, body: emailBody }).catch(() => null)),
         );
@@ -1500,6 +1516,28 @@ async function notifyEventAttendees(
     }
   } catch {
     // Notification is best-effort; the event itself is already saved.
+  }
+}
+
+/** Format an instant as a floating wall-clock string ("YYYY-MM-DDTHH:mm:ss") in the
+ *  given IANA timezone — what Google Calendar wants alongside an explicit timeZone. */
+function wallClockInTz(date: Date, tz: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+    const hour = get("hour") === "24" ? "00" : get("hour");
+    return `${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}:${get("second")}`;
+  } catch {
+    return date.toISOString();
   }
 }
 
@@ -1543,6 +1581,7 @@ async function syncEventToGoogle(
   actorRole: string,
   row: typeof teamEvents.$inferSelect,
   addToGoogle: boolean,
+  timezone?: string,
 ): Promise<string | null> {
   const current = row.google_event_id ?? null;
   if (actorRole !== "owner") return current;
@@ -1562,13 +1601,25 @@ async function syncEventToGoogle(
     const start = new Date(row.starts_at);
     const end = new Date(start.getTime() + (row.duration_minutes || 60) * 60000);
     const attendees = await resolveAttendeeEmails(workspaceId, row.attendee_ids as string[], row.all_team);
+    const recurrence = toRRule(row.recurrence, row.recurrence_until ? new Date(row.recurrence_until) : null);
+    // Google REQUIRES a timezone for recurring events (else the insert 400s and the
+    // whole sync silently fails). With the creator's IANA zone, send floating
+    // wall-clock times so recurrences land at the right LOCAL time across DST;
+    // without one, fall back to UTC.
+    const timeZone = timezone || (recurrence.length ? "UTC" : undefined);
+    const startISO = timezone ? wallClockInTz(start, timezone) : start.toISOString();
+    const endISO = timezone ? wallClockInTz(end, timezone) : end.toISOString();
+    const link = (row.meeting_link || "").trim();
+    const description = [row.detail || "", link ? `Join: ${link}` : ""].filter(Boolean).join("\n\n");
     const payload = {
       summary: row.title,
-      description: row.detail || "",
-      startISO: start.toISOString(),
-      endISO: end.toISOString(),
-      recurrence: toRRule(row.recurrence, row.recurrence_until ? new Date(row.recurrence_until) : null),
+      description,
+      startISO,
+      endISO,
+      timeZone,
+      recurrence,
       attendees,
+      location: link || undefined,
       sendUpdates: "all" as const,
     };
     if (current) {
@@ -1616,6 +1667,26 @@ export async function createTeamEvent(
   }
   const memberId = kind === "one_on_one" ? attendeeIds[0] ?? null : null;
 
+  // Meeting link: spin up a Zoom meeting (when requested + connected), else use any
+  // manually pasted link. Best-effort — a Zoom hiccup never blocks the entry.
+  let meetingLink = (input.meeting_link ?? "").trim();
+  if (input.add_zoom) {
+    try {
+      const zt = await getValidAccessToken(workspaceId, "Zoom");
+      if (zt) {
+        const m = await createZoomMeeting(zt, {
+          topic: title,
+          startTime: when.toISOString(),
+          durationMin: clampDuration(input.duration_minutes),
+          timezone: input.timezone,
+        });
+        if (m.join_url) meetingLink = m.join_url;
+      }
+    } catch {
+      /* fall back to any manual link */
+    }
+  }
+
   const now = new Date();
   const [row] = await db
     .insert(teamEvents)
@@ -1633,6 +1704,7 @@ export async function createTeamEvent(
       attendee_ids: attendeeIds,
       all_team: allTeam,
       created_by_member_id: me?.id ?? null,
+      meeting_link: meetingLink.slice(0, 1000),
       created_at: now,
       updated_at: now,
     })
@@ -1648,6 +1720,7 @@ export async function createTeamEvent(
         recurrence: row.recurrence,
         attendee_ids: row.attendee_ids,
         all_team: row.all_team,
+        meeting_link: row.meeting_link,
       },
       input.notify,
       actorName || me?.name || "A teammate",
@@ -1657,7 +1730,7 @@ export async function createTeamEvent(
   // Two-way Google Calendar: push to the owner's Google + email invites (best-effort).
   let synced = row;
   if (input.add_to_google) {
-    const gid = await syncEventToGoogle(workspaceId, role, row, true);
+    const gid = await syncEventToGoogle(workspaceId, role, row, true, input.timezone);
     if (gid !== (row.google_event_id ?? null)) {
       await db
         .update(teamEvents)
@@ -1710,6 +1783,12 @@ export interface TeamEventPatch {
   notify?: NotifyChannels;
   /** Owner-only: create/update/remove the linked Google Calendar event. */
   add_to_google?: boolean;
+  /** A meeting/join link (used when add_zoom is false). */
+  meeting_link?: string;
+  /** Create a Zoom meeting and use its join link. */
+  add_zoom?: boolean;
+  /** The editor's IANA timezone — needed for recurring Google events. */
+  timezone?: string;
 }
 
 export async function updateTeamEvent(
@@ -1770,6 +1849,29 @@ export async function updateTeamEvent(
     set.member_id = null;
   }
 
+  // Meeting link: create a fresh Zoom meeting only when the box is explicitly checked
+  // this edit; otherwise honor the pasted link the form sends.
+  if (patch.add_zoom) {
+    let link = (patch.meeting_link ?? current.meeting_link ?? "").trim();
+    try {
+      const zt = await getValidAccessToken(workspaceId, "Zoom");
+      if (zt) {
+        const m = await createZoomMeeting(zt, {
+          topic: (set.title as string | undefined) ?? current.title,
+          startTime: ((set.starts_at as Date | undefined) ?? new Date(current.starts_at)).toISOString(),
+          durationMin: (set.duration_minutes as number | undefined) ?? current.duration_minutes,
+          timezone: patch.timezone,
+        });
+        if (m.join_url) link = m.join_url;
+      }
+    } catch {
+      /* keep any existing/pasted link */
+    }
+    set.meeting_link = link.slice(0, 1000);
+  } else if (patch.meeting_link !== undefined) {
+    set.meeting_link = patch.meeting_link.trim().slice(0, 1000);
+  }
+
   await db.update(teamEvents).set(set).where(and(eq(teamEvents.workspace_id, workspaceId), eq(teamEvents.id, id)));
 
   if (patch.notify) {
@@ -1782,6 +1884,7 @@ export async function updateTeamEvent(
         recurrence: (set.recurrence as string) ?? current.recurrence,
         attendee_ids: (set.attendee_ids as string[]) ?? current.attendee_ids,
         all_team: (set.all_team as boolean) ?? current.all_team,
+        meeting_link: (set.meeting_link as string) ?? current.meeting_link,
       },
       patch.notify,
       actorName || "A teammate",
@@ -1797,7 +1900,7 @@ export async function updateTeamEvent(
       .limit(1);
     if (updated) {
       const wantGoogle = patch.add_to_google !== undefined ? !!patch.add_to_google : !!updated.google_event_id;
-      const gid = await syncEventToGoogle(workspaceId, role, updated, wantGoogle);
+      const gid = await syncEventToGoogle(workspaceId, role, updated, wantGoogle, patch.timezone);
       if (gid !== (updated.google_event_id ?? null)) {
         await db
           .update(teamEvents)
@@ -1914,6 +2017,7 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
         all_team: e.all_team,
         recurrence: e.recurrence,
         detail: e.detail,
+        meeting_link: e.meeting_link ?? "",
         editable: true,
       });
     }
@@ -1939,6 +2043,7 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
       all_team: false,
       recurrence: "",
       detail: "",
+      meeting_link: "",
       editable: false,
     });
   }
@@ -1963,6 +2068,7 @@ async function buildCalendarItems(workspaceId: string, from: Date, to: Date): Pr
       all_team: false,
       recurrence: "",
       detail: "",
+      meeting_link: "",
       editable: false,
     });
   }
@@ -2102,16 +2208,21 @@ export async function markMyNotificationsRead(workspaceId: string, userId: strin
 }
 
 /** Which optional notify channels are connected for this workspace (Slack / Gmail). */
-export async function getNotifyChannels(workspaceId: string): Promise<{ slack: boolean; email: boolean }> {
-  const [slack, email] = await Promise.all([
+export async function getNotifyChannels(
+  workspaceId: string,
+): Promise<{ slack: boolean; email: boolean; zoom: boolean }> {
+  const [slack, email, zoom] = await Promise.all([
     getValidAccessToken(workspaceId, "Slack")
       .then((t) => !!t)
       .catch(() => false),
     getValidAccessToken(workspaceId, "Gmail")
       .then((t) => !!t)
       .catch(() => false),
+    getValidAccessToken(workspaceId, "Zoom")
+      .then((t) => !!t)
+      .catch(() => false),
   ]);
-  return { slack, email };
+  return { slack, email, zoom };
 }
 
 // ── Meetings (manual notes + Notion import → assigned tasks, see below) ───────

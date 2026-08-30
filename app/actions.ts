@@ -3699,13 +3699,13 @@ export async function markNotificationsReadAction() {
 
 export async function getNotifyChannelsAction() {
   const user = await getCurrentUser();
-  if (!user) return { slack: false, email: false };
+  if (!user) return { slack: false, email: false, zoom: false };
   const ws = await workspaceIdForUser(user.id);
-  if (!ws) return { slack: false, email: false };
+  if (!ws) return { slack: false, email: false, zoom: false };
   try {
     return await getNotifyChannels(ws);
   } catch {
-    return { slack: false, email: false };
+    return { slack: false, email: false, zoom: false };
   }
 }
 
