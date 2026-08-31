@@ -198,6 +198,16 @@ export default function LoginPage() {
             </Link>
           </p>
         )}
+
+        <p className="mt-6 text-center text-[12px] text-muted-foreground">
+          <Link href="/terms" className="transition hover:text-foreground hover:underline">
+            Terms
+          </Link>
+          <span className="mx-2 opacity-50">·</span>
+          <Link href="/privacy" className="transition hover:text-foreground hover:underline">
+            Privacy
+          </Link>
+        </p>
       </div>
     </div>
   );
