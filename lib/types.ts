@@ -1387,6 +1387,16 @@ export interface ExecKpi {
   hint?: string;
 }
 
+/** What the current workspace is entitled to use (for client-side gating/banners). */
+export interface EntitlementView {
+  effectiveTier: string;
+  enforced: boolean;
+  trialing: boolean;
+  trialEndsAt: string | null;
+  /** Feature key → whether this workspace can use it. */
+  can: Record<string, boolean>;
+}
+
 /** One subscription tier as the billing page renders it. */
 export interface BillingPlanView {
   key: string;

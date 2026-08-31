@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { UpgradeGate } from "@/components/billing/upgrade-gate";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -136,6 +137,14 @@ function blankSession(id: string, title: string): BoardSession {
 }
 
 export default function BoardroomPage() {
+  return (
+    <UpgradeGate feature="boardroom" title="The Boardroom">
+      <BoardroomPageInner />
+    </UpgradeGate>
+  );
+}
+
+function BoardroomPageInner() {
   const [members, setMembers] = useState<BoardMember[]>([]);
   const [sessions, setSessions] = useState<BoardSessionSummary[]>([]);
   const [alerts, setAlerts] = useState<BoardAlert[]>([]);

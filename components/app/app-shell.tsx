@@ -4,6 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { Menu, TriangleAlert, X } from "lucide-react";
 import { Sidebar } from "@/components/app/sidebar";
+import { TrialBanner } from "@/components/billing/trial-banner";
 import { Logo } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/misc";
@@ -106,6 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
 
+        <TrialBanner />
         <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </main>
 

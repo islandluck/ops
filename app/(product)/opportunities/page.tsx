@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { UpgradeGate } from "@/components/billing/upgrade-gate";
 import {
   AlertTriangle,
   CalendarDays,
@@ -125,6 +126,14 @@ function parseDomains(text: string): string[] {
 /* -------------------------------- page ---------------------------------- */
 
 export default function OpportunitiesPage() {
+  return (
+    <UpgradeGate feature="opportunities" title="Opportunities">
+      <OpportunitiesPageInner />
+    </UpgradeGate>
+  );
+}
+
+function OpportunitiesPageInner() {
   const [view, setView] = useState<OpportunitiesView | null>(null);
   const [active, setActive] = useState<OpportunityType>("grant");
 

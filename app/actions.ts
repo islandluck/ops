@@ -300,8 +300,9 @@ import {
 } from "@/lib/agents/executive";
 import type { ExecImage } from "@/lib/ai/executive";
 import { computeKpiTrends } from "@/lib/executive/kpis";
-import type { BillingState, KpiTrendSeries } from "@/lib/types";
+import type { BillingState, EntitlementView, KpiTrendSeries } from "@/lib/types";
 import { getBillingState, isWorkspaceOwner, openPortal, startCheckout } from "@/lib/billing/service";
+import { ALL_FEATURES, getEntitlement } from "@/lib/billing/entitlements";
 import type { PlanTier } from "@/lib/billing/plans";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
@@ -1444,6 +1445,22 @@ export async function startSubscriptionCheckoutAction(
     return { ok: false, error: "Only the workspace owner can manage billing." };
   }
   return startCheckout(ws, tier, { email: user.email ?? "", name: displayName(user) });
+}
+
+/** What the current workspace can use — drives client-side gates + the trial banner. */
+export async function getEntitlementAction(): Promise<EntitlementView | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    const e = await getEntitlement(ws);
+    const can: Record<string, boolean> = {};
+    for (const f of ALL_FEATURES) can[f] = e.canUse(f);
+    return { effectiveTier: e.effectiveTier, enforced: e.enforced, trialing: e.trialing, trialEndsAt: e.trialEndsAt, can };
+  } catch {
+    return null;
+  }
 }
 
 /** Open the Stripe Billing Portal (manage / cancel). Owner-only. */
