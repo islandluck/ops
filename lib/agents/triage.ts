@@ -13,6 +13,7 @@ import {
   tasks,
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { scopeFilter } from "@/lib/access/scope";
 import { getMessageDetail, listInboxMessages, type GmailMessage } from "@/lib/integrations/google";
 import { triageEmails } from "@/lib/ai/triage";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -89,16 +90,21 @@ function withSignature(reply: string, signature: string): string {
 function triageAndStore(
   workspaceId: string,
   emails: GmailMessage[],
+  scopeUserId: string | null = null,
 ): Promise<{ replyDrafts: number; actionTasks: number }> {
-  return runWithUsage(workspaceId, "email-triage", () => _triageAndStore(workspaceId, emails));
+  return runWithUsage(workspaceId, "email-triage", () => _triageAndStore(workspaceId, emails, scopeUserId));
 }
 async function _triageAndStore(
   workspaceId: string,
   emails: GmailMessage[],
+  scopeUserId: string | null = null,
 ): Promise<{ replyDrafts: number; actionTasks: number }> {
   const now = new Date();
   const { brief } = await getPlanningContext(workspaceId);
-  const { signature, replyStyle } = await getEmailStyle(workspaceId);
+  // A member's inbox uses default voice (no shared owner signature/style).
+  const { signature, replyStyle } = scopeUserId
+    ? { signature: "", replyStyle: "" }
+    : await getEmailStyle(workspaceId);
 
   const triaged = await triageEmails(emails, brief, { replyStyle });
 
@@ -137,6 +143,7 @@ async function _triageAndStore(
       .values({
         id: randomUUID(),
         workspace_id: workspaceId,
+        member_user_id: scopeUserId,
         gmail_message_id: e.id,
         thread_id: e.threadId,
         source_message_id: e.messageId,
@@ -163,6 +170,7 @@ async function _triageAndStore(
       await db.insert(tasks).values({
         id: actionId,
         workspace_id: workspaceId,
+        member_user_id: scopeUserId,
         category: t.task_department,
         title: t.task_title.slice(0, 120),
         description: t.task_detail || t.summary,
@@ -193,17 +201,19 @@ async function _triageAndStore(
     }
   }
 
-  // Audit + agent stats.
-  await db.insert(activityEvents).values({
-    id: randomUUID(),
-    workspace_id: workspaceId,
-    task_id: null,
-    event_type: "agent_updated_draft",
-    actor_type: "agent",
-    actor_id: adminId ?? "sys",
-    summary: `${adminName} triaged ${emails.length} email${emails.length === 1 ? "" : "s"} — ${replyDrafts} reply draft${replyDrafts === 1 ? "" : "s"} + ${actionTasks} task${actionTasks === 1 ? "" : "s"} prepared.`,
-    created_at: now,
-  });
+  // Audit + agent stats. Activity is an owner-plane surface — skip for members.
+  if (!scopeUserId) {
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: null,
+      event_type: "agent_updated_draft",
+      actor_type: "agent",
+      actor_id: adminId ?? "sys",
+      summary: `${adminName} triaged ${emails.length} email${emails.length === 1 ? "" : "s"} — ${replyDrafts} reply draft${replyDrafts === 1 ? "" : "s"} + ${actionTasks} task${actionTasks === 1 ? "" : "s"} prepared.`,
+      created_at: now,
+    });
+  }
   if (admin) {
     await db
       .update(agents)
@@ -228,18 +238,25 @@ async function _triageAndStore(
 export async function triageMessages(
   workspaceId: string,
   messageIds: string[],
+  scopeUserId: string | null = null,
 ): Promise<TriageResult> {
   const ids = [...new Set(messageIds)].filter(Boolean);
   if (!ids.length) return { ok: true, triaged: 0, replyDrafts: 0, actionTasks: 0 };
 
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected. Connect it in Integrations first." };
 
-  // Dedup: only triage messages we haven't triaged before.
+  // Dedup: only triage messages we haven't triaged before (within this plane).
   const seenRows = await db
     .select({ mid: emailTriage.gmail_message_id })
     .from(emailTriage)
-    .where(and(eq(emailTriage.workspace_id, workspaceId), inArray(emailTriage.gmail_message_id, ids)));
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        inArray(emailTriage.gmail_message_id, ids),
+      ),
+    );
   const seen = new Set(seenRows.map((r) => r.mid));
   const fresh = ids.filter((id) => !seen.has(id));
   if (!fresh.length) return { ok: true, triaged: 0, replyDrafts: 0, actionTasks: 0 };
@@ -255,7 +272,7 @@ export async function triageMessages(
 
   let out: { replyDrafts: number; actionTasks: number };
   try {
-    out = await triageAndStore(workspaceId, emails);
+    out = await triageAndStore(workspaceId, emails, scopeUserId);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Triage failed." };
   }
@@ -267,8 +284,11 @@ export async function triageMessages(
  * TRIAGE_MAX at a time, then post a summary to the Executive. Safe to call from the
  * cron (the Admin agent's background job).
  */
-export async function runEmailTriage(workspaceId: string): Promise<TriageResult> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+export async function runEmailTriage(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<TriageResult> {
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected. Connect it in Integrations first." };
 
   let emails: GmailMessage[];
@@ -282,7 +302,7 @@ export async function runEmailTriage(workspaceId: string): Promise<TriageResult>
     const seenRows = await db
       .select({ mid: emailTriage.gmail_message_id })
       .from(emailTriage)
-      .where(eq(emailTriage.workspace_id, workspaceId));
+      .where(and(eq(emailTriage.workspace_id, workspaceId), scopeFilter(emailTriage.member_user_id, scopeUserId)));
     const seen = new Set(seenRows.map((r) => r.mid));
     const fresh = candidates.filter((m) => !seen.has(m.id));
     const batch = fresh.slice(0, TRIAGE_MAX);
@@ -297,13 +317,13 @@ export async function runEmailTriage(workspaceId: string): Promise<TriageResult>
 
   let out: { replyDrafts: number; actionTasks: number };
   try {
-    out = await triageAndStore(workspaceId, emails);
+    out = await triageAndStore(workspaceId, emails, scopeUserId);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Triage failed." };
   }
 
-  // Keep the Executive in the loop automatically on the background path.
-  await summarizeInboxToExecutive(workspaceId).catch(() => {});
+  // Keep the Executive in the loop automatically on the OWNER's background path only.
+  if (!scopeUserId) await summarizeInboxToExecutive(workspaceId).catch(() => {});
 
   return { ok: true, triaged: emails.length, replyDrafts: out.replyDrafts, actionTasks: out.actionTasks, remaining };
 }

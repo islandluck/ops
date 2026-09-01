@@ -50,6 +50,7 @@ import {
   workspaceIdForUser,
   getUserRoleInWorkspace,
 } from "@/lib/db/queries";
+import { getViewer } from "@/lib/access/viewer";
 import {
   deleteImageAt,
   IMAGE_MIME_TYPES,
@@ -214,6 +215,7 @@ import {
   listTeamMembers,
   sendChatMessage,
   setMemberOrg,
+  setMemberPageAccess,
   setMyGoalStatus,
   updateAssignment,
   updateHumanProject,
@@ -459,7 +461,9 @@ export async function disconnectIntegrationAction(
   if (!user) return { ok: false };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
-  await clearIntegration(ws, integrationId);
+  // Operator Lite: a member only ever disconnects their OWN connection.
+  const { scopeUserId } = await getViewer(user.id, ws);
+  await clearIntegration(ws, integrationId, scopeUserId);
   return { ok: true };
 }
 
@@ -471,7 +475,8 @@ export async function setIntegrationModeAction(
   if (!user) return { ok: false };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
-  await setIntegrationPermissionMode(ws, integrationId, mode);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  await setIntegrationPermissionMode(ws, integrationId, mode, scopeUserId);
   return { ok: true };
 }
 
@@ -637,7 +642,8 @@ export async function listNotesAction(): Promise<Note[]> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return [];
   try {
-    return await listNotesForUser(ws);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await listNotesForUser(ws, scopeUserId);
   } catch {
     return [];
   }
@@ -649,7 +655,8 @@ export async function createNoteAction(): Promise<Note | null> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   try {
-    return await createNoteForUser(ws);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await createNoteForUser(ws, scopeUserId);
   } catch {
     return null;
   }
@@ -664,7 +671,8 @@ export async function updateNoteAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   try {
-    await updateNoteForUser(ws, id, patch);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    await updateNoteForUser(ws, id, patch, scopeUserId);
     return { ok: true };
   } catch {
     return { ok: false };
@@ -677,7 +685,8 @@ export async function deleteNoteAction(id: string): Promise<{ ok: boolean }> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
   try {
-    await deleteNoteForUser(ws, id);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    await deleteNoteForUser(ws, id, scopeUserId);
     return { ok: true };
   } catch {
     return { ok: false };
@@ -873,6 +882,9 @@ export async function createProjectAction(
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
+  // Operator Lite: members work on projects assigned to them; the owner spins up
+  // new workspace projects.
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can start new projects." };
   return createProject(ws, goal, ownerKind);
 }
 
@@ -957,6 +969,8 @@ export async function getProjectsAction(): Promise<Project[]> {
   if (!user) return [];
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return [];
+  // Operator Lite: a member sees only the projects assigned to them.
+  if ((await getViewer(user.id, ws)).isMember) return listAssignedProjects(ws, user.id);
   return listProjects(ws);
 }
 
@@ -965,6 +979,11 @@ export async function getProjectAction(projectId: string): Promise<Project | nul
   if (!user) return null;
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
+  // Members can only open a project assigned to them.
+  if ((await getViewer(user.id, ws)).isMember) {
+    const mine = await listAssignedProjects(ws, user.id);
+    return mine.find((p) => p.id === projectId) ?? null;
+  }
   return getProject(ws, projectId);
 }
 
@@ -2193,7 +2212,8 @@ export async function runEmailTriageAction(): Promise<TriageResult> {
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return runEmailTriage(ws);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return runEmailTriage(ws, scopeUserId);
 }
 
 /** Run Notion triage now — read shared Notion pages and turn action items into tasks. */
@@ -2218,7 +2238,8 @@ export async function getEmailManagerAction(
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { error: "No workspace." };
   try {
-    return await getEmailManagerState(ws, pageToken, categories);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await getEmailManagerState(ws, pageToken, categories, scopeUserId);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your inbox." };
   }
@@ -2230,7 +2251,8 @@ export async function triageEmailsAction(messageIds: string[]): Promise<TriageRe
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return triageMessages(ws, messageIds);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return triageMessages(ws, messageIds, scopeUserId);
 }
 
 /** Fetch one email's full body for the reader pane. */
@@ -2239,7 +2261,8 @@ export async function getEmailBodyAction(messageId: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return getEmailBody(ws, messageId);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return getEmailBody(ws, messageId, scopeUserId);
 }
 
 /** Save the user's edits to a drafted reply. */
@@ -2248,7 +2271,8 @@ export async function saveEmailDraftAction(messageId: string, draft: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return saveEmailDraft(ws, messageId, draft);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return saveEmailDraft(ws, messageId, draft, scopeUserId);
 }
 
 /** Send the drafted reply in-thread, then mark it sent. */
@@ -2257,7 +2281,8 @@ export async function sendEmailReplyAction(messageId: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return sendEmailReply(ws, messageId);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return sendEmailReply(ws, messageId, scopeUserId);
 }
 
 /** Archive an email — removes it from the inbox. */
@@ -2266,7 +2291,8 @@ export async function archiveEmailAction(messageId: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return archiveEmail(ws, messageId);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return archiveEmail(ws, messageId, scopeUserId);
 }
 
 /** Move an email to Trash — recoverable in Gmail for 30 days, not a permanent delete. */
@@ -2275,15 +2301,17 @@ export async function trashEmailAction(messageId: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return trashEmail(ws, messageId);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return trashEmail(ws, messageId, scopeUserId);
 }
 
-/** Push the recent triage summary into the Executive's memory. */
+/** Push the recent triage summary into the Executive's memory. Owner-only. */
 export async function sendInboxSummaryToExecutiveAction(): Promise<InboxSummaryResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Not available for team members." };
   return summarizeInboxToExecutive(ws);
 }
 
@@ -2293,17 +2321,19 @@ export async function saveEmailSettingsAction(settings: EmailSettings) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return saveEmailSettings(ws, settings);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return saveEmailSettings(ws, settings, scopeUserId);
 }
 
 /* ----------------------- outbound email composer ------------------------ */
 
-/** Draft one email per instruction (single or bulk) for review. */
+/** Draft one email per instruction (single or bulk) for review. Owner-only for now. */
 export async function composeOutboundDraftsAction(intents: string[]) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "The outbound composer isn't available for team members yet." };
   return composeOutboundDrafts(ws, intents);
 }
 
@@ -2313,10 +2343,11 @@ export async function listOutboundDraftsAction() {
   if (!user) return [];
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return [];
-  return listOutboundDrafts(ws);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return listOutboundDrafts(ws, scopeUserId);
 }
 
-/** Edit a draft's recipient / cc / bcc / subject / body before sending. */
+/** Edit a draft's recipient / cc / bcc / subject / body before sending. Owner-only for now. */
 export async function updateOutboundDraftAction(
   id: string,
   patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string },
@@ -2325,24 +2356,27 @@ export async function updateOutboundDraftAction(
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return updateOutboundDraft(ws, id, patch);
 }
 
-/** Schedule a draft to auto-send at a future time. */
+/** Schedule a draft to auto-send at a future time. Owner-only for now. */
 export async function scheduleOutboundDraftAction(id: string, whenISO: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return scheduleOutboundDraft(ws, id, whenISO);
 }
 
-/** Cancel a scheduled send. */
+/** Cancel a scheduled send. Owner-only for now. */
 export async function unscheduleOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return unscheduleOutboundDraft(ws, id);
 }
 
@@ -2353,6 +2387,8 @@ export async function flushDueOutboundDraftsAction() {
   if (!user) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
+  // Owner-plane only — a member polling must never flush the owner's scheduled sends.
+  if ((await getViewer(user.id, ws)).isMember) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
   return flushDueOutboundDrafts(ws);
 }
 
@@ -2546,48 +2582,53 @@ export async function resetBoardMemberAction(memberId: string) {
   return resetBoardMember(ws, memberId);
 }
 
-/** Send one outbound draft now. */
+/** Send one outbound draft now. Owner-only for now. */
 export async function sendOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return sendOutboundDraft(ws, id);
 }
 
-/** Send several outbound drafts at once. */
+/** Send several outbound drafts at once. Owner-only for now. */
 export async function bulkSendOutboundDraftsAction(ids: string[]) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return bulkSendOutboundDrafts(ws, ids);
 }
 
-/** Refine one draft per a short instruction (warmer / shorter / custom). */
+/** Refine one draft per a short instruction (warmer / shorter / custom). Owner-only for now. */
 export async function refineOutboundDraftAction(id: string, instruction: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return refineOutboundDraft(ws, id, instruction);
 }
 
-/** Re-draft one email from its original instruction. */
+/** Re-draft one email from its original instruction. Owner-only for now. */
 export async function regenerateOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return regenerateOutboundDraft(ws, id);
 }
 
-/** Discard an outbound draft. */
+/** Discard an outbound draft. Owner-only for now. */
 export async function discardOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return discardOutboundDraft(ws, id);
 }
 
@@ -2597,7 +2638,8 @@ export async function checkInboxNowAction(): Promise<TriageResult> {
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return runEmailTriage(ws);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return runEmailTriage(ws, scopeUserId);
 }
 
 /** Bulk-send the given drafted replies (all ready, or the checked subset). */
@@ -2606,7 +2648,8 @@ export async function bulkSendRepliesAction(messageIds: string[]) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return bulkSendReplies(ws, messageIds);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return bulkSendReplies(ws, messageIds, scopeUserId);
 }
 
 /** The review queue — all triaged emails with a ready draft to approve + send. */
@@ -2616,7 +2659,8 @@ export async function getDraftQueueAction(): Promise<{ items: EmailListItem[] } 
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { error: "No workspace." };
   try {
-    return { items: await listDraftQueue(ws) };
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return { items: await listDraftQueue(ws, scopeUserId) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your drafts." };
   }
@@ -2629,7 +2673,8 @@ export async function getAttentionQueueAction(): Promise<{ items: EmailListItem[
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { error: "No workspace." };
   try {
-    return { items: await listAttentionQueue(ws) };
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return { items: await listAttentionQueue(ws, scopeUserId) };
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load these emails." };
   }
@@ -2641,7 +2686,8 @@ export async function bulkArchiveAction(messageIds: string[]) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return bulkArchive(ws, messageIds);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return bulkArchive(ws, messageIds, scopeUserId);
 }
 
 /** Learn the founder's signature + reply style from their recent Sent mail (to review + save). */
@@ -2650,7 +2696,8 @@ export async function learnEmailStyleAction() {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return learnEmailStyleFromSent(ws);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return learnEmailStyleFromSent(ws, scopeUserId);
 }
 
 /* --------------------------- Operator (admin) ----------------------------- */
@@ -2676,7 +2723,8 @@ export async function getCommandCenterAction(): Promise<CommandCenterDoc | { err
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { error: "No workspace." };
   try {
-    return await getCommandCenterDoc(ws);
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await getCommandCenterDoc(ws, scopeUserId);
   } catch (e) {
     return { error: e instanceof Error ? e.message : "Couldn't load your Command Center." };
   }
@@ -2688,33 +2736,37 @@ export async function saveCommandCenterAction(doc: CommandCenterDoc) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  return saveCommandCenterDoc(ws, doc);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return saveCommandCenterDoc(ws, doc, scopeUserId);
 }
 
-/** Push the current goals into the Executive's memory, on command. */
+/** Push the current goals into the Executive's memory, on command. Owner-only. */
 export async function sendGoalsToExecutiveAction() {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return sendGoalsToExecutive(ws);
 }
 
-/** Ask the Executive to propose goals from the business context (user accepts what they want). */
+/** Ask the Executive to propose goals from the business context (user accepts what they want). Owner-only. */
 export async function suggestGoalsAction() {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return suggestGoals(ws);
 }
 
-/** Send the current goals into the Deep Dive pipeline as a source (updates company knowledge). */
+/** Send the current goals into the Deep Dive pipeline as a source (updates company knowledge). Owner-only. */
 export async function sendGoalsToDeepDiveAction() {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   return sendGoalsToDeepDive(ws);
 }
 
@@ -3247,6 +3299,21 @@ export async function deleteTeamMemberAction(id: string) {
     return await deleteTeamMember(ws, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't remove the member." };
+  }
+}
+
+/** Operator Lite: set which app pages a team member can open. Owner-only. */
+export async function setMemberPageAccessAction(id: string, pages: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  const role = await getWorkspaceRole(ws, user.id);
+  if (role !== "owner") return { ok: false as const, error: "Only the workspace owner can set page access." };
+  try {
+    return await setMemberPageAccess(ws, id, pages);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update page access." };
   }
 }
 
@@ -4223,6 +4290,8 @@ export async function routeDailyGoalAction(text: string) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  // Owner-only: this routes into the Executive (an owner surface).
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   const clean = text.trim();
   if (!clean) return { ok: false as const, error: "Nothing to send." };
   try {
@@ -4250,6 +4319,7 @@ export async function uploadOutboundAttachmentAction(draftId: string, formData: 
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
   const file = formData.get("file");
   if (!(file instanceof File)) return { ok: false as const, error: "No file provided." };
   if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false as const, error: "File is too large (max 15 MB)." };
@@ -4268,6 +4338,7 @@ export async function removeOutboundAttachmentAction(draftId: string, attachment
   if (!user) return { ok: false as const };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const };
   try {
     return await removeOutboundAttachment(ws, draftId, attachmentId);
   } catch {

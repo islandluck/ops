@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, hasSupabaseClientEnv } from "@/lib/config";
+import { MEMBER_NEVER_KEYS } from "@/lib/access/pages";
 
 const PROTECTED_PREFIXES = [
   "/admin",
@@ -58,9 +59,12 @@ export async function updateSession(request: NextRequest) {
   const isOnboarding = path.startsWith("/onboarding");
   // Onboarding state lives in the Supabase user's metadata so it's readable here
   // (getUser() returns fresh metadata) without a per-request DB round-trip.
-  const meta = user?.user_metadata as { onboarded?: boolean; pending_invite?: boolean } | undefined;
+  const meta = user?.user_metadata as
+    | { onboarded?: boolean; pending_invite?: boolean; member?: boolean }
+    | undefined;
   const onboarded = Boolean(meta?.onboarded);
   const pendingInvite = Boolean(meta?.pending_invite);
+  const isMember = Boolean(meta?.member);
 
   // Not signed in → gate protected routes.
   if (!user && isProtected) {
@@ -74,6 +78,17 @@ export async function updateSession(request: NextRequest) {
   if (user && pendingInvite && !path.startsWith("/invite") && !isAuthPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/invite/accept";
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
+
+  // Operator Lite: a team member can never reach the owner-only surfaces
+  // (Executive, Business brief, Activity log, Billing) — they hold the owner's
+  // private plane. Fast static gate from the session metadata (no DB round-trip);
+  // the authoritative check is a server guard on each of those routes.
+  if (user && isMember && MEMBER_NEVER_KEYS.some((k) => path === k || path.startsWith(k + "/"))) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/today";
     url.search = "";
     return NextResponse.redirect(url);
   }

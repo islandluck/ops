@@ -5,6 +5,7 @@ import { and, eq, like } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, commandCenter, executiveMemory, projects } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
+import { scopeFilter } from "@/lib/access/scope";
 import { runWithUsage } from "@/lib/ai/usage";
 import { proposeGoals } from "@/lib/ai/goals";
 import { startDeepDive } from "@/lib/agents/deepdive";
@@ -26,21 +27,38 @@ export function emptyCommandCenterDoc(): CommandCenterDoc {
   };
 }
 
-export async function getCommandCenterDoc(workspaceId: string): Promise<CommandCenterDoc> {
+export async function getCommandCenterDoc(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<CommandCenterDoc> {
   const [row] = await db
     .select({ doc: commandCenter.doc })
     .from(commandCenter)
-    .where(eq(commandCenter.workspace_id, workspaceId))
+    .where(and(eq(commandCenter.workspace_id, workspaceId), scopeFilter(commandCenter.member_user_id, scopeUserId)))
     .limit(1);
   return row?.doc ?? emptyCommandCenterDoc();
 }
 
-export async function saveCommandCenterDoc(workspaceId: string, doc: CommandCenterDoc): Promise<{ ok: true }> {
+export async function saveCommandCenterDoc(
+  workspaceId: string,
+  doc: CommandCenterDoc,
+  scopeUserId: string | null = null,
+): Promise<{ ok: true }> {
   const now = new Date();
-  await db
-    .insert(commandCenter)
-    .values({ id: randomUUID(), workspace_id: workspaceId, doc, updated_at: now })
-    .onConflictDoUpdate({ target: commandCenter.workspace_id, set: { doc, updated_at: now } });
+  // One doc per (workspace, plane). Partial unique indexes make onConflict awkward,
+  // so upsert by hand within the plane.
+  const [existing] = await db
+    .select({ id: commandCenter.id })
+    .from(commandCenter)
+    .where(and(eq(commandCenter.workspace_id, workspaceId), scopeFilter(commandCenter.member_user_id, scopeUserId)))
+    .limit(1);
+  if (existing) {
+    await db.update(commandCenter).set({ doc, updated_at: now }).where(eq(commandCenter.id, existing.id));
+  } else {
+    await db
+      .insert(commandCenter)
+      .values({ id: randomUUID(), workspace_id: workspaceId, member_user_id: scopeUserId, doc, updated_at: now });
+  }
   return { ok: true };
 }
 

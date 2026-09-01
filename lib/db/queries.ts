@@ -27,6 +27,8 @@ import { hasAnthropicKey } from "@/lib/config";
 import { isProviderConfigured, providerForIntegrationName } from "@/lib/integrations/registry";
 import { getCrmContext } from "@/lib/integrations/hubspot";
 import { getCalendarContext } from "@/lib/integrations/google";
+import { getViewer, type Viewer } from "@/lib/access/viewer";
+import { scopeFilter } from "@/lib/access/scope";
 import type {
   ActivityEvent,
   Agent,
@@ -190,7 +192,11 @@ export async function loadBundleForUser(
 ): Promise<AppState> {
   await ensureProfile(userId, email, fullName);
   const wsId = await getOrCreateWorkspace(userId);
-  return readBundle(wsId, fullName, email, onboarded);
+  // Operator Lite: the viewer decides the data plane. The owner sees their own
+  // plane (member_user_id IS NULL); a member sees only their own slice. Derived
+  // server-side from the session — never trusted from the client.
+  const viewer = await getViewer(userId, wsId);
+  return readBundle(wsId, fullName, email, onboarded, viewer);
 }
 
 async function readBundle(
@@ -198,7 +204,10 @@ async function readBundle(
   fullName: string,
   email: string,
   onboarded: boolean,
+  viewer: Viewer,
 ): Promise<AppState> {
+  const scope = viewer.scopeUserId; // null = owner plane, id = member plane
+  const isMember = viewer.isMember;
   // The bundle read used to be ~11 sequential round trips to the remote DB
   // (seconds per load — and loads run constantly). Batch the independent reads,
   // and fold in the wedged-task heal:
@@ -212,13 +221,17 @@ async function readBundle(
     db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1),
     db.select().from(businessBriefs).where(eq(businessBriefs.workspace_id, wsId)).limit(1),
     db.select().from(agents).where(eq(agents.workspace_id, wsId)),
-    db.select().from(integrations).where(eq(integrations.workspace_id, wsId)),
+    db
+      .select()
+      .from(integrations)
+      .where(and(eq(integrations.workspace_id, wsId), scopeFilter(integrations.member_user_id, scope))),
     db
       .update(tasks)
       .set({ status: "ready", approval_status: "pending", execution_status: "none", updated_at: new Date() })
       .where(
         and(
           eq(tasks.workspace_id, wsId),
+          scopeFilter(tasks.member_user_id, scope),
           isNotNull(tasks.project_id),
           eq(tasks.execution_status, "executing"),
           ne(tasks.status, "done"),
@@ -231,6 +244,7 @@ async function readBundle(
       .where(
         and(
           eq(tasks.workspace_id, wsId),
+          scopeFilter(tasks.member_user_id, scope),
           isNotNull(tasks.project_id),
           eq(tasks.execution_status, "executing"),
           eq(tasks.status, "done"),
@@ -245,6 +259,7 @@ async function readBundle(
       .where(
         and(
           eq(tasks.workspace_id, wsId),
+          scopeFilter(tasks.member_user_id, scope),
           isNotNull(tasks.project_id),
           eq(tasks.status, "agent_working"),
           lt(tasks.updated_at, staleExec),
@@ -254,35 +269,69 @@ async function readBundle(
   const [wsRow] = wsRows;
   const [briefRow] = briefRows;
 
-  // Backfill integration rows added to the catalog after this workspace was
-  // seeded (Zoom, Slack), so newly-supported integrations show up + can store
-  // tokens without a re-seed. Cheap: only inserts the first time each is missing.
-  const CATALOG_BACKFILL: { name: string; provider: string }[] = [
-    { name: "Zoom", provider: "Zoom" },
-    { name: "Slack", provider: "Slack" },
-  ];
-  const haveNames = new Set(integrationRows.map((r) => r.name));
-  const toAdd = CATALOG_BACKFILL.filter((c) => !haveNames.has(c.name));
-  if (toAdd.length) {
-    const inserted = await db
-      .insert(integrations)
-      .values(
-        toAdd.map((c) => ({
-          id: uid(),
-          workspace_id: wsId,
-          name: c.name,
-          provider: c.provider,
-          category: "other" as const,
-          connected: false,
-          permission_mode: "approval" as const,
-          optional: true,
-        })),
-      )
-      .returning();
-    integrationRows.push(...inserted);
+  if (isMember) {
+    // A member connects their OWN accounts. The first time they load, clone the
+    // owner's connectable catalog into their plane (own connection state + tokens,
+    // never the owner's) so they have the same providers to connect.
+    if (!integrationRows.length) {
+      const ownerCatalog = await db
+        .select()
+        .from(integrations)
+        .where(and(eq(integrations.workspace_id, wsId), scopeFilter(integrations.member_user_id, null)));
+      if (ownerCatalog.length) {
+        const inserted = await db
+          .insert(integrations)
+          .values(
+            ownerCatalog.map((o) => ({
+              id: uid(),
+              workspace_id: wsId,
+              member_user_id: scope!,
+              name: o.name,
+              provider: o.provider,
+              category: o.category,
+              connected: false,
+              permission_mode: o.permission_mode,
+              optional: o.optional,
+            })),
+          )
+          .returning();
+        integrationRows.push(...inserted);
+      }
+    }
+  } else {
+    // Owner: backfill integration rows added to the catalog after this workspace
+    // was seeded (Zoom, Slack), so newly-supported integrations show up + can
+    // store tokens without a re-seed. Cheap: only inserts the first time missing.
+    const CATALOG_BACKFILL: { name: string; provider: string }[] = [
+      { name: "Zoom", provider: "Zoom" },
+      { name: "Slack", provider: "Slack" },
+    ];
+    const haveNames = new Set(integrationRows.map((r) => r.name));
+    const toAdd = CATALOG_BACKFILL.filter((c) => !haveNames.has(c.name));
+    if (toAdd.length) {
+      const inserted = await db
+        .insert(integrations)
+        .values(
+          toAdd.map((c) => ({
+            id: uid(),
+            workspace_id: wsId,
+            name: c.name,
+            provider: c.provider,
+            category: "other" as const,
+            connected: false,
+            permission_mode: "approval" as const,
+            optional: true,
+          })),
+        )
+        .returning();
+      integrationRows.push(...inserted);
+    }
   }
 
-  const taskRows = await db.select().from(tasks).where(eq(tasks.workspace_id, wsId));
+  const taskRows = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, wsId), scopeFilter(tasks.member_user_id, scope)));
   const taskIds = taskRows.map((t) => t.id);
   const taskIdSet = new Set(taskIds);
   const [assetRows, decisionRows, runRows, activityRows, documentRows] = await Promise.all([
@@ -295,7 +344,9 @@ async function readBundle(
       .select()
       .from(executionRuns)
       .where(taskIds.length ? inArray(executionRuns.task_id, taskIds) : sql`false`),
-    db.select().from(activityEvents).where(eq(activityEvents.workspace_id, wsId)),
+    // The activity log is an owner-only surface — never hand a member the
+    // workspace's activity stream (it narrates the owner's plane).
+    db.select().from(activityEvents).where(isMember ? sql`false` : eq(activityEvents.workspace_id, wsId)),
     db
       .select()
       .from(documents)
@@ -498,6 +549,11 @@ async function readBundle(
       user_email: email,
       ai_enabled: hasAnthropicKey(),
     },
+    viewer: {
+      isOwner: viewer.isOwner,
+      isMember: viewer.isMember,
+      allowedPages: viewer.allowedPages,
+    },
   };
 }
 
@@ -510,6 +566,17 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
   if (!wsId) throw new Error("No workspace for user");
 
   const d = (s: string | null | undefined) => (s ? new Date(s) : null);
+
+  // Operator Lite: a member's client bundle represents their OWN plane only. The
+  // whole-bundle save is a workspace-wide delete+reinsert — for a member that
+  // would wipe the OWNER's tasks. So a member save touches ONLY their own task
+  // slice and never shared/owner rows (agents, brief, workspace, integrations,
+  // activity). Derived server-side from the session, never from the client.
+  const viewer = await getViewer(userId, wsId);
+  if (viewer.isMember) {
+    await saveMemberBundle(wsId, viewer.scopeUserId!, state, d);
+    return;
+  }
 
   await db.transaction(async (tx) => {
     await tx
@@ -539,10 +606,11 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
     // from the bundle AND were created in the last 10 minutes.
     const bundleTaskIds = new Set(state.tasks.map((t) => t.id));
     const recentCutoff = new Date(Date.now() - 10 * 60 * 1000);
+    // Owner-plane only: the owner's save must never delete a member's tasks.
     const wsTasks = await tx
       .select({ id: tasks.id, project_id: tasks.project_id, created_at: tasks.created_at })
       .from(tasks)
-      .where(eq(tasks.workspace_id, wsId));
+      .where(and(eq(tasks.workspace_id, wsId), scopeFilter(tasks.member_user_id, null)));
     const deletableIds = wsTasks
       .filter((t) => bundleTaskIds.has(t.id) || !t.project_id || t.created_at <= recentCutoff)
       .map((t) => t.id);
@@ -617,6 +685,7 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
         state.tasks.map((t) => ({
           id: t.id,
           workspace_id: wsId,
+          member_user_id: null,
           category: t.category,
           title: t.title,
           description: t.description,
@@ -699,6 +768,109 @@ export async function saveBundleForUser(userId: string, state: AppState): Promis
   });
 }
 
+/**
+ * Operator Lite: persist a MEMBER's bundle — their own task plane only. Mirrors
+ * the task half of the owner save (delete-by-omission with the recent-project
+ * guard, then reinsert), scoped to member_user_id = the member. Deliberately does
+ * NOT touch agents, brief, workspace, integrations, or activity — those are shared
+ * or owner-owned, and a member's client must never be able to replace them.
+ */
+async function saveMemberBundle(
+  wsId: string,
+  memberId: string,
+  state: AppState,
+  d: (s: string | null | undefined) => Date | null,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const bundleTaskIds = new Set(state.tasks.map((t) => t.id));
+    const recentCutoff = new Date(Date.now() - 10 * 60 * 1000);
+    const memberTasks = await tx
+      .select({ id: tasks.id, project_id: tasks.project_id, created_at: tasks.created_at })
+      .from(tasks)
+      .where(and(eq(tasks.workspace_id, wsId), eq(tasks.member_user_id, memberId)));
+    const deletableIds = memberTasks
+      .filter((t) => bundleTaskIds.has(t.id) || !t.project_id || t.created_at <= recentCutoff)
+      .map((t) => t.id);
+    if (deletableIds.length) {
+      await tx.delete(executionRuns).where(inArray(executionRuns.task_id, deletableIds));
+      await tx.delete(approvalDecisions).where(inArray(approvalDecisions.task_id, deletableIds));
+      await tx.delete(taskAssets).where(inArray(taskAssets.task_id, deletableIds));
+      await tx.delete(tasks).where(inArray(tasks.id, deletableIds));
+    }
+
+    if (state.tasks.length)
+      await tx.insert(tasks).values(
+        state.tasks.map((t) => ({
+          id: t.id,
+          workspace_id: wsId,
+          member_user_id: memberId,
+          category: t.category,
+          title: t.title,
+          description: t.description,
+          rationale: t.rationale,
+          status: t.status,
+          risk_level: t.risk_level,
+          priority: t.priority,
+          due_at: d(t.due_at),
+          scheduled_at: d(t.scheduled_at ?? null),
+          project_id: t.project_id ?? null,
+          project_phase: t.project_phase ?? null,
+          project_step_kind: t.project_step_kind ?? null,
+          agent_id: t.agent_id || null,
+          created_by_type: t.created_by_type,
+          requires_approval: t.requires_approval,
+          approval_status: t.approval_status,
+          execution_status: t.execution_status,
+          affected_systems: t.affected_systems,
+          proposed_actions: t.proposed_actions,
+          impact_score: t.impact_score,
+          archived: t.archived ?? false,
+          created_at: d(t.created_at) ?? new Date(),
+          updated_at: new Date(),
+        })),
+      );
+
+    const assets = state.tasks.flatMap((t) =>
+      t.assets.map((a) => ({
+        id: a.id,
+        task_id: t.id,
+        asset_type: a.asset_type,
+        title: a.title,
+        content: a.content,
+        metadata: a.metadata ?? null,
+      })),
+    );
+    if (assets.length) await tx.insert(taskAssets).values(assets);
+
+    if (state.decisions.length)
+      await tx.insert(approvalDecisions).values(
+        state.decisions.map((dec) => ({
+          id: dec.id,
+          task_id: dec.task_id,
+          decided_by: dec.decided_by,
+          decision_type: dec.decision_type,
+          comment: dec.comment ?? null,
+          created_at: d(dec.created_at) ?? new Date(),
+        })),
+      );
+
+    if (state.runs.length)
+      await tx.insert(executionRuns).values(
+        state.runs.map((r) => ({
+          id: r.id,
+          task_id: r.task_id,
+          started_at: d(r.started_at) ?? new Date(),
+          completed_at: d(r.completed_at),
+          status: r.status,
+          error_message: r.error_message ?? null,
+          affected_systems: r.affected_systems,
+          result_summary: r.result_summary ?? null,
+          steps: r.steps,
+        })),
+      );
+  });
+}
+
 /** Wipe the workspace's data and re-seed it fresh. */
 export async function resetBundleForUser(
   userId: string,
@@ -733,7 +905,9 @@ export async function resetBundleForUser(
     if (rows.activity.length) await tx.insert(activityEvents).values(rows.activity);
   });
 
-  return readBundle(wsId, fullName, email, onboarded);
+  // Reset is an owner-only action; read back on the owner plane.
+  const viewer = await getViewer(userId, wsId);
+  return readBundle(wsId, fullName, email, onboarded, viewer);
 }
 
 /**
@@ -1017,19 +1191,19 @@ function toNote(r: typeof notes.$inferSelect): Note {
   };
 }
 
-export async function listNotesForUser(wsId: string): Promise<Note[]> {
+export async function listNotesForUser(wsId: string, scopeUserId: string | null = null): Promise<Note[]> {
   const rows = await db
     .select()
     .from(notes)
-    .where(eq(notes.workspace_id, wsId))
+    .where(and(eq(notes.workspace_id, wsId), scopeFilter(notes.member_user_id, scopeUserId)))
     .orderBy(desc(notes.updated_at));
   return rows.map(toNote);
 }
 
-export async function createNoteForUser(wsId: string): Promise<Note> {
+export async function createNoteForUser(wsId: string, scopeUserId: string | null = null): Promise<Note> {
   const [row] = await db
     .insert(notes)
-    .values({ workspace_id: wsId, title: "", content: "" })
+    .values({ workspace_id: wsId, member_user_id: scopeUserId, title: "", content: "" })
     .returning();
   return toNote(row);
 }
@@ -1038,6 +1212,7 @@ export async function updateNoteForUser(
   wsId: string,
   noteId: string,
   patch: { title?: string; content?: string },
+  scopeUserId: string | null = null,
 ): Promise<void> {
   await db
     .update(notes)
@@ -1046,11 +1221,13 @@ export async function updateNoteForUser(
       ...(patch.content !== undefined ? { content: patch.content.slice(0, 100_000) } : {}),
       updated_at: new Date(),
     })
-    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId), scopeFilter(notes.member_user_id, scopeUserId)));
 }
 
-export async function deleteNoteForUser(wsId: string, noteId: string): Promise<void> {
-  await db.delete(notes).where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
+export async function deleteNoteForUser(wsId: string, noteId: string, scopeUserId: string | null = null): Promise<void> {
+  await db
+    .delete(notes)
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId), scopeFilter(notes.member_user_id, scopeUserId)));
 }
 
 /**
@@ -1084,11 +1261,15 @@ export async function markNoteActioned(
     .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)));
 }
 
-export async function getNoteForUser(wsId: string, noteId: string): Promise<Note | null> {
+export async function getNoteForUser(
+  wsId: string,
+  noteId: string,
+  scopeUserId: string | null = null,
+): Promise<Note | null> {
   const [row] = await db
     .select()
     .from(notes)
-    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId)))
+    .where(and(eq(notes.workspace_id, wsId), eq(notes.id, noteId), scopeFilter(notes.member_user_id, scopeUserId)))
     .limit(1);
   return row ? toNote(row) : null;
 }

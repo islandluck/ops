@@ -111,6 +111,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const counts = state ? categoryCounts(state.tasks) : null;
 
+  // Operator Lite: a team member sees only the pages the owner granted them.
+  // The owner (isMember=false) sees every page regardless of allowedPages.
+  const isMember = !!state?.viewer?.isMember;
+  const allowedPages = new Set(state?.viewer?.allowedPages ?? []);
+  const canSee = (href: string) => !isMember || allowedPages.has(href);
+  const canSeeApprovals = canSee("/approvals");
+
   // Executive "needs attention" + Boardroom alert badges. Refreshed on mount and
   // on a slow interval — deliberately NOT on every navigation, which fired two
   // server actions per click. Server actions run sequentially per tab, so those
@@ -191,10 +198,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
-        {/* Primary nav — grouped into sections */}
-        {NAV_GROUPS.map((group) => (
+        {/* Primary nav — grouped into sections (member-gated) */}
+        {NAV_GROUPS.map((group) => {
+          const items = group.items.filter((item) => canSee(item.href));
+          if (!items.length) return null;
+          return (
           <Section key={group.title} title={group.title}>
-            {group.items.map((item) => {
+            {items.map((item) => {
               const active = pathname === item.href;
               const ready =
                 item.href === "/approvals" && counts
@@ -228,9 +238,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
               );
             })}
           </Section>
-        ))}
+          );
+        })}
 
-        {/* Categories */}
+        {/* Categories — part of the Approval Center surface */}
+        {canSeeApprovals && (
         <Section title="Categories">
           {CATEGORY_ORDER.map((cat) => {
             const meta = CATEGORY_META[cat];
@@ -263,8 +275,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             );
           })}
         </Section>
+        )}
 
         {/* Saved views */}
+        {canSeeApprovals && (
         <Section title="Saved views">
           {SAVED_VIEWS.map((v) => {
             const active = filters.savedView === v.id && pathname === "/approvals";
@@ -283,8 +297,10 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             );
           })}
         </Section>
+        )}
 
         {/* Agents */}
+        {canSeeApprovals && (
         <Section title="Agents">
           {state?.agents
             .filter((agent) => agent.tier === "worker" && !agent.archived)
@@ -310,6 +326,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
             );
           })}
         </Section>
+        )}
       </nav>
 
       {/* User */}

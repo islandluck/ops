@@ -1025,6 +1025,8 @@ export function createSeedState(now: number): AppState {
       user_email: "alex@northwindstudio.com",
       ai_enabled: false,
     },
+    // Demo mode is always the owner (full-access) viewer.
+    viewer: { isOwner: true, isMember: false, allowedPages: [] },
   };
 
   function ev(

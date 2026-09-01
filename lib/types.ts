@@ -217,6 +217,13 @@ export interface TeamMember {
   manager_name: string | null;
   /** True for the workspace owner's own roster entry — can't be removed. */
   is_owner: boolean;
+  /** True once this member has accepted their invite and has an app login (Operator Lite). */
+  linked: boolean;
+  /**
+   * Operator Lite: page keys (e.g. "/email") the owner granted this member. Empty
+   * = the member defaults (see lib/access/pages.ts). Only meaningful once linked.
+   */
+  page_access: string[];
   created_at: string;
 }
 
@@ -995,6 +1002,19 @@ export interface AppState {
     /** True when the backend has an Anthropic API key (real AI drafting on). */
     ai_enabled: boolean;
   };
+  /**
+   * Operator Lite: who is looking and what they may open. The owner is a full
+   * "Operator Pro" viewer (all pages); a team member is an "Operator Lite" viewer
+   * whose sidebar + routes are gated to `allowedPages`.
+   */
+  viewer: ViewerState;
+}
+
+export interface ViewerState {
+  isOwner: boolean;
+  isMember: boolean;
+  /** Route keys (e.g. "/email") this viewer may open. Owner = every page. */
+  allowedPages: string[];
 }
 
 /** Payload for AI drafting / revision (Phase 2). */

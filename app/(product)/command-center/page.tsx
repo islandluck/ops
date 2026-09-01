@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
   getCommandCenterAction,
@@ -67,6 +68,10 @@ function grow(el: HTMLTextAreaElement) {
 }
 
 export default function CommandCenterPage() {
+  const { state } = useStore();
+  // Operator Lite: members keep their own goals doc, but the Executive / Deep Dive
+  // hand-offs are owner-only surfaces — hide those controls for members.
+  const isMember = !!state?.viewer?.isMember;
   const [doc, setDoc] = useState<CommandCenterDoc | null>(null);
   const docRef = useRef<CommandCenterDoc | null>(null);
   const [loading, setLoading] = useState(true);
@@ -224,40 +229,44 @@ export default function CommandCenterPage() {
             <span className="text-[11px] text-muted-foreground">
               {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : ""}
             </span>
-            <Button size="sm" variant="outline" disabled={suggesting || !doc} onClick={suggest}>
-              {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {suggesting ? "Thinking…" : "Suggest goals"}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={deepDiveState === "busy" || !doc}
-              onClick={sendToDeepDive}
-            >
-              {deepDiveState === "busy" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : deepDiveState === "done" ? (
-                <Check className="h-4 w-4" />
-              ) : (
-                <Telescope className="h-4 w-4" />
-              )}
-              {deepDiveState === "done" ? "Sent to Deep Dive" : "Send to Deep Dive"}
-            </Button>
-            <Button
-              size="sm"
-              variant={sendState === "done" ? "outline" : undefined}
-              disabled={sendState === "busy" || !doc}
-              onClick={sendToExec}
-            >
-              {sendState === "busy" ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : sendState === "done" ? (
-                <Check className="h-4 w-4" />
-              ) : (
-                <Send className="h-4 w-4" />
-              )}
-              {sendState === "done" ? "Sent to Executive" : "Update Executive"}
-            </Button>
+            {!isMember && (
+              <>
+                <Button size="sm" variant="outline" disabled={suggesting || !doc} onClick={suggest}>
+                  {suggesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {suggesting ? "Thinking…" : "Suggest goals"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={deepDiveState === "busy" || !doc}
+                  onClick={sendToDeepDive}
+                >
+                  {deepDiveState === "busy" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : deepDiveState === "done" ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <Telescope className="h-4 w-4" />
+                  )}
+                  {deepDiveState === "done" ? "Sent to Deep Dive" : "Send to Deep Dive"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={sendState === "done" ? "outline" : undefined}
+                  disabled={sendState === "busy" || !doc}
+                  onClick={sendToExec}
+                >
+                  {sendState === "busy" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : sendState === "done" ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  {sendState === "done" ? "Sent to Executive" : "Update Executive"}
+                </Button>
+              </>
+            )}
           </div>
         }
       />
@@ -353,7 +362,7 @@ export default function CommandCenterPage() {
                   onLabel={(l) => setLabel(p.id, l)}
                   onItems={(col, items) => setItems(p.id, col, items)}
                   onRemove={() => removePeriod(p.id)}
-                  onPush={handlePush}
+                  onPush={isMember ? undefined : handlePush}
                 />
               ))}
               <Button size="sm" variant="outline" onClick={addPeriod}>

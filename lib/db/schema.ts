@@ -5,6 +5,7 @@
  * (snake_case) so mapping rows → domain objects is near-identity; only dates
  * (Date → ISO string) and nested relations are assembled in lib/db/queries.ts.
  */
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -201,6 +202,9 @@ export const integrations = pgTable("integrations", {
   refresh_token: text("refresh_token"),
   token_expires_at: timestamp("token_expires_at", { withTimezone: true }),
   scope: text("scope"),
+  // Operator Lite: whose plane this connection belongs to. NULL = the workspace
+  // owner's; a user id = that member's own connection (their Gmail, etc.).
+  member_user_id: uuid("member_user_id"),
 }, (t) => [index("integrations_ws_idx").on(t.workspace_id)]);
 
 export const tasks = pgTable("tasks", {
@@ -208,6 +212,9 @@ export const tasks = pgTable("tasks", {
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  // Operator Lite: whose plane this task belongs to. NULL = the workspace owner's;
+  // a user id = that member's own task slice (their approvals/today/agent output).
+  member_user_id: uuid("member_user_id"),
   category: text("category").$type<Category>().notNull(),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
@@ -365,6 +372,9 @@ export const emailTriage = pgTable(
     draft_reply: text("draft_reply").notNull().default(""),
     // Lifecycle: triaged | sent | archived | trashed.
     status: text("status").notNull().default("triaged"),
+    // Operator Lite: whose inbox this belongs to. NULL = owner's; a user id = that
+    // member's own triaged mail (from their own connected mailbox).
+    member_user_id: uuid("member_user_id"),
     triaged_at: createdAt,
     updated_at: updatedAt,
   },
@@ -406,6 +416,9 @@ export const outboundDrafts = pgTable(
       .$type<{ id: string; name: string; path: string; mime: string; size: number }[]>()
       .notNull()
       .default([]),
+    // Operator Lite: whose outbox this belongs to. NULL = owner's; a user id = that
+    // member's own drafted mail (sent from their own connected mailbox).
+    member_user_id: uuid("member_user_id"),
     // Lifecycle: draft | sending | sent | failed.
     status: text("status").notNull().default("draft"),
     error: text("error").notNull().default(""),
@@ -698,6 +711,9 @@ export const teamMembers = pgTable(
     // Roster kind: an operational "teammate" (day-to-day, in the org hierarchy) or an
     // "advisor" (strategic network — advice, intros, startup-level tasks; not daily ops).
     member_type: text("member_type").$type<"teammate" | "advisor">().notNull().default("teammate"),
+    // Operator Lite: which app pages this member can access (route keys, e.g. "/email").
+    // Empty = the member defaults (see lib/access/pages.ts). Owner-set.
+    page_access: text("page_access").array().notNull().default([]),
     // The workspace owner's own roster entry (their profile + assignable self). One
     // per workspace, auto-created; can't be removed. The owner/member wall in
     // workspace_members is unchanged — this is just a roster/profile representation.
@@ -1041,10 +1057,20 @@ export const commandCenter = pgTable(
     workspace_id: uuid("workspace_id")
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
+    // Operator Lite: whose goals doc this is. NULL = owner's; a user id = that
+    // member's own Command Center. One doc per (workspace, plane).
+    member_user_id: uuid("member_user_id"),
     doc: jsonb("doc").$type<CommandCenterDoc>().notNull(),
     updated_at: updatedAt,
   },
-  (t) => [uniqueIndex("command_center_ws_uniq").on(t.workspace_id)],
+  (t) => [
+    // The owner's single doc (partial unique on the NULL plane).
+    uniqueIndex("command_center_ws_uniq").on(t.workspace_id).where(sql`${t.member_user_id} IS NULL`),
+    // One doc per member.
+    uniqueIndex("command_center_ws_member_uniq")
+      .on(t.workspace_id, t.member_user_id)
+      .where(sql`${t.member_user_id} IS NOT NULL`),
+  ],
 );
 
 /** Notion refs already triaged — page-version markers + per-item hashes — so
@@ -1127,6 +1153,8 @@ export const notes = pgTable("notes", {
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  // Operator Lite: whose notes these are. NULL = owner's; a user id = that member's.
+  member_user_id: uuid("member_user_id"),
   title: text("title").notNull().default(""),
   content: text("content").notNull().default(""),
   /** "draft" until handed to the Executive and approved → "actioned". */

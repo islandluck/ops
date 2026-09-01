@@ -88,7 +88,10 @@ function fmtDate(raw: string): string {
 }
 
 export default function EmailManagerPage() {
-  const { reloadWorkspace } = useStore();
+  const { reloadWorkspace, state: appState } = useStore();
+  // Operator Lite: members run their OWN inbox, but the AI Outbound Composer +
+  // "Send to Executive" are owner-only for now — hide those controls for members.
+  const isMember = !!appState?.viewer?.isMember;
   const [state, setState] = useState<EmailManagerState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -343,15 +346,17 @@ export default function EmailManagerPage() {
         description="See your inbox, let the Admin agent triage and draft replies, then edit, approve, and send — you stay in control of every email that goes out."
         actions={
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant={composeOpen ? "outline" : undefined}
-              disabled={!state?.connected}
-              onClick={() => setComposeOpen((v) => !v)}
-            >
-              <PenSquare className="h-4 w-4" />
-              Compose
-            </Button>
+            {!isMember && (
+              <Button
+                size="sm"
+                variant={composeOpen ? "outline" : undefined}
+                disabled={!state?.connected}
+                onClick={() => setComposeOpen((v) => !v)}
+              >
+                <PenSquare className="h-4 w-4" />
+                Compose
+              </Button>
+            )}
             <Button size="sm" variant="outline" disabled={checkingNow || !state?.connected} onClick={checkNow}>
               {checkingNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Check now
@@ -568,29 +573,31 @@ export default function EmailManagerPage() {
                   onOpen={(v) => switchView(v)}
                   onSelect={(id) => switchView("attention", id)}
                 />
-                <Card className="p-4">
-                  <p className="text-[13px] font-semibold">Keep the Executive in the loop</p>
-                  <p className="mt-1 text-[12px] text-muted-foreground">
-                    Send a summary of what moved in your inbox so your chief-of-staff stays current on the
-                    business.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant={toExecState === "done" ? "outline" : undefined}
-                    className="mt-3 w-full"
-                    disabled={toExecState === "busy"}
-                    onClick={sendToExecutive}
-                  >
-                    {toExecState === "busy" ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : toExecState === "done" ? (
-                      <Check className="h-4 w-4" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                    {toExecState === "done" ? "Sent to Executive" : "Send to Executive"}
-                  </Button>
-                </Card>
+                {!isMember && (
+                  <Card className="p-4">
+                    <p className="text-[13px] font-semibold">Keep the Executive in the loop</p>
+                    <p className="mt-1 text-[12px] text-muted-foreground">
+                      Send a summary of what moved in your inbox so your chief-of-staff stays current on the
+                      business.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant={toExecState === "done" ? "outline" : undefined}
+                      className="mt-3 w-full"
+                      disabled={toExecState === "busy"}
+                      onClick={sendToExecutive}
+                    >
+                      {toExecState === "busy" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : toExecState === "done" ? (
+                        <Check className="h-4 w-4" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                      {toExecState === "done" ? "Sent to Executive" : "Send to Executive"}
+                    </Button>
+                  </Card>
+                )}
                 <p className="px-1 text-[11px] leading-relaxed text-muted-foreground">
                   Archive &amp; Delete need Google reconnected with the new permission —{" "}
                   <Link href="/integrations" className="font-medium underline">

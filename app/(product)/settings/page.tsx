@@ -27,6 +27,11 @@ export default function SettingsPage() {
 
   if (!state) return null;
 
+  // Operator Lite: team members get a trimmed Settings — profile, notifications,
+  // and sign out — but never the workspace-destructive controls (reset / danger
+  // zone) or the shared agent-permission fleet, which are the owner's alone.
+  const isMember = !!state.viewer?.isMember;
+
   function signOut() {
     logout();
     router.push("/");
@@ -58,7 +63,8 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          {/* Agents & permissions */}
+          {/* Agents & permissions — the shared agent fleet is the owner's to configure */}
+          {!isMember && (
           <Card className="p-5">
             <SectionTitle
               title="Agents & permissions"
@@ -95,6 +101,7 @@ export default function SettingsPage() {
               ))}
             </div>
           </Card>
+          )}
 
           {/* Notifications */}
           <Card className="p-5">
@@ -118,7 +125,8 @@ export default function SettingsPage() {
 
           {/* Workspace */}
           <Card className="p-5">
-            <SectionTitle title="Workspace" subtitle="Demo controls and session" />
+            <SectionTitle title="Workspace" subtitle={isMember ? "Your session" : "Demo controls and session"} />
+            {!isMember && (
             <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-[13.5px] font-medium">Reset demo data</p>
@@ -131,7 +139,8 @@ export default function SettingsPage() {
                 Reset demo
               </Button>
             </div>
-            <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+            )}
+            <div className={cn("flex items-center justify-between", isMember ? "mt-4" : "mt-4 border-t border-border pt-4")}>
               <div>
                 <p className="text-[13.5px] font-medium">Sign out</p>
                 <p className="text-[12.5px] text-muted-foreground">End this session and return to the marketing site.</p>
@@ -143,8 +152,8 @@ export default function SettingsPage() {
             </div>
           </Card>
 
-          {/* Danger zone — server mode only (hard reset needs a real account) */}
-          {hasSupabaseClientEnv && <DangerZone />}
+          {/* Danger zone — server mode only, owner only (wipes the whole workspace) */}
+          {hasSupabaseClientEnv && !isMember && <DangerZone />}
         </div>
       </PageBody>
     </>

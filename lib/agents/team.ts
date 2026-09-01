@@ -23,6 +23,7 @@ import {
   workspaces,
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { MEMBER_TOGGLEABLE } from "@/lib/access/pages";
 import {
   createCalendarEvent,
   deleteCalendarEvent,
@@ -88,6 +89,8 @@ function toMember(r: typeof teamMembers.$inferSelect, managerName: string | null
     manager_name: managerName,
     member_type: (r.member_type ?? "teammate") as MemberType,
     is_owner: r.is_owner ?? false,
+    linked: Boolean(r.user_id),
+    page_access: (r.page_access ?? []) as string[],
     created_at: new Date(r.created_at).toISOString(),
   };
 }
@@ -227,6 +230,25 @@ export async function updateTeamMember(
   await db
     .update(teamMembers)
     .set(set)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, id)));
+  return { ok: true };
+}
+
+/**
+ * Operator Lite: set which app pages a team member can open. Stores the explicit
+ * enabled set (defaults + any granted extras); owner-only pages are never stored.
+ * Empty falls back to the member defaults at read time (see lib/access/pages.ts).
+ */
+export async function setMemberPageAccess(
+  workspaceId: string,
+  id: string,
+  pages: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const valid = new Set(MEMBER_TOGGLEABLE.map((p) => p.key));
+  const clean = Array.from(new Set(pages.filter((p) => valid.has(p))));
+  await db
+    .update(teamMembers)
+    .set({ page_access: clean, updated_at: new Date() })
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, id)));
   return { ok: true };
 }

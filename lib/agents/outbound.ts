@@ -5,6 +5,7 @@ import { and, desc, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { scopeFilter } from "@/lib/access/scope";
 import { sendGmail } from "@/lib/integrations/google";
 import { executionKilled } from "@/lib/integrations/guardrails";
 import { deleteAttachmentAt, getAttachmentBytes } from "@/lib/media/storage";
@@ -156,11 +157,20 @@ export async function composeOutboundDrafts(
 }
 
 /** The review queue — everything not yet sent, newest first. */
-export async function listOutboundDrafts(workspaceId: string): Promise<OutboundDraft[]> {
+export async function listOutboundDrafts(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<OutboundDraft[]> {
   const rows = await db
     .select()
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), ne(outboundDrafts.status, "sent")))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        ne(outboundDrafts.status, "sent"),
+      ),
+    )
     .orderBy(desc(outboundDrafts.created_at))
     .limit(50);
   return rows.map(toDraft);

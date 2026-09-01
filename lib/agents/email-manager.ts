@@ -5,6 +5,7 @@ import { and, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, businessBriefs, emailTriage } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { scopeFilter } from "@/lib/access/scope";
 import {
   archiveMessage,
   getMessageDetail,
@@ -31,6 +32,10 @@ import type {
  * list is LIVE from Gmail; the triage classification + editable draft come from the
  * email_triage table. Send / Archive / Trash are one explicit human click each —
  * nothing here fires on its own.
+ *
+ * Operator Lite: every op is scoped to a plane via `scopeUserId` (null = the owner's
+ * mailbox + settings, unchanged; a member's id = that member's OWN connected mailbox
+ * and their own triage rows). A member never reads the owner's mail or settings.
  */
 
 const PAGE_SIZE = 10;
@@ -69,7 +74,12 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 
 const CADENCES: EmailCadence[] = ["off", "hourly", "daily"];
 
-async function getSettings(workspaceId: string): Promise<EmailSettings> {
+const DEFAULT_SETTINGS: EmailSettings = { signature: "", reply_style: "", cadence: "off" };
+
+async function getSettings(workspaceId: string, scopeUserId: string | null = null): Promise<EmailSettings> {
+  // Email settings live on the (shared) business brief — the owner's. A member
+  // uses defaults for now; they never read or write the owner's signature/style.
+  if (scopeUserId) return { ...DEFAULT_SETTINGS };
   const [b] = await db
     .select({
       signature: businessBriefs.email_signature,
@@ -83,7 +93,13 @@ async function getSettings(workspaceId: string): Promise<EmailSettings> {
   return { signature: b?.signature ?? "", reply_style: b?.reply_style ?? "", cadence };
 }
 
-export async function saveEmailSettings(workspaceId: string, settings: EmailSettings): Promise<ActionResult> {
+export async function saveEmailSettings(
+  workspaceId: string,
+  settings: EmailSettings,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
+  // The shared brief settings are the owner's; a member can't change them.
+  if (scopeUserId) return { ok: true };
   const cadence: EmailCadence = (CADENCES as string[]).includes(settings.cadence) ? settings.cadence : "off";
   await db
     .update(businessBriefs)
@@ -101,13 +117,14 @@ export async function saveEmailSettings(workspaceId: string, settings: EmailSett
 export async function bulkSendReplies(
   workspaceId: string,
   messageIds: string[],
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; sent: number; failed: number } | { ok: false; error: string }> {
   const ids = [...new Set(messageIds)].filter(Boolean);
   if (!ids.length) return { ok: false, error: "No drafts to send." };
   let sent = 0;
   let failed = 0;
   for (const id of ids) {
-    const r = await sendEmailReply(workspaceId, id);
+    const r = await sendEmailReply(workspaceId, id, scopeUserId);
     if (r.ok) sent += 1;
     else failed += 1;
   }
@@ -118,13 +135,14 @@ export async function bulkSendReplies(
 export async function bulkArchive(
   workspaceId: string,
   messageIds: string[],
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; archived: number; failed: number } | { ok: false; error: string }> {
   const ids = [...new Set(messageIds)].filter(Boolean);
   if (!ids.length) return { ok: false, error: "Nothing to archive." };
   let archived = 0;
   let failed = 0;
   for (const id of ids) {
-    const r = await moveOut(workspaceId, id, "archived");
+    const r = await moveOut(workspaceId, id, "archived", scopeUserId);
     if (r.ok) archived += 1;
     else failed += 1;
   }
@@ -137,8 +155,9 @@ export async function bulkArchive(
  */
 export async function learnEmailStyleFromSent(
   workspaceId: string,
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; style: LearnedStyle } | { ok: false; error: string }> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected." };
   try {
     const page = await listInboxPage(token, { query: "in:sent", max: 15 });
@@ -157,12 +176,18 @@ export async function learnEmailStyleFromSent(
 /* ------------------------------ triage info ------------------------------- */
 
 /** The "Daily Triage Info" panel — a rollup of what's been triaged in the last day. */
-async function buildTriageInfo(workspaceId: string): Promise<EmailTriageInfo> {
+async function buildTriageInfo(workspaceId: string, scopeUserId: string | null = null): Promise<EmailTriageInfo> {
   const since = new Date(Date.now() - 24 * 3600 * 1000);
   const rows = await db
     .select()
     .from(emailTriage)
-    .where(and(eq(emailTriage.workspace_id, workspaceId), gte(emailTriage.triaged_at, since)))
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        gte(emailTriage.triaged_at, since),
+      ),
+    )
     .orderBy(desc(emailTriage.triaged_at))
     .limit(100);
   // "Needs attention" = still unhandled (status triaged) + flagged important, so
@@ -192,12 +217,21 @@ async function buildTriageInfo(workspaceId: string): Promise<EmailTriageInfo> {
  * 24h (urgency-sorted), rendered straight from email_triage. Backs the Attention
  * view you drop into from the Daily Triage panel.
  */
-export async function listAttentionQueue(workspaceId: string): Promise<EmailListItem[]> {
+export async function listAttentionQueue(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<EmailListItem[]> {
   const since = new Date(Date.now() - 24 * 3600 * 1000);
   const rows = await db
     .select()
     .from(emailTriage)
-    .where(and(eq(emailTriage.workspace_id, workspaceId), gte(emailTriage.triaged_at, since)))
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        gte(emailTriage.triaged_at, since),
+      ),
+    )
     .orderBy(desc(emailTriage.triaged_at))
     .limit(100);
   return rows
@@ -229,13 +263,17 @@ export async function listAttentionQueue(workspaceId: string): Promise<EmailList
  * archived, or trashed yet. Rendered straight from email_triage (no live Gmail call),
  * so after a big triage you can rip through the drafts in one place.
  */
-export async function listDraftQueue(workspaceId: string): Promise<EmailListItem[]> {
+export async function listDraftQueue(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<EmailListItem[]> {
   const rows = await db
     .select()
     .from(emailTriage)
     .where(
       and(
         eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
         eq(emailTriage.status, "triaged"),
         ne(emailTriage.draft_reply, ""),
       ),
@@ -265,15 +303,16 @@ export async function getEmailManagerState(
   workspaceId: string,
   pageToken?: string,
   categories?: string[],
+  scopeUserId: string | null = null,
 ): Promise<EmailManagerState> {
-  const settings = await getSettings(workspaceId);
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+  const settings = await getSettings(workspaceId, scopeUserId);
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) {
     return {
       connected: false,
       items: [],
       nextPageToken: null,
-      triageInfo: await buildTriageInfo(workspaceId),
+      triageInfo: await buildTriageInfo(workspaceId, scopeUserId),
       settings,
     };
   }
@@ -288,7 +327,13 @@ export async function getEmailManagerState(
     ? await db
         .select()
         .from(emailTriage)
-        .where(and(eq(emailTriage.workspace_id, workspaceId), inArray(emailTriage.gmail_message_id, ids)))
+        .where(
+          and(
+            eq(emailTriage.workspace_id, workspaceId),
+            scopeFilter(emailTriage.member_user_id, scopeUserId),
+            inArray(emailTriage.gmail_message_id, ids),
+          ),
+        )
     : [];
   const byId = new Map(rows.map((r) => [r.gmail_message_id, r]));
 
@@ -316,7 +361,7 @@ export async function getEmailManagerState(
     connected: true,
     items,
     nextPageToken: page.nextPageToken,
-    triageInfo: await buildTriageInfo(workspaceId),
+    triageInfo: await buildTriageInfo(workspaceId, scopeUserId),
     settings,
   };
 }
@@ -325,8 +370,9 @@ export async function getEmailManagerState(
 export async function getEmailBody(
   workspaceId: string,
   messageId: string,
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; email: EmailBody } | { ok: false; error: string }> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected." };
   try {
     const m = await getMessageDetail(token, messageId);
@@ -349,27 +395,48 @@ export async function getEmailBody(
 
 /* --------------------------------- dispatch -------------------------------- */
 
-export async function saveEmailDraft(workspaceId: string, messageId: string, draft: string): Promise<ActionResult> {
+export async function saveEmailDraft(
+  workspaceId: string,
+  messageId: string,
+  draft: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
   const res = await db
     .update(emailTriage)
     .set({ draft_reply: draft, updated_at: new Date() })
-    .where(and(eq(emailTriage.workspace_id, workspaceId), eq(emailTriage.gmail_message_id, messageId)))
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        eq(emailTriage.gmail_message_id, messageId),
+      ),
+    )
     .returning({ id: emailTriage.id });
   if (!res.length) return { ok: false, error: "Triage this email first, then edit the draft." };
   return { ok: true };
 }
 
 /** Send the (possibly edited) draft as an in-thread reply, then mark it sent. */
-export async function sendEmailReply(workspaceId: string, messageId: string): Promise<ActionResult> {
+export async function sendEmailReply(
+  workspaceId: string,
+  messageId: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
   const [row] = await db
     .select()
     .from(emailTriage)
-    .where(and(eq(emailTriage.workspace_id, workspaceId), eq(emailTriage.gmail_message_id, messageId)))
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        eq(emailTriage.gmail_message_id, messageId),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Triage this email first." };
   if (!row.draft_reply.trim()) return { ok: false, error: "There's no draft to send." };
 
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected." };
 
   const subject = /^re:/i.test(row.subject) ? row.subject : `Re: ${row.subject}`;
@@ -389,23 +456,37 @@ export async function sendEmailReply(workspaceId: string, messageId: string): Pr
   await db
     .update(emailTriage)
     .set({ status: "sent", updated_at: now })
-    .where(and(eq(emailTriage.workspace_id, workspaceId), eq(emailTriage.gmail_message_id, messageId)));
-  await db.insert(activityEvents).values({
-    id: randomUUID(),
-    workspace_id: workspaceId,
-    task_id: null,
-    event_type: "integration_touched",
-    actor_type: "human",
-    actor_id: "owner",
-    summary: `Sent reply to ${row.from_name}: ${row.subject}`.slice(0, 300),
-    created_at: now,
-  });
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        eq(emailTriage.gmail_message_id, messageId),
+      ),
+    );
+  // Activity log is an owner-plane surface — only record on the owner's plane.
+  if (!scopeUserId) {
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: null,
+      event_type: "integration_touched",
+      actor_type: "human",
+      actor_id: "owner",
+      summary: `Sent reply to ${row.from_name}: ${row.subject}`.slice(0, 300),
+      created_at: now,
+    });
+  }
   return { ok: true };
 }
 
 /** Archive (drop INBOX) or Trash (recoverable) a message, then record the outcome. */
-async function moveOut(workspaceId: string, messageId: string, kind: "archived" | "trashed"): Promise<ActionResult> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+async function moveOut(
+  workspaceId: string,
+  messageId: string,
+  kind: "archived" | "trashed",
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return { ok: false, error: "Gmail isn't connected." };
   try {
     if (kind === "archived") await archiveMessage(token, messageId);
@@ -418,23 +499,39 @@ async function moveOut(workspaceId: string, messageId: string, kind: "archived" 
   await db
     .update(emailTriage)
     .set({ status: kind, updated_at: now })
-    .where(and(eq(emailTriage.workspace_id, workspaceId), eq(emailTriage.gmail_message_id, messageId)));
-  await db.insert(activityEvents).values({
-    id: randomUUID(),
-    workspace_id: workspaceId,
-    task_id: null,
-    event_type: "integration_touched",
-    actor_type: "human",
-    actor_id: "owner",
-    summary: kind === "archived" ? "Archived an email from the inbox." : "Moved an email to Trash.",
-    created_at: now,
-  });
+    .where(
+      and(
+        eq(emailTriage.workspace_id, workspaceId),
+        scopeFilter(emailTriage.member_user_id, scopeUserId),
+        eq(emailTriage.gmail_message_id, messageId),
+      ),
+    );
+  if (!scopeUserId) {
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      task_id: null,
+      event_type: "integration_touched",
+      actor_type: "human",
+      actor_id: "owner",
+      summary: kind === "archived" ? "Archived an email from the inbox." : "Moved an email to Trash.",
+      created_at: now,
+    });
+  }
   return { ok: true };
 }
 
-export function archiveEmail(workspaceId: string, messageId: string): Promise<ActionResult> {
-  return moveOut(workspaceId, messageId, "archived");
+export function archiveEmail(
+  workspaceId: string,
+  messageId: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
+  return moveOut(workspaceId, messageId, "archived", scopeUserId);
 }
-export function trashEmail(workspaceId: string, messageId: string): Promise<ActionResult> {
-  return moveOut(workspaceId, messageId, "trashed");
+export function trashEmail(
+  workspaceId: string,
+  messageId: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
+  return moveOut(workspaceId, messageId, "trashed", scopeUserId);
 }

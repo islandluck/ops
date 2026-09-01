@@ -37,11 +37,13 @@ import {
   listHumanProjectsAction,
   listInvitesAction,
   listTeamMembersAction,
+  setMemberPageAccessAction,
   setTeamMemberOrgAction,
   updateAssignmentAction,
   updateHumanProjectAction,
   updateTeamMemberAction,
 } from "@/app/actions";
+import { MEMBER_DEFAULT_KEYS, MEMBER_TOGGLEABLE } from "@/lib/access/pages";
 import type {
   AssignmentStatus,
   HumanProject,
@@ -138,6 +140,18 @@ const EMPTY_MEMBER: MemberDraft = {
   member_type: "teammate",
 };
 
+/** Owner-toggleable pages, grouped for the access editor (Operator Lite). */
+const ACCESS_GROUPS: { title: string; items: typeof MEMBER_TOGGLEABLE }[] = (() => {
+  const order = ["Command", "Create", "Intelligence", "Setup"];
+  const byGroup = new Map<string, typeof MEMBER_TOGGLEABLE>();
+  for (const p of MEMBER_TOGGLEABLE) {
+    const arr = byGroup.get(p.group) ?? [];
+    arr.push(p);
+    byGroup.set(p.group, arr);
+  }
+  return order.filter((g) => byGroup.has(g)).map((g) => ({ title: g, items: byGroup.get(g)! }));
+})();
+
 function MemberDialog({
   open,
   member,
@@ -159,6 +173,8 @@ function MemberDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sendInvite, setSendInvite] = useState(true);
+  // Operator Lite: the pages this teammate can open. Defaults until the owner edits.
+  const [pageAccess, setPageAccess] = useState<Set<string>>(new Set(MEMBER_DEFAULT_KEYS));
   const [result, setResult] = useState<{ accept_url: string; note?: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -184,6 +200,9 @@ function MemberDialog({
             member_type: member.member_type,
           }
         : EMPTY_MEMBER,
+    );
+    setPageAccess(
+      new Set(member?.page_access && member.page_access.length ? member.page_access : MEMBER_DEFAULT_KEYS),
     );
   }, [open, member]);
 
@@ -243,6 +262,13 @@ function MemberDialog({
         if (!("ok" in orgRes) || !orgRes.ok) {
           setSaving(false);
           setError("error" in orgRes ? orgRes.error : "Saved the profile, but couldn't update the role.");
+          return;
+        }
+        // Operator Lite page access (best-effort — don't block the profile save on it).
+        const accessRes = await setMemberPageAccessAction(member.id, [...pageAccess]);
+        if (!("ok" in accessRes) || !accessRes.ok) {
+          setSaving(false);
+          setError("error" in accessRes ? accessRes.error : "Saved the profile, but couldn't update page access.");
           return;
         }
       }
@@ -394,6 +420,52 @@ function MemberDialog({
                 </Select>
               </div>
             )}
+          </div>
+        )}
+
+        {member && !isAdvisor && (
+          <div className="rounded-lg border border-border bg-muted/30 p-3">
+            <div className="flex items-center justify-between">
+              <Label>Operator Lite — page access</Label>
+              {!member.linked && (
+                <span className="text-[11px] text-muted-foreground">Applies when they join</span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">
+              They get the same app as you, scoped to their own data — with just these pages.
+            </p>
+            <div className="mt-2.5 space-y-2.5">
+              {ACCESS_GROUPS.map((group) => (
+                <div key={group.title}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    {group.title}
+                  </p>
+                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
+                    {group.items.map((p) => (
+                      <label key={p.key} className="flex cursor-pointer items-center gap-2 text-[13px]">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5"
+                          checked={pageAccess.has(p.key)}
+                          onChange={(e) =>
+                            setPageAccess((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(p.key);
+                              else next.delete(p.key);
+                              return next;
+                            })
+                          }
+                        />
+                        <span className="flex-1">{p.label}</span>
+                        {p.member === "default" && (
+                          <span className="text-[10px] text-muted-foreground/70">default</span>
+                        )}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {!member && !result && !isAdvisor && (

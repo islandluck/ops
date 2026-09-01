@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { getCurrentUser } from "@/lib/supabase/server";
 import { runCrmRadar } from "@/lib/agents/crm";
 import { workspaceIdForUser } from "@/lib/db/queries";
+import { getViewer } from "@/lib/access/viewer";
 import { providerByKey } from "@/lib/integrations/registry";
 import { exchangeCodeForTokens } from "@/lib/integrations/oauth";
 import { storeProviderTokens } from "@/lib/integrations/tokens";
@@ -49,6 +50,9 @@ export async function GET(
   const wsId = await workspaceIdForUser(user.id);
   if (!wsId) return back("?error=no_workspace");
 
+  // Operator Lite: a member connects their OWN account — store on their plane.
+  const { scopeUserId } = await getViewer(user.id, wsId);
+
   try {
     const redirectUri = `${origin}/api/integrations/${providerKey}/callback`;
     const tokens = await exchangeCodeForTokens(provider, code, redirectUri, state.v);
@@ -61,11 +65,11 @@ export async function GET(
           : providerKey === "x"
             ? await getXAccount(tokens.access)
             : null);
-    await storeProviderTokens(wsId, provider, tokens, account);
+    await storeProviderTokens(wsId, provider, tokens, account, scopeUserId);
     // Fresh HubSpot connection → run the CRM Radar right away (after the
     // redirect) so drafted follow-up tasks are waiting on the board within a
-    // minute of connecting. Best-effort.
-    if (providerKey === "hubspot") after(() => runCrmRadar(wsId).catch(() => null));
+    // minute of connecting. Owner-plane only (the CRM Radar is a workspace sweep).
+    if (providerKey === "hubspot" && !scopeUserId) after(() => runCrmRadar(wsId).catch(() => null));
     return back(`?connected=${providerKey}`);
   } catch (e) {
     return back(`?error=${encodeURIComponent(e instanceof Error ? e.message : "connect_failed")}`);

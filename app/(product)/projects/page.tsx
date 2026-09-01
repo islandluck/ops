@@ -68,6 +68,9 @@ export default function ProjectsPage() {
   // The board reads the global store; refresh it after project actions so newly
   // materialized tasks show up without a hard reload.
   const { state, reloadWorkspace } = useStore();
+  // Operator Lite: members see + work the projects assigned to them, but the owner
+  // is the one who spins up new projects and assigns them.
+  const isMember = !!state?.viewer?.isMember;
 
   // Phase build state, derived from the board's tasks. "building" = the next
   // phase's task rows don't exist yet (or the finished phase is about to
@@ -156,18 +159,24 @@ export default function ProjectsPage() {
     <>
       <PageHeader
         title="Projects"
-        description="Set a goal. A Manager or Executive agent plans it, delegates the work across your team, and runs it to completion — you approve the plan and each deliverable."
+        description={
+          isMember
+            ? "The projects assigned to you. Work through each phase and approve the deliverables as they’re ready."
+            : "Set a goal. A Manager or Executive agent plans it, delegates the work across your team, and runs it to completion — you approve the plan and each deliverable."
+        }
         actions={
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setCreatingCampaign(true)}>
-              <TrendingUp className="h-4 w-4" />
-              Growth campaign
-            </Button>
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" />
-              New project
-            </Button>
-          </div>
+          isMember ? undefined : (
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setCreatingCampaign(true)}>
+                <TrendingUp className="h-4 w-4" />
+                Growth campaign
+              </Button>
+              <Button size="sm" onClick={() => setCreating(true)}>
+                <Plus className="h-4 w-4" />
+                New project
+              </Button>
+            </div>
+          )
         }
       />
       <PageBody>
@@ -183,14 +192,17 @@ export default function ProjectsPage() {
             <div>
               <h3 className="text-[15px] font-semibold">No projects yet</h3>
               <p className="mx-auto mt-1 max-w-md text-[13px] text-muted-foreground">
-                Hand a leadership agent a big goal — “build our website”, “launch the new offer” — and it breaks it
-                into a phased plan your team executes.
+                {isMember
+                  ? "When the owner assigns you a project, it shows up here with its plan and deliverables to work through."
+                  : "Hand a leadership agent a big goal — “build our website”, “launch the new offer” — and it breaks it into a phased plan your team executes."}
               </p>
             </div>
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <Plus className="h-4 w-4" />
-              Start a project
-            </Button>
+            {!isMember && (
+              <Button size="sm" onClick={() => setCreating(true)}>
+                <Plus className="h-4 w-4" />
+                Start a project
+              </Button>
+            )}
           </Card>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
