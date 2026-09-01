@@ -1093,11 +1093,20 @@ export async function deleteTaskForUser(wsId: string, taskId: string): Promise<v
 
 /** Display names of the workspace's currently-connected integrations. Used to
  *  intersect a task's inferred systems so we never tag a disconnected one. */
-export async function getConnectedIntegrationNames(wsId: string): Promise<string[]> {
+export async function getConnectedIntegrationNames(
+  wsId: string,
+  scopeUserId: string | null = null,
+): Promise<string[]> {
   const rows = await db
     .select({ name: integrations.name })
     .from(integrations)
-    .where(and(eq(integrations.workspace_id, wsId), eq(integrations.connected, true)));
+    .where(
+      and(
+        eq(integrations.workspace_id, wsId),
+        scopeFilter(integrations.member_user_id, scopeUserId),
+        eq(integrations.connected, true),
+      ),
+    );
   return rows.map((r) => r.name);
 }
 
@@ -1643,6 +1652,7 @@ export async function createPlannedTask(
   wsId: string,
   planned: PlannedTask,
   actor: { name: string },
+  scopeUserId: string | null = null,
 ): Promise<string> {
   const now = new Date();
   const taskId = uid();
@@ -1664,6 +1674,7 @@ export async function createPlannedTask(
   await db.insert(tasks).values({
     id: taskId,
     workspace_id: wsId,
+    member_user_id: scopeUserId,
     category: planned.category,
     title: planned.title,
     description: planned.rationale,

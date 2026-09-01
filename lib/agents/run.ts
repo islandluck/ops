@@ -51,14 +51,18 @@ export async function runAgentForWorkspace(
   agentId: string,
   actor: { name: string; email: string },
   opts: { background?: boolean } = {},
+  scopeUserId: string | null = null,
 ): Promise<RunAgentResult> {
-  return runWithUsage(workspaceId, "agent-task", () => _runAgentForWorkspace(workspaceId, agentId, actor, opts));
+  return runWithUsage(workspaceId, "agent-task", () =>
+    _runAgentForWorkspace(workspaceId, agentId, actor, opts, scopeUserId),
+  );
 }
 async function _runAgentForWorkspace(
   workspaceId: string,
   agentId: string,
   actor: { name: string; email: string },
   opts: { background?: boolean } = {},
+  scopeUserId: string | null = null,
 ): Promise<RunAgentResult> {
   const [a] = await db
     .select()
@@ -116,16 +120,19 @@ async function _runAgentForWorkspace(
 
   const now = new Date();
   const taskId = randomUUID();
-  const auto = a.permissions_mode === "auto";
+  // Operator Lite: a member's agent runs land on their plane and never auto-execute
+  // (auto-exec would use the owner's integration tokens) — they stay for approval.
+  const auto = a.permissions_mode === "auto" && !scopeUserId;
   // Tag the task with the systems its intent implies (∩ connected), not the
   // agent's whole allowlist — so execution acts on what the task needs and
-  // nothing spurious.
-  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => []);
+  // nothing spurious. Members see only their OWN connected integrations.
+  const connected = await getConnectedIntegrationNames(workspaceId, scopeUserId).catch(() => []);
   const systems = inferAffectedSystems(`${gen.title} ${gen.rationale}`, connected);
 
   await db.insert(tasks).values({
     id: taskId,
     workspace_id: workspaceId,
+    member_user_id: scopeUserId,
     category: a.category,
     title: gen.title,
     description: gen.rationale,
@@ -153,28 +160,32 @@ async function _runAgentForWorkspace(
     content: gen.draft,
     metadata: null,
   });
-  await saveDocument({
-    workspaceId,
-    agentId: a.id,
-    authorName: a.name,
-    taskId,
-    taskTitle: gen.title,
-    name: gen.title,
-    content: gen.draft,
-    folder: a.folder,
-    docType: assetTypeFor(a.category),
-  });
-  if (a.log_activity) {
-    await db.insert(activityEvents).values({
-      id: randomUUID(),
-      workspace_id: workspaceId,
-      task_id: taskId,
-      event_type: "agent_updated_draft",
-      actor_type: "agent",
-      actor_id: a.id,
-      summary: `${a.name} prepared “${gen.title}”${a.background_enabled ? " in the background" : ""}.`,
-      created_at: now,
+  // Documents + activity are owner-plane surfaces — a member's agent draft stays on
+  // their own task (its asset above), not in the shared Documents / activity log.
+  if (!scopeUserId) {
+    await saveDocument({
+      workspaceId,
+      agentId: a.id,
+      authorName: a.name,
+      taskId,
+      taskTitle: gen.title,
+      name: gen.title,
+      content: gen.draft,
+      folder: a.folder,
+      docType: assetTypeFor(a.category),
     });
+    if (a.log_activity) {
+      await db.insert(activityEvents).values({
+        id: randomUUID(),
+        workspace_id: workspaceId,
+        task_id: taskId,
+        event_type: "agent_updated_draft",
+        actor_type: "agent",
+        actor_id: a.id,
+        summary: `${a.name} prepared “${gen.title}”${a.background_enabled ? " in the background" : ""}.`,
+        created_at: now,
+      });
+    }
   }
   await db
     .update(agents)

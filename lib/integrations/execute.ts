@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/schema";
 import { isProviderConfigured, providerForIntegrationName } from "./registry";
 import { getValidAccessToken } from "./tokens";
+import { scopeFilter } from "@/lib/access/scope";
 import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
 import { hsCreateNote, upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
@@ -77,6 +78,10 @@ export async function runTaskExecution(
     .limit(1);
   if (!task) return { ok: false, error: "Task not found." };
 
+  // Operator Lite: execute against the plane the task belongs to — a member's task
+  // uses the MEMBER's own connected integrations + tokens, never the owner's.
+  const scope = task.member_user_id;
+
   // Safety floor. The kill switch halts every execution path instantly;
   // unattended automation additionally honours the per-workspace daily cap and
   // an auto-mode re-check so a runaway agent can't ship without a human.
@@ -93,7 +98,7 @@ export async function runTaskExecution(
   const integrationRows = await db
     .select()
     .from(integrations)
-    .where(eq(integrations.workspace_id, workspaceId));
+    .where(and(eq(integrations.workspace_id, workspaceId), scopeFilter(integrations.member_user_id, scope)));
   const connectedByName = new Map(integrationRows.map((i) => [i.name, i]));
 
   const now = new Date();
@@ -176,7 +181,7 @@ export async function runTaskExecution(
 
     try {
       if (name === "Gmail") {
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No Gmail token");
         const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
         // Recipient: the explicit address captured at planning time (and shown to
@@ -209,7 +214,7 @@ export async function runTaskExecution(
           incomplete.push("Gmail");
         }
       } else if (name === "Google Calendar") {
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No Calendar token");
         // Parse the ACTUAL event out of the request — day, start/end times,
         // timezone, and recurrence — instead of dumping the task title at
@@ -255,7 +260,7 @@ export async function runTaskExecution(
           touched.push("Google Calendar");
         }
       } else if (name === "HubSpot") {
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No HubSpot token");
         const meta = assets[0]?.metadata as Record<string, string | number> | null | undefined;
         const contactId = meta?.hubspot_contact_id ? String(meta.hubspot_contact_id) : "";
@@ -290,7 +295,7 @@ export async function runTaskExecution(
           incomplete.push("HubSpot");
         }
       } else if (name === "Google Sheets") {
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No Google Sheets token");
         const when = new Date().toISOString();
         const r = await createSpreadsheet(token, {
@@ -303,7 +308,7 @@ export async function runTaskExecution(
         steps.push({ label: `Logged to Google Sheets${r.url ? ` — ${r.url}` : ""}`, status: "done" });
         touched.push("Google Sheets");
       } else if (name === "Notion") {
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No Notion token");
         const r = await createNotionPage(token, {
           title: `[Operator] ${task.title}`.slice(0, 100),
@@ -318,7 +323,7 @@ export async function runTaskExecution(
             `Daily limit reached — ${posted} posts already published to X today (cap ${X_DAILY_CAP}). Approve this tomorrow.`,
           );
         }
-        const token = await getValidAccessToken(workspaceId, name);
+        const token = await getValidAccessToken(workspaceId, name, scope);
         if (!token) throw new Error("No X token");
         // Publish the composed X post specifically — the `social_post` asset the
         // agent wrote and clamped for X — never some other draft asset (e.g. a

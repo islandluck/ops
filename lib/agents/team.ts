@@ -1,13 +1,14 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, gt, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   chatChannels,
   chatMessages,
   chatReads,
   humanProjects,
+  integrations,
   profiles,
   projects,
   teamAssignments,
@@ -153,6 +154,57 @@ export async function listTeamMembers(workspaceId: string): Promise<TeamMember[]
     .orderBy(desc(teamMembers.is_owner), desc(teamMembers.created_at));
   const nameById = new Map(rows.map((r) => [r.id, r.name]));
   return rows.map((r) => toMember(r, r.manager_id ? nameById.get(r.manager_id) ?? null : null));
+}
+
+/**
+ * Operator Lite owner oversight: for each linked member (one who has joined and has
+ * their own plane), how much open work they're carrying + whether they've connected
+ * their own email. Keyed by team_member id. Reads across member planes — owner-only.
+ */
+export async function getMemberWorkloads(
+  workspaceId: string,
+): Promise<Record<string, { openTasks: number; hasEmail: boolean }>> {
+  const members = await db
+    .select({ id: teamMembers.id, uid: teamMembers.user_id })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), isNotNull(teamMembers.user_id)));
+  const uids = members.map((m) => m.uid).filter((u): u is string => Boolean(u));
+  if (!uids.length) return {};
+
+  const [taskRows, emailRows] = await Promise.all([
+    db
+      .select({ uid: tasks.member_user_id })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.workspace_id, workspaceId),
+          inArray(tasks.member_user_id, uids),
+          eq(tasks.archived, false),
+          ne(tasks.status, "done"),
+        ),
+      ),
+    db
+      .select({ uid: integrations.member_user_id })
+      .from(integrations)
+      .where(
+        and(
+          eq(integrations.workspace_id, workspaceId),
+          inArray(integrations.member_user_id, uids),
+          eq(integrations.connected, true),
+          eq(integrations.category, "email"),
+        ),
+      ),
+  ]);
+
+  const openByUid = new Map<string, number>();
+  for (const t of taskRows) if (t.uid) openByUid.set(t.uid, (openByUid.get(t.uid) ?? 0) + 1);
+  const emailUids = new Set(emailRows.map((r) => r.uid).filter(Boolean));
+
+  const out: Record<string, { openTasks: number; hasEmail: boolean }> = {};
+  for (const m of members) {
+    if (m.uid) out[m.id] = { openTasks: openByUid.get(m.uid) ?? 0, hasEmail: emailUids.has(m.uid) };
+  }
+  return out;
 }
 
 export interface TeamMemberInput {

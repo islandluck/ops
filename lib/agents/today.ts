@@ -8,6 +8,7 @@ import { computeNudges } from "@/lib/executive/nudges";
 import { listBriefs } from "@/lib/agents/executive";
 import { getTeamCalendar } from "@/lib/agents/team";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { scopeFilter } from "@/lib/access/scope";
 import { notifySlack } from "@/lib/integrations/slack";
 import { sendGmail } from "@/lib/integrations/google";
 import type { TodayData, TodayItem } from "@/lib/types";
@@ -18,8 +19,79 @@ import type { TodayData, TodayItem } from "@/lib/types";
  * drafted emails, plus the day's schedule, fresh opportunities, and the latest brief.
  * Pure aggregation of existing data (nudges/KPIs are rule-computed, no AI tokens).
  */
-export async function getTodayData(workspaceId: string, name: string): Promise<TodayData> {
+export async function getTodayData(
+  workspaceId: string,
+  name: string,
+  scopeUserId: string | null = null,
+): Promise<TodayData> {
   const now = new Date();
+
+  // Operator Lite: a member's Today is THEIR own plane — their overdue tasks + their
+  // drafted email replies + the shared calendar. Owner-only aggregates (business
+  // KPIs, board alerts, Executive nudges/brief, opportunities) never reach a member.
+  if (scopeUserId) {
+    const [overdueRows, emailRows, calendar] = await Promise.all([
+      db
+        .select({ id: tasks.id, title: tasks.title })
+        .from(tasks)
+        .where(
+          and(
+            eq(tasks.workspace_id, workspaceId),
+            scopeFilter(tasks.member_user_id, scopeUserId),
+            eq(tasks.archived, false),
+            ne(tasks.status, "done"),
+            isNotNull(tasks.due_at),
+            lt(tasks.due_at, now),
+          ),
+        )
+        .orderBy(asc(tasks.due_at))
+        .limit(20),
+      db
+        .select({ id: emailTriage.id })
+        .from(emailTriage)
+        .where(
+          and(
+            eq(emailTriage.workspace_id, workspaceId),
+            scopeFilter(emailTriage.member_user_id, scopeUserId),
+            eq(emailTriage.status, "triaged"),
+            ne(emailTriage.draft_reply, ""),
+          ),
+        )
+        .limit(50),
+      getTeamCalendar(workspaceId),
+    ]);
+    const needsYou: TodayItem[] = [];
+    if (overdueRows.length) {
+      needsYou.push({
+        id: "overdue",
+        kind: "deadline",
+        title: `${overdueRows.length} task${overdueRows.length === 1 ? "" : "s"} overdue`,
+        detail: overdueRows.slice(0, 3).map((t) => t.title).join(" · "),
+        href: "/approvals",
+        tone: "urgent",
+      });
+    }
+    if (emailRows.length) {
+      needsYou.push({
+        id: "email-drafts",
+        kind: "email",
+        title: `${emailRows.length} email repl${emailRows.length === 1 ? "y" : "ies"} drafted`,
+        detail: "Reviewed and ready for you to send or edit.",
+        href: "/email",
+        tone: "normal",
+      });
+    }
+    const cutoff = now.getTime() + 3 * 86_400_000;
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const schedule = calendar
+      .filter((i) => {
+        const t = new Date(i.when).getTime();
+        return t >= startOfToday && t < cutoff;
+      })
+      .slice(0, 6);
+    return { name, kpis: [], needsYou, schedule, opportunities: [], brief: null, digestOn: false };
+  }
+
   const [kpis, nudges, alertRows, oppRows, briefs, calendar, overdueRows, emailRows, cfgRows] = await Promise.all([
     computeKpis(workspaceId),
     computeNudges(workspaceId),

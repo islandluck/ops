@@ -72,7 +72,7 @@ export default function AcceptInvitePage() {
         /* ignore */
       }
       setMode("done");
-      window.location.href = "/portal";
+      window.location.href = "/today";
     } else {
       setError("error" in r ? r.error : "Couldn't join the workspace.");
       setMode("invalid");
@@ -98,7 +98,7 @@ export default function AcceptInvitePage() {
       const err = await signInAndReload(password);
       if (err) {
         // Account made + joined, but auto sign-in hiccuped — send them to sign in.
-        window.location.href = "/login?next=/portal";
+        window.location.href = "/login?next=/today";
       }
       return;
     }
@@ -151,7 +151,7 @@ export default function AcceptInvitePage() {
         {mode === "done" && (
           <>
             <CheckCircle2 className="h-8 w-8 text-success" />
-            <p className="text-sm text-muted-foreground">You're in — taking you to your portal…</p>
+            <p className="text-sm text-muted-foreground">You're in — taking you to your workspace…</p>
           </>
         )}
 

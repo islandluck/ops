@@ -212,6 +212,7 @@ import {
   listTeamEvents,
   listTeamGoals,
   listTeamMeetings,
+  getMemberWorkloads,
   listTeamMembers,
   sendChatMessage,
   setMemberOrg,
@@ -1340,7 +1341,8 @@ export async function getTodayDataAction(): Promise<TodayData | null> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return null;
   try {
-    return await getTodayData(ws, displayName(user));
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await getTodayData(ws, displayName(user), scopeUserId);
   } catch {
     return null;
   }
@@ -1351,6 +1353,8 @@ export async function setDigestCadenceAction(cadence: "off" | "daily"): Promise<
   if (!user) return { ok: false };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false };
+  // The morning digest is the owner's (it's keyed to the business brief).
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false };
   return setDigestCadence(ws, cadence);
 }
 
@@ -1359,6 +1363,7 @@ export async function sendMorningDigestNowAction(): Promise<{ ok: boolean; slack
   if (!user) return { ok: false, slack: false, email: false };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, slack: false, email: false };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, slack: false, email: false };
   try {
     return await sendMorningDigest(ws);
   } catch {
@@ -2180,7 +2185,9 @@ export async function createTaskAction(
     // The approval center is human-in-the-loop: anything that touches a real
     // system must be approved before it runs, regardless of the model's guess.
     if (planned.affected_systems.length > 0) planned.requires_approval = true;
-    const taskId = await createPlannedTask(ws, planned, { name: displayName(user) });
+    // Operator Lite: a member's task lands on their own plane.
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const taskId = await createPlannedTask(ws, planned, { name: displayName(user) }, scopeUserId);
     return { ok: true, taskId, title: planned.title };
   } catch (e) {
     console.error("[createTask] failed:", e instanceof Error ? e.message : e);
@@ -2194,7 +2201,9 @@ export async function runAgentAction(agentId: string): Promise<RunAgentResult> {
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return runAgentForWorkspace(ws, agentId, { name: displayName(user), email: user.email ?? "" });
+  // Operator Lite: a member's agent run works on their plane (own tasks, own integrations).
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return runAgentForWorkspace(ws, agentId, { name: displayName(user), email: user.email ?? "" }, {}, scopeUserId);
 }
 
 /** Have a task's assigned agent draft the deliverable (then it awaits approval). */
@@ -3299,6 +3308,21 @@ export async function deleteTeamMemberAction(id: string) {
     return await deleteTeamMember(ws, id);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't remove the member." };
+  }
+}
+
+/** Operator Lite owner oversight: each linked member's open-task count + whether
+ *  they've connected their own email. Owner-only (reads across member planes). */
+export async function getMemberWorkloadsAction(): Promise<Record<string, { openTasks: number; hasEmail: boolean }>> {
+  const user = await getCurrentUser();
+  if (!user) return {};
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return {};
+  if ((await getWorkspaceRole(ws, user.id)) !== "owner") return {};
+  try {
+    return await getMemberWorkloads(ws);
+  } catch {
+    return {};
   }
 }
 

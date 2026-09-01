@@ -35,6 +35,7 @@ import {
   inviteTeamMemberAction,
   listAssignmentsAction,
   listHumanProjectsAction,
+  getMemberWorkloadsAction,
   listInvitesAction,
   listTeamMembersAction,
   setMemberPageAccessAction,
@@ -884,6 +885,8 @@ export default function TeamPage() {
   const [projects, setProjects] = useState<HumanProject[]>([]);
   const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [invites, setInvites] = useState<{ id: string; member_id: string; accept_url: string }[]>([]);
+  // Operator Lite oversight: each linked member's open-work + email-connected status.
+  const [workloads, setWorkloads] = useState<Record<string, { openTasks: number; hasEmail: boolean }>>({});
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -898,18 +901,20 @@ export default function TeamPage() {
   });
 
   async function refresh() {
-    const [m, a, inv, p, ap] = await Promise.all([
+    const [m, a, inv, p, ap, wl] = await Promise.all([
       listTeamMembersAction(),
       listAssignmentsAction(),
       listInvitesAction(),
       listHumanProjectsAction(),
       getAssignedProjectsAction(),
+      getMemberWorkloadsAction(),
     ]);
     setMembers(m);
     setAssignments(a);
     setInvites(inv);
     setProjects(p);
     setAssignedProjects(ap);
+    setWorkloads(wl);
     setLoading(false);
   }
 
@@ -994,6 +999,15 @@ export default function TeamPage() {
             <div className="truncate text-sm text-muted-foreground">{m.role_title || "—"}</div>
             {m.manager_name && (
               <div className="truncate text-xs text-muted-foreground">↳ reports to {m.manager_name}</div>
+            )}
+            {m.linked && !m.is_owner && m.member_type !== "advisor" && (
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+                <span className="rounded-full bg-emerald-500/12 px-1.5 py-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                  Operator Lite
+                </span>
+                <span>{workloads[m.id]?.openTasks ?? 0} open</span>
+                <span>· email {workloads[m.id]?.hasEmail ? "connected" : "not connected"}</span>
+              </div>
             )}
           </div>
           <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
