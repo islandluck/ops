@@ -1,0 +1,1 @@
+ALTER TABLE "team_members" ADD COLUMN "member_type" text DEFAULT 'teammate' NOT NULL;

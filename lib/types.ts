@@ -189,6 +189,8 @@ export type TeamMemberStatus = "active" | "inactive" | "invited";
 /** A person on the owner's team — a profile the Executive/Boardroom can reason about. */
 /** In-team rank (inside the "member" access tier). Owner is a separate tier. */
 export type TeamRole = "manager" | "contributor";
+/** Roster kind: an operational teammate vs. a strategic advisor. */
+export type MemberType = "teammate" | "advisor";
 /** The viewer's effective role across the whole workspace. */
 export type WorkspaceRole = "owner" | "manager" | "contributor";
 
@@ -205,6 +207,8 @@ export interface TeamMember {
   emoji: string;
   accent: string;
   status: TeamMemberStatus;
+  /** Roster kind: operational teammate vs. strategic advisor. */
+  member_type: MemberType;
   /** In-team rank. Managers can be assigned reports + delegate to them. */
   team_role: TeamRole;
   /** Who they report to (another team member's id); null = reports to the owner. */

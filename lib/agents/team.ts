@@ -52,6 +52,7 @@ import type {
   TeamDocumentKind,
   TeamEvent,
   TeamEventKind,
+  MemberType,
   TeamGoal,
   TeamGoalHorizon,
   TeamGoalScope,
@@ -85,6 +86,7 @@ function toMember(r: typeof teamMembers.$inferSelect, managerName: string | null
     team_role: (r.team_role ?? "contributor") as TeamRole,
     manager_id: r.manager_id ?? null,
     manager_name: managerName,
+    member_type: (r.member_type ?? "teammate") as MemberType,
     is_owner: r.is_owner ?? false,
     created_at: new Date(r.created_at).toISOString(),
   };
@@ -164,6 +166,8 @@ export interface TeamMemberInput {
   status?: TeamMember["status"];
   /** Initial in-team rank. Manager/report wiring is edited later via setMemberOrg. */
   team_role?: TeamRole;
+  /** Teammate (default) or advisor. */
+  member_type?: MemberType;
 }
 
 export async function createTeamMember(
@@ -190,6 +194,7 @@ export async function createTeamMember(
       accent: (input.accent ?? "indigo").slice(0, 20),
       status: input.status ?? "active",
       team_role: input.team_role === "manager" ? "manager" : "contributor",
+      member_type: input.member_type === "advisor" ? "advisor" : "teammate",
       manager_id: null,
       created_at: now,
       updated_at: now,
@@ -218,6 +223,7 @@ export async function updateTeamMember(
   if (typeof patch.emoji === "string") set.emoji = patch.emoji.slice(0, 8);
   if (typeof patch.accent === "string") set.accent = patch.accent.slice(0, 20);
   if (typeof patch.status === "string") set.status = patch.status;
+  if (patch.member_type === "teammate" || patch.member_type === "advisor") set.member_type = patch.member_type;
   await db
     .update(teamMembers)
     .set(set)
@@ -1325,14 +1331,16 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
   const members = await listTeamMembers(workspaceId);
   const active = members.filter((m) => m.status !== "inactive");
   if (!active.length) return "";
+  const team = active.filter((m) => m.member_type !== "advisor");
+  const advisors = active.filter((m) => m.member_type === "advisor");
 
   // Reverse the reporting edge so each manager can list who they manage.
   const reportsByManager = new Map<string, string[]>();
-  for (const m of active) {
+  for (const m of team) {
     if (m.manager_id) reportsByManager.set(m.manager_id, [...(reportsByManager.get(m.manager_id) ?? []), m.name]);
   }
 
-  const roster = active
+  const roster = team
     .map((m) => {
       const tags: string[] = [];
       if (m.is_owner) tags.push("THE OWNER / FOUNDER — the person you work for");
@@ -1393,10 +1401,19 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
         .join("\n")
     : "";
 
-  return `Team (${active.length} member${active.length === 1 ? "" : "s"}):\n${roster}${goalsText}${bdayText}${openText}`.slice(
-    0,
-    8000,
-  );
+  const advisorsText = advisors.length
+    ? "\n\nADVISORY NETWORK — strategic advisors to call on for advice, intros, and startup-level tasks (NOT day-to-day ops):\n" +
+      advisors
+        .map((m) => {
+          const exp = m.skills.length ? `\n  Expertise: ${m.skills.join(", ")}` : "";
+          const about = m.description ? `\n  ${m.description}` : "";
+          return `- ${m.name}${m.role_title ? ` — ${m.role_title}` : ""}${exp}${about}`;
+        })
+        .join("\n")
+    : "";
+
+  const teamHead = team.length ? `Team (${team.length} member${team.length === 1 ? "" : "s"}):\n${roster}` : "";
+  return `${teamHead}${advisorsText}${goalsText}${bdayText}${openText}`.trim().slice(0, 8000);
 }
 
 // ── Team calendar (Phase: refinements) ───────────────────────────────────────
@@ -2575,31 +2592,40 @@ export async function importNotionMeeting(
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
 
-  // The owner's own roster entry — action items assigned to the owner land as tasks
-  // on the owner's Approval Center board (where they act on + complete them), not as
-  // team assignments (which live in the member portal the owner doesn't use).
-  const [ownerM] = await db
-    .select({ id: teamMembers.id, name: teamMembers.name })
+  // Routing: an item assigned to the OWNER or an ADVISOR lands as a task on the
+  // owner's own Approval Center board — the owner works there, and advisors have no
+  // portal, so an advisor item becomes a founder follow-up. Teammates get team
+  // assignments (which they see + complete in their portal).
+  const memberRows = await db
+    .select({
+      id: teamMembers.id,
+      name: teamMembers.name,
+      is_owner: teamMembers.is_owner,
+      member_type: teamMembers.member_type,
+    })
     .from(teamMembers)
-    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.is_owner, true)))
-    .limit(1);
+    .where(eq(teamMembers.workspace_id, workspaceId));
+  const memberById = new Map(memberRows.map((m) => [m.id, m]));
 
   let assignments = 0;
   for (const a of input.actions) {
     if (!a.member_id || !a.title.trim()) continue;
-    const note = a.detail?.trim()
-      ? `${a.detail.trim()}\n\nFrom meeting: ${created.meeting.title}`
-      : `From meeting: ${created.meeting.title}`;
+    const target = memberById.get(a.member_id);
+    const detail = a.detail?.trim() ?? "";
+    const note = detail ? `${detail}\n\nFrom meeting: ${created.meeting.title}` : `From meeting: ${created.meeting.title}`;
 
-    if (ownerM && a.member_id === ownerM.id) {
+    if (target && (target.is_owner || target.member_type === "advisor")) {
+      const isAdvisor = target.member_type === "advisor" && !target.is_owner;
+      const title = (isAdvisor ? `${a.title.trim()} — with ${target.name}` : a.title).slice(0, 200);
+      const desc = isAdvisor ? `Follow up with ${target.name} (advisor).\n\n${note}` : note;
       const now = new Date();
       await db.insert(tasks).values({
         id: randomUUID(),
         workspace_id: workspaceId,
         category: "admin",
-        title: a.title.slice(0, 200),
-        description: note,
-        rationale: note,
+        title,
+        description: desc,
+        rationale: desc,
         status: "ready",
         risk_level: "low",
         priority: "medium",

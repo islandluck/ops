@@ -48,6 +48,7 @@ import type {
   HumanProjectStatus,
   Project,
   TeamAssignment,
+  MemberType,
   TeamMember,
   TeamRole,
 } from "@/lib/types";
@@ -120,6 +121,7 @@ type MemberDraft = {
   accent: string;
   team_role: TeamRole;
   manager_id: string;
+  member_type: MemberType;
 };
 
 const EMPTY_MEMBER: MemberDraft = {
@@ -133,6 +135,7 @@ const EMPTY_MEMBER: MemberDraft = {
   accent: "indigo",
   team_role: "contributor",
   manager_id: "",
+  member_type: "teammate",
 };
 
 function MemberDialog({
@@ -178,6 +181,7 @@ function MemberDialog({
             accent: member.accent || "indigo",
             team_role: member.team_role,
             manager_id: member.manager_id ?? "",
+            member_type: member.member_type,
           }
         : EMPTY_MEMBER,
     );
@@ -190,6 +194,7 @@ function MemberDialog({
     }
     setSaving(true);
     setError(null);
+    const isAdvisor = draft.member_type === "advisor";
     const payload = {
       name: draft.name,
       role_title: draft.role_title,
@@ -199,10 +204,12 @@ function MemberDialog({
       birthday: draft.birthday,
       emoji: draft.emoji,
       accent: draft.accent,
+      member_type: draft.member_type,
     };
 
-    // New member + invite → create the profile AND send a join invite.
-    if (!member && sendInvite) {
+    // New member + invite → create the profile AND send a join invite. Advisors are
+    // external network — a profile only, no workspace invite.
+    if (!member && sendInvite && !isAdvisor) {
       if (!draft.email.trim()) {
         setSaving(false);
         setError("An email is required to send an invite.");
@@ -221,22 +228,25 @@ function MemberDialog({
     }
 
     if (member) {
-      // Save the profile, then the org role/manager (owner-gated on the server).
+      // Save the profile, then (teammates only) the org role/manager.
       const r = await updateTeamMemberAction(member.id, payload);
       if (!("ok" in r) || !r.ok) {
         setSaving(false);
         setError("error" in r ? r.error : "Couldn't save.");
         return;
       }
-      const orgRes = await setTeamMemberOrgAction(member.id, {
-        team_role: draft.team_role,
-        manager_id: draft.team_role === "manager" ? null : draft.manager_id || null,
-      });
-      setSaving(false);
-      if (!("ok" in orgRes) || !orgRes.ok) {
-        setError("error" in orgRes ? orgRes.error : "Saved the profile, but couldn't update the role.");
-        return;
+      if (!isAdvisor) {
+        const orgRes = await setTeamMemberOrgAction(member.id, {
+          team_role: draft.team_role,
+          manager_id: draft.team_role === "manager" ? null : draft.manager_id || null,
+        });
+        if (!("ok" in orgRes) || !orgRes.ok) {
+          setSaving(false);
+          setError("error" in orgRes ? orgRes.error : "Saved the profile, but couldn't update the role.");
+          return;
+        }
       }
+      setSaving(false);
       onSaved();
       onClose();
       return;
@@ -252,9 +262,31 @@ function MemberDialog({
     }
   }
 
+  const isAdvisor = draft.member_type === "advisor";
+
   return (
-    <Dialog open={open} onClose={onClose} title={member ? "Edit team member" : "Add team member"}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={member ? (isAdvisor ? "Edit advisor" : "Edit team member") : "Add to your team"}
+    >
       <div className="flex flex-col gap-3">
+        <div>
+          <Label>Type</Label>
+          <Segmented
+            options={[
+              { value: "teammate", label: "Teammate" },
+              { value: "advisor", label: "Advisor" },
+            ]}
+            value={draft.member_type}
+            onChange={(v) => setDraft({ ...draft, member_type: v as MemberType })}
+          />
+          <p className="mt-1 text-[12px] text-muted-foreground">
+            {isAdvisor
+              ? "A strategic advisor in your network — for advice, intros, and startup-level tasks. They don't get workspace access."
+              : "A teammate who works in the platform on day-to-day operations."}
+          </p>
+        </div>
         <div className="flex gap-3">
           <div className="w-20">
             <Label>Emoji</Label>
@@ -272,11 +304,11 @@ function MemberDialog({
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label>Role</Label>
+            <Label>{isAdvisor ? "Advisory focus" : "Role"}</Label>
             <Input
               value={draft.role_title}
               onChange={(e) => setDraft({ ...draft, role_title: e.target.value })}
-              placeholder="Marketing Lead"
+              placeholder={isAdvisor ? "GTM Advisor · ex-Stripe" : "Marketing Lead"}
             />
           </div>
           <div>
@@ -290,20 +322,26 @@ function MemberDialog({
           </div>
         </div>
         <div>
-          <Label>What they do (the AI reads this as context)</Label>
+          <Label>
+            {isAdvisor ? "How they help + their network (the AI reads this)" : "What they do (the AI reads this as context)"}
+          </Label>
           <Textarea
             rows={3}
             value={draft.description}
             onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-            placeholder="Owns paid + organic growth; runs the content calendar and weekly reporting."
+            placeholder={
+              isAdvisor
+                ? "Ex-Stripe VP Sales. Can open doors to enterprise buyers and Series A investors; sharp on GTM + pricing."
+                : "Owns paid + organic growth; runs the content calendar and weekly reporting."
+            }
           />
         </div>
         <div>
-          <Label>Skills (comma-separated)</Label>
+          <Label>{isAdvisor ? "Areas of expertise (comma-separated)" : "Skills (comma-separated)"}</Label>
           <Input
             value={draft.skills}
             onChange={(e) => setDraft({ ...draft, skills: e.target.value })}
-            placeholder="copywriting, paid ads, analytics"
+            placeholder={isAdvisor ? "fundraising, GTM, enterprise sales" : "copywriting, paid ads, analytics"}
           />
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -330,7 +368,7 @@ function MemberDialog({
             </div>
           </div>
         </div>
-        {member && (
+        {member && !isAdvisor && (
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3">
             <div>
               <Label>Team role</Label>
@@ -358,7 +396,7 @@ function MemberDialog({
             )}
           </div>
         )}
-        {!member && !result && (
+        {!member && !result && !isAdvisor && (
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -848,6 +886,90 @@ export default function TeamPage() {
     refresh();
   }
 
+  const teammates = members.filter((m) => m.member_type !== "advisor");
+  const advisors = members.filter((m) => m.member_type === "advisor");
+
+  const renderMemberCard = (m: TeamMember) => {
+    const open = assignments.filter((a) => a.member_id === m.id && a.status !== "done").length;
+    return (
+      <Card key={m.id} className="group flex flex-col gap-3 p-4">
+        <div className="flex items-start gap-3">
+          <Avatar member={m} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate font-semibold">{m.name}</span>
+              {m.is_owner ? (
+                <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                  You
+                </span>
+              ) : m.member_type === "advisor" ? (
+                <span className="shrink-0 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600 dark:text-violet-400">
+                  Advisor
+                </span>
+              ) : (
+                m.team_role === "manager" && (
+                  <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                    Manager
+                  </span>
+                )
+              )}
+              {m.status === "invited" && (
+                <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                  Invited
+                </span>
+              )}
+            </div>
+            <div className="truncate text-sm text-muted-foreground">{m.role_title || "—"}</div>
+            {m.manager_name && (
+              <div className="truncate text-xs text-muted-foreground">↳ reports to {m.manager_name}</div>
+            )}
+          </div>
+          <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
+            <Button variant="ghost" size="icon" onClick={() => setMemberDialog({ open: true, member: m })}>
+              <Pencil className="h-4 w-4 text-muted-foreground" />
+            </Button>
+            {!m.is_owner && (
+              <Button variant="ghost" size="icon" onClick={() => removeMember(m)}>
+                <Trash2 className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            )}
+          </div>
+        </div>
+        {m.description && <p className="line-clamp-3 text-sm text-muted-foreground">{m.description}</p>}
+        {m.skills.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {m.skills.map((s) => (
+              <span key={s} className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                {s}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+          <span className="truncate">
+            {m.member_type === "advisor"
+              ? "Strategic advisor"
+              : open > 0
+                ? `${open} open handoff${open === 1 ? "" : "s"}`
+                : "No open handoffs"}
+          </span>
+          {m.status === "invited" && inviteByMember.has(m.id) ? (
+            <button
+              type="button"
+              onClick={() => copyInviteLink(m.id)}
+              className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
+            >
+              {copiedId === m.id ? <Check className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
+              {copiedId === m.id ? "Copied" : "Invite link"}
+            </button>
+          ) : (
+            m.email && <span className="truncate">{m.email}</span>
+          )}
+        </div>
+      </Card>
+    );
+  };
+
   async function setAssignmentStatus(id: string, status: AssignmentStatus) {
     setAssignments((prev) => prev.map((a) => (a.id === id ? { ...a, status } : a)));
     await updateAssignmentAction(id, { status });
@@ -930,79 +1052,27 @@ export default function TeamPage() {
             </Button>
           </div>
         ) : view === "roster" ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {members.map((m) => {
-              const open = assignments.filter((a) => a.member_id === m.id && a.status !== "done").length;
-              return (
-                <Card key={m.id} className="group flex flex-col gap-3 p-4">
-                  <div className="flex items-start gap-3">
-                    <Avatar member={m} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate font-semibold">{m.name}</span>
-                        {m.is_owner ? (
-                          <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                            You
-                          </span>
-                        ) : (
-                          m.team_role === "manager" && (
-                            <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                              Manager
-                            </span>
-                          )
-                        )}
-                        {m.status === "invited" && (
-                          <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-                            Invited
-                          </span>
-                        )}
-                      </div>
-                      <div className="truncate text-sm text-muted-foreground">{m.role_title || "—"}</div>
-                      {m.manager_name && (
-                        <div className="truncate text-xs text-muted-foreground">↳ reports to {m.manager_name}</div>
-                      )}
-                    </div>
-                    <div className="flex gap-0.5 opacity-0 transition group-hover:opacity-100">
-                      <Button variant="ghost" size="icon" onClick={() => setMemberDialog({ open: true, member: m })}>
-                        <Pencil className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                      {!m.is_owner && (
-                        <Button variant="ghost" size="icon" onClick={() => removeMember(m)}>
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  {m.description && <p className="line-clamp-3 text-sm text-muted-foreground">{m.description}</p>}
-                  {m.skills.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {m.skills.map((s) => (
-                        <span key={s} className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mt-auto flex items-center justify-between gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
-                    <span className="truncate">
-                      {open > 0 ? `${open} open handoff${open === 1 ? "" : "s"}` : "No open handoffs"}
-                    </span>
-                    {m.status === "invited" && inviteByMember.has(m.id) ? (
-                      <button
-                        type="button"
-                        onClick={() => copyInviteLink(m.id)}
-                        className="inline-flex shrink-0 items-center gap-1 text-primary hover:underline"
-                      >
-                        {copiedId === m.id ? <Check className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
-                        {copiedId === m.id ? "Copied" : "Invite link"}
-                      </button>
-                    ) : (
-                      m.email && <span className="truncate">{m.email}</span>
-                    )}
-                  </div>
-                </Card>
-              );
-            })}
+          <div className="flex flex-col gap-6">
+            {teammates.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Team · {teammates.length}
+                </h3>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {teammates.map(renderMemberCard)}
+                </div>
+              </div>
+            )}
+            {advisors.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Advisors · {advisors.length}
+                </h3>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {advisors.map(renderMemberCard)}
+                </div>
+              </div>
+            )}
           </div>
         ) : view === "projects" ? (
           <div className="flex flex-col gap-6">
