@@ -347,10 +347,18 @@ async function readBundle(
     // The activity log is an owner-only surface — never hand a member the
     // workspace's activity stream (it narrates the owner's plane).
     db.select().from(activityEvents).where(isMember ? sql`false` : eq(activityEvents.workspace_id, wsId)),
+    // Documents = agent deliverables on the owner's plane. A member only ever sees
+    // documents tied to their OWN tasks (team collaboration lives in /team → Docs).
     db
       .select()
       .from(documents)
-      .where(eq(documents.workspace_id, wsId))
+      .where(
+        isMember
+          ? taskIds.length
+            ? inArray(documents.task_id, taskIds)
+            : sql`false`
+          : eq(documents.workspace_id, wsId),
+      )
       .orderBy(desc(documents.created_at))
       .limit(300),
   ]);
