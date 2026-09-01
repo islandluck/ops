@@ -233,7 +233,9 @@ import {
 import { getTeamAssistantHistory, sendTeamAssistantMessage } from "@/lib/agents/team-assistant";
 import {
   acceptInvite,
+  acceptInviteWithPassword,
   acceptPendingInvite,
+  getInviteByToken,
   inviteTeamMember,
   listInvites,
   revokeInvite,
@@ -4062,7 +4064,13 @@ export async function inviteTeamMemberAction(input: {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   try {
-    return await inviteTeamMember(ws, user.id, input);
+    // Build the accept link from the ACTUAL request host, so it's always the live
+    // domain even if NEXT_PUBLIC_APP_URL isn't set/redeployed yet.
+    const h = await headers();
+    const host = h.get("x-forwarded-host") || h.get("host");
+    const proto = h.get("x-forwarded-proto") || "https";
+    const baseUrl = host ? `${proto}://${host}` : undefined;
+    return await inviteTeamMember(ws, user.id, { ...input, baseUrl, inviterName: displayName(user) });
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't send the invite." };
   }
@@ -4102,6 +4110,25 @@ export async function acceptInviteAction(token: string) {
       : await acceptPendingInvite(user.id, user.email ?? "");
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't accept the invite." };
+  }
+}
+
+/** Public — what workspace + email an invite token is for (drives the accept page). */
+export async function getInviteAction(token: string) {
+  try {
+    return await getInviteByToken(token);
+  } catch {
+    return { valid: false as const, email: "", workspaceName: "", error: "Couldn't load this invite." };
+  }
+}
+
+/** Public — create the invitee's account (email + password) and join them. The token
+ *  is the credential; no session is required. */
+export async function acceptInviteWithPasswordAction(token: string, password: string) {
+  try {
+    return await acceptInviteWithPassword(token, password);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't complete signup." };
   }
 }
 
