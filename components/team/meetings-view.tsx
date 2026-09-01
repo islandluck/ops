@@ -138,6 +138,7 @@ function MeetingDialog({
                   )}
                 >
                   {m.name}
+                  {m.is_owner ? " (You)" : ""}
                 </button>
               );
             })}
@@ -444,6 +445,7 @@ function NotionImportDialog({
                             {members.map((m) => (
                               <option key={m.id} value={m.id}>
                                 {m.name}
+                                {m.is_owner ? " (You)" : ""}
                               </option>
                             ))}
                           </select>

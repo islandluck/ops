@@ -940,10 +940,16 @@ export default function TeamPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate font-semibold">{m.name}</span>
-                        {m.team_role === "manager" && (
+                        {m.is_owner ? (
                           <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                            Manager
+                            You
                           </span>
+                        ) : (
+                          m.team_role === "manager" && (
+                            <span className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                              Manager
+                            </span>
+                          )
                         )}
                         {m.status === "invited" && (
                           <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
@@ -960,9 +966,11 @@ export default function TeamPage() {
                       <Button variant="ghost" size="icon" onClick={() => setMemberDialog({ open: true, member: m })}>
                         <Pencil className="h-4 w-4 text-muted-foreground" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => removeMember(m)}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
+                      {!m.is_owner && (
+                        <Button variant="ghost" size="icon" onClick={() => removeMember(m)}>
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                   {m.description && <p className="line-clamp-3 text-sm text-muted-foreground">{m.description}</p>}

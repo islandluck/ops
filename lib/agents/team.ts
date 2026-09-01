@@ -8,16 +8,19 @@ import {
   chatMessages,
   chatReads,
   humanProjects,
+  profiles,
   projects,
   teamAssignments,
   teamDocuments,
   teamEvents,
   teamGoals,
+  tasks,
   teamMeetings,
   teamMembers,
   teamNotifications,
   teamSettings,
   workspaceMembers,
+  workspaces,
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import {
@@ -82,16 +85,67 @@ function toMember(r: typeof teamMembers.$inferSelect, managerName: string | null
     team_role: (r.team_role ?? "contributor") as TeamRole,
     manager_id: r.manager_id ?? null,
     manager_name: managerName,
+    is_owner: r.is_owner ?? false,
     created_at: new Date(r.created_at).toISOString(),
   };
 }
 
+/**
+ * Ensure the workspace owner has their own roster entry (a team_members row with
+ * is_owner=true) — so the owner is assignable and the Executive/Boardroom know who
+ * they are. Idempotent; seeds name/email from the owner's profile. Best-effort.
+ */
+async function ensureOwnerMember(workspaceId: string): Promise<void> {
+  try {
+    const existing = await db
+      .select({ id: teamMembers.id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.is_owner, true)))
+      .limit(1);
+    if (existing.length) return;
+
+    const [ws] = await db
+      .select({ owner: workspaces.owner_id })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    if (!ws?.owner) return;
+    const [prof] = await db
+      .select({ email: profiles.email, name: profiles.full_name })
+      .from(profiles)
+      .where(eq(profiles.id, ws.owner))
+      .limit(1);
+    const email = prof?.email ?? "";
+    const name = (prof?.name && prof.name.trim()) || (email ? email.split("@")[0] : "") || "You";
+    const now = new Date();
+    await db.insert(teamMembers).values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      user_id: ws.owner,
+      name: name.slice(0, 120),
+      email: email.slice(0, 200),
+      role_title: "Owner",
+      description: "",
+      team_role: "manager",
+      manager_id: null,
+      is_owner: true,
+      accent: "indigo",
+      status: "active",
+      created_at: now,
+      updated_at: now,
+    });
+  } catch {
+    /* best-effort — never block the roster on this */
+  }
+}
+
 export async function listTeamMembers(workspaceId: string): Promise<TeamMember[]> {
+  await ensureOwnerMember(workspaceId);
   const rows = await db
     .select()
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId))
-    .orderBy(desc(teamMembers.created_at));
+    .orderBy(desc(teamMembers.is_owner), desc(teamMembers.created_at));
   const nameById = new Map(rows.map((r) => [r.id, r.name]));
   return rows.map((r) => toMember(r, r.manager_id ? nameById.get(r.manager_id) ?? null : null));
 }
@@ -171,7 +225,16 @@ export async function updateTeamMember(
   return { ok: true };
 }
 
-export async function deleteTeamMember(workspaceId: string, id: string): Promise<{ ok: true }> {
+export async function deleteTeamMember(
+  workspaceId: string,
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const [m] = await db
+    .select({ is_owner: teamMembers.is_owner })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.id, id)))
+    .limit(1);
+  if (m?.is_owner) return { ok: false, error: "You can't remove your own owner profile." };
   // Detach anyone who reported to this person (manager_id has no DB FK), then delete.
   // Assignments cascade via the member FK.
   await db
@@ -1272,7 +1335,8 @@ export async function getTeamContext(workspaceId: string): Promise<string> {
   const roster = active
     .map((m) => {
       const tags: string[] = [];
-      if (m.team_role === "manager") {
+      if (m.is_owner) tags.push("THE OWNER / FOUNDER — the person you work for");
+      if (m.team_role === "manager" && !m.is_owner) {
         const reps = reportsByManager.get(m.id);
         tags.push(reps?.length ? `Manager of ${reps.join(", ")}` : "Manager");
       }
@@ -2511,12 +2575,49 @@ export async function importNotionMeeting(
     .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.user_id, userId)))
     .limit(1);
 
+  // The owner's own roster entry — action items assigned to the owner land as tasks
+  // on the owner's Approval Center board (where they act on + complete them), not as
+  // team assignments (which live in the member portal the owner doesn't use).
+  const [ownerM] = await db
+    .select({ id: teamMembers.id, name: teamMembers.name })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.is_owner, true)))
+    .limit(1);
+
   let assignments = 0;
   for (const a of input.actions) {
     if (!a.member_id || !a.title.trim()) continue;
     const note = a.detail?.trim()
       ? `${a.detail.trim()}\n\nFrom meeting: ${created.meeting.title}`
       : `From meeting: ${created.meeting.title}`;
+
+    if (ownerM && a.member_id === ownerM.id) {
+      const now = new Date();
+      await db.insert(tasks).values({
+        id: randomUUID(),
+        workspace_id: workspaceId,
+        category: "admin",
+        title: a.title.slice(0, 200),
+        description: note,
+        rationale: note,
+        status: "ready",
+        risk_level: "low",
+        priority: "medium",
+        due_at: a.deadline ? new Date(a.deadline) : null,
+        created_by_type: "human",
+        requires_approval: false,
+        approval_status: "pending",
+        execution_status: "none",
+        affected_systems: [],
+        proposed_actions: 1,
+        impact_score: 40,
+        created_at: now,
+        updated_at: now,
+      });
+      assignments++;
+      continue;
+    }
+
     const r = await createAssignment(workspaceId, {
       member_id: a.member_id,
       title: a.title,

@@ -695,6 +695,10 @@ export const teamMembers = pgTable(
     // in workspace_members is unchanged.
     team_role: text("team_role").$type<"manager" | "contributor">().notNull().default("contributor"),
     manager_id: uuid("manager_id"),
+    // The workspace owner's own roster entry (their profile + assignable self). One
+    // per workspace, auto-created; can't be removed. The owner/member wall in
+    // workspace_members is unchanged — this is just a roster/profile representation.
+    is_owner: boolean("is_owner").notNull().default(false),
     created_at: createdAt,
     updated_at: updatedAt,
   },

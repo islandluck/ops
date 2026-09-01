@@ -211,6 +211,8 @@ export interface TeamMember {
   manager_id: string | null;
   /** Denormalized manager name for display (null = reports to owner). */
   manager_name: string | null;
+  /** True for the workspace owner's own roster entry — can't be removed. */
+  is_owner: boolean;
   created_at: string;
 }
 

@@ -449,6 +449,13 @@
       "when": 1788121614837,
       "tag": "0063_friendly_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1788239116768,
+      "tag": "0064_puzzling_sentinels",
+      "breakpoints": true
     }
   ]
 }
