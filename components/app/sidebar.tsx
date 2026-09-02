@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AlarmClock,
+  Bot,
   CheckCheck,
   ChevronsUpDown,
   CircleDot,
@@ -38,6 +39,7 @@ import { Logo } from "@/components/brand";
 import { CATEGORY_ICONS } from "@/components/badges";
 import { Avatar } from "@/components/ui/misc";
 import { useStore } from "@/lib/store";
+import { MEMBER_ONLY_KEYS } from "@/lib/access/pages";
 import { getBoardAlertCountAction, getExecutiveAttentionAction } from "@/app/actions";
 import { categoryCounts } from "@/lib/filters";
 import { CATEGORY_META, CATEGORY_ORDER } from "@/lib/constants";
@@ -51,6 +53,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
       { href: "/today", label: "Today", icon: Sun },
       { href: "/approvals", label: "Approval Center", icon: SquareKanban },
       { href: "/executive", label: "Executive", icon: Compass },
+      { href: "/assistant", label: "Assistant", icon: Bot },
       { href: "/boardroom", label: "Boardroom", icon: Gavel },
       { href: "/team", label: "Team", icon: UsersRound },
       { href: "/command-center", label: "Command Center", icon: ListChecks },
@@ -111,11 +114,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const counts = state ? categoryCounts(state.tasks) : null;
 
-  // Operator Lite: a team member sees only the pages the owner granted them.
-  // The owner (isMember=false) sees every page regardless of allowedPages.
+  // Operator Lite: a team member sees only the pages the owner granted them; the
+  // owner sees every page EXCEPT member-only ones (e.g. the Team Assistant).
   const isMember = !!state?.viewer?.isMember;
   const allowedPages = new Set(state?.viewer?.allowedPages ?? []);
-  const canSee = (href: string) => !isMember || allowedPages.has(href);
+  const memberOnly = new Set(MEMBER_ONLY_KEYS);
+  const canSee = (href: string) => (isMember ? allowedPages.has(href) : !memberOnly.has(href));
   const canSeeApprovals = canSee("/approvals");
 
   // Executive "needs attention" + Boardroom alert badges. Refreshed on mount and

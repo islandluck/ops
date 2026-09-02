@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { teamMembers, workspaceMembers } from "@/lib/db/schema";
-import { PAGES, resolveMemberPages } from "./pages";
+import { MEMBER_ONLY_KEYS, PAGES, resolveMemberPages } from "./pages";
 
 /**
  * Who is looking, and at what scope. The owner sees their own plane (data with no
@@ -22,7 +22,10 @@ export interface Viewer {
   teamMemberId: string | null;
 }
 
-const ALL_PAGE_KEYS = PAGES.map((p) => p.key);
+// The owner sees every page EXCEPT member-only ones (e.g. the Team Assistant, which
+// has no owner equivalent — the owner has the Executive instead).
+const memberOnly = new Set(MEMBER_ONLY_KEYS);
+const ALL_PAGE_KEYS = PAGES.map((p) => p.key).filter((k) => !memberOnly.has(k));
 
 export async function getViewer(userId: string, workspaceId: string): Promise<Viewer> {
   const [wm] = await db

@@ -5,15 +5,16 @@
  * the owner can optionally grant, and which are owner-only. Client-safe (no server imports).
  */
 
-export type MemberAccess = "default" | "grantable" | "never";
+export type MemberAccess = "default" | "grantable" | "never" | "member-only";
 
 export interface PageDef {
   /** Stable key = the route path (also used as the permission key). */
   key: string;
   label: string;
   group: string;
-  /** default = on for members out of the box; grantable = off until the owner grants;
-   *  never = owner-only, never available to members. */
+  /** default = on for members out of the box (owner-toggleable); grantable = off until
+   *  the owner grants (owner-toggleable); never = owner-only; member-only = always on
+   *  for members + hidden from the owner (their Team Assistant, no owner equivalent). */
   member: MemberAccess;
 }
 
@@ -22,6 +23,7 @@ export const PAGES: PageDef[] = [
   { key: "/today", label: "Today", group: "Command", member: "default" },
   { key: "/approvals", label: "Approval Center", group: "Command", member: "default" },
   { key: "/executive", label: "Executive", group: "Command", member: "never" },
+  { key: "/assistant", label: "Assistant", group: "Command", member: "member-only" },
   { key: "/boardroom", label: "Boardroom", group: "Command", member: "grantable" },
   { key: "/team", label: "Team", group: "Command", member: "default" },
   { key: "/command-center", label: "Command Center", group: "Command", member: "default" },
@@ -49,23 +51,29 @@ export const PAGES: PageDef[] = [
 
 const BY_KEY = new Map(PAGES.map((p) => [p.key, p]));
 
-/** Pages a member gets with no explicit grants set. */
+/** Pages a member gets with no explicit grants set (the owner-toggleable defaults). */
 export const MEMBER_DEFAULT_KEYS: string[] = PAGES.filter((p) => p.member === "default").map((p) => p.key);
 
 /** Pages the owner can toggle for a member (defaults start on, grantables start off). */
-export const MEMBER_TOGGLEABLE = PAGES.filter((p) => p.member !== "never");
+export const MEMBER_TOGGLEABLE = PAGES.filter((p) => p.member === "default" || p.member === "grantable");
 
 /** Owner-only page keys a member can never reach, whatever the grants say. */
 export const MEMBER_NEVER_KEYS: string[] = PAGES.filter((p) => p.member === "never").map((p) => p.key);
 const MEMBER_NEVER = new Set(MEMBER_NEVER_KEYS);
 
+/** Member-only page keys — always on for members, never shown to the owner. */
+export const MEMBER_ONLY_KEYS: string[] = PAGES.filter((p) => p.member === "member-only").map((p) => p.key);
+
 /**
  * Resolve a member's allowed page keys from their stored grants. An empty/undefined
- * grant list falls back to the defaults; "never" pages are always excluded.
+ * grant list falls back to the defaults; "never" pages are always excluded and
+ * "member-only" pages are always included.
  */
 export function resolveMemberPages(access: string[] | null | undefined): Set<string> {
   const chosen = access && access.length ? access : MEMBER_DEFAULT_KEYS;
-  return new Set(chosen.filter((k) => BY_KEY.has(k) && !MEMBER_NEVER.has(k)));
+  const set = new Set(chosen.filter((k) => BY_KEY.has(k) && !MEMBER_NEVER.has(k)));
+  for (const k of MEMBER_ONLY_KEYS) set.add(k);
+  return set;
 }
 
 /** Does a member with these grants have access to this path? (prefix-aware). */

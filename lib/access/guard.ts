@@ -29,6 +29,21 @@ export async function requireOwnerPage(): Promise<void> {
   if (isMember) redirect("/today");
 }
 
+/** Member-only page: send the owner to their equivalent (they have the Executive). */
+export async function requireMemberOnlyPage(): Promise<void> {
+  let isOwner = false;
+  try {
+    const user = await getCurrentUser();
+    if (user) {
+      const ws = await workspaceIdForUser(user.id);
+      if (ws) isOwner = (await getViewer(user.id, ws)).isOwner;
+    }
+  } catch {
+    isOwner = false;
+  }
+  if (isOwner) redirect("/executive");
+}
+
 /** Grantable page: a member reaches it only if the owner granted that page key. */
 export async function requirePageAccess(pageKey: string): Promise<void> {
   let deny = false;

@@ -7,6 +7,7 @@ const PROTECTED_PREFIXES = [
   "/admin",
   "/today",
   "/approvals",
+  "/assistant",
   "/dashboard",
   "/agents",
   "/social",
