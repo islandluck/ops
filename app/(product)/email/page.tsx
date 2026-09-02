@@ -346,17 +346,15 @@ export default function EmailManagerPage() {
         description="See your inbox, let the Admin agent triage and draft replies, then edit, approve, and send — you stay in control of every email that goes out."
         actions={
           <div className="flex items-center gap-2">
-            {!isMember && (
-              <Button
-                size="sm"
-                variant={composeOpen ? "outline" : undefined}
-                disabled={!state?.connected}
-                onClick={() => setComposeOpen((v) => !v)}
-              >
-                <PenSquare className="h-4 w-4" />
-                Compose
-              </Button>
-            )}
+            <Button
+              size="sm"
+              variant={composeOpen ? "outline" : undefined}
+              disabled={!state?.connected}
+              onClick={() => setComposeOpen((v) => !v)}
+            >
+              <PenSquare className="h-4 w-4" />
+              Compose
+            </Button>
             <Button size="sm" variant="outline" disabled={checkingNow || !state?.connected} onClick={checkNow}>
               {checkingNow ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Check now

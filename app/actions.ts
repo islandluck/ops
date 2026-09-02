@@ -2336,14 +2336,14 @@ export async function saveEmailSettingsAction(settings: EmailSettings) {
 
 /* ----------------------- outbound email composer ------------------------ */
 
-/** Draft one email per instruction (single or bulk) for review. Owner-only for now. */
+/** Draft one email per instruction (single or bulk) for review. */
 export async function composeOutboundDraftsAction(intents: string[]) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "The outbound composer isn't available for team members yet." };
-  return composeOutboundDrafts(ws, intents);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return composeOutboundDrafts(ws, intents, scopeUserId);
 }
 
 /** The outbound review queue (everything not yet sent). */
@@ -2356,7 +2356,7 @@ export async function listOutboundDraftsAction() {
   return listOutboundDrafts(ws, scopeUserId);
 }
 
-/** Edit a draft's recipient / cc / bcc / subject / body before sending. Owner-only for now. */
+/** Edit a draft's recipient / cc / bcc / subject / body before sending. */
 export async function updateOutboundDraftAction(
   id: string,
   patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string },
@@ -2365,28 +2365,28 @@ export async function updateOutboundDraftAction(
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return updateOutboundDraft(ws, id, patch);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return updateOutboundDraft(ws, id, patch, scopeUserId);
 }
 
-/** Schedule a draft to auto-send at a future time. Owner-only for now. */
+/** Schedule a draft to auto-send at a future time. */
 export async function scheduleOutboundDraftAction(id: string, whenISO: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return scheduleOutboundDraft(ws, id, whenISO);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return scheduleOutboundDraft(ws, id, whenISO, scopeUserId);
 }
 
-/** Cancel a scheduled send. Owner-only for now. */
+/** Cancel a scheduled send. */
 export async function unscheduleOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return unscheduleOutboundDraft(ws, id);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return unscheduleOutboundDraft(ws, id, scopeUserId);
 }
 
 /** Send any scheduled drafts whose time has arrived (called on composer open +
@@ -2396,9 +2396,8 @@ export async function flushDueOutboundDraftsAction() {
   if (!user) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
-  // Owner-plane only — a member polling must never flush the owner's scheduled sends.
-  if ((await getViewer(user.id, ws)).isMember) return { sent: [] as string[], failed: [] as { id: string; error: string }[] };
-  return flushDueOutboundDrafts(ws);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return flushDueOutboundDrafts(ws, scopeUserId);
 }
 
 /* -------------------------------- boardroom ------------------------------- */
@@ -2591,54 +2590,54 @@ export async function resetBoardMemberAction(memberId: string) {
   return resetBoardMember(ws, memberId);
 }
 
-/** Send one outbound draft now. Owner-only for now. */
+/** Send one outbound draft now. */
 export async function sendOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return sendOutboundDraft(ws, id);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return sendOutboundDraft(ws, id, scopeUserId);
 }
 
-/** Send several outbound drafts at once. Owner-only for now. */
+/** Send several outbound drafts at once. */
 export async function bulkSendOutboundDraftsAction(ids: string[]) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return bulkSendOutboundDrafts(ws, ids);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return bulkSendOutboundDrafts(ws, ids, scopeUserId);
 }
 
-/** Refine one draft per a short instruction (warmer / shorter / custom). Owner-only for now. */
+/** Refine one draft per a short instruction (warmer / shorter / custom). */
 export async function refineOutboundDraftAction(id: string, instruction: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return refineOutboundDraft(ws, id, instruction);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return refineOutboundDraft(ws, id, instruction, scopeUserId);
 }
 
-/** Re-draft one email from its original instruction. Owner-only for now. */
+/** Re-draft one email from its original instruction. */
 export async function regenerateOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return regenerateOutboundDraft(ws, id);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return regenerateOutboundDraft(ws, id, scopeUserId);
 }
 
-/** Discard an outbound draft. Owner-only for now. */
+/** Discard an outbound draft. */
 export async function discardOutboundDraftAction(id: string) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
-  return discardOutboundDraft(ws, id);
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return discardOutboundDraft(ws, id, scopeUserId);
 }
 
 /** Check for new mail now — sweep unread Primary+Updates, triage + draft, notify Executive. */
@@ -4343,7 +4342,7 @@ export async function uploadOutboundAttachmentAction(draftId: string, formData: 
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const, error: "Not available for team members." };
+  const { scopeUserId } = await getViewer(user.id, ws);
   const file = formData.get("file");
   if (!(file instanceof File)) return { ok: false as const, error: "No file provided." };
   if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false as const, error: "File is too large (max 15 MB)." };
@@ -4351,7 +4350,7 @@ export async function uploadOutboundAttachmentAction(draftId: string, formData: 
     const bytes = Buffer.from(await file.arrayBuffer());
     const mime = file.type || "application/octet-stream";
     const { path } = await uploadAttachmentBytes(ws, randomUUID(), bytes, mime, file.name);
-    return await addOutboundAttachment(ws, draftId, { name: file.name, path, mime, size: file.size });
+    return await addOutboundAttachment(ws, draftId, { name: file.name, path, mime, size: file.size }, scopeUserId);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Upload failed." };
   }
@@ -4362,9 +4361,9 @@ export async function removeOutboundAttachmentAction(draftId: string, attachment
   if (!user) return { ok: false as const };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const };
-  if ((await getViewer(user.id, ws)).isMember) return { ok: false as const };
+  const { scopeUserId } = await getViewer(user.id, ws);
   try {
-    return await removeOutboundAttachment(ws, draftId, attachmentId);
+    return await removeOutboundAttachment(ws, draftId, attachmentId, scopeUserId);
   } catch {
     return { ok: false as const };
   }

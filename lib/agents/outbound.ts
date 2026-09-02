@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
+import { getEmailPersona } from "@/lib/agents/email-settings";
 import { sendGmail } from "@/lib/integrations/google";
 import { executionKilled } from "@/lib/integrations/guardrails";
 import { deleteAttachmentAt, getAttachmentBytes } from "@/lib/media/storage";
@@ -36,29 +37,35 @@ function iso(d: Date | null | undefined): string {
   return d ? new Date(d).toISOString() : "";
 }
 
-/** The founder's brand + email context that grounds every compose/refine call. */
-async function loadComposeContext(workspaceId: string): Promise<{
+/** The brand + email context that grounds every compose/refine call. The company
+ *  context comes from the shared brief; the reply style + signature come from the
+ *  viewer's own plane (owner = brief, member = their own settings). */
+async function loadComposeContext(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+): Promise<{
   company: string;
   context: string;
   replyStyle: string;
   signature: string;
 }> {
-  const [b] = await db
-    .select({
-      company: businessBriefs.company_name,
-      desc: businessBriefs.business_description,
-      offer: businessBriefs.core_offer,
-      signature: businessBriefs.email_signature,
-      reply_style: businessBriefs.email_reply_style,
-    })
-    .from(businessBriefs)
-    .where(eq(businessBriefs.workspace_id, workspaceId))
-    .limit(1);
+  const [[b], persona] = await Promise.all([
+    db
+      .select({
+        company: businessBriefs.company_name,
+        desc: businessBriefs.business_description,
+        offer: businessBriefs.core_offer,
+      })
+      .from(businessBriefs)
+      .where(eq(businessBriefs.workspace_id, workspaceId))
+      .limit(1),
+    getEmailPersona(workspaceId, scopeUserId),
+  ]);
   return {
     company: b?.company ?? "",
     context: [b?.desc, b?.offer].filter(Boolean).join(" ").slice(0, 1200),
-    replyStyle: b?.reply_style ?? "",
-    signature: (b?.signature ?? "").trim(),
+    replyStyle: persona.replyStyle,
+    signature: persona.signature,
   };
 }
 
@@ -96,12 +103,13 @@ function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
 export async function composeOutboundDrafts(
   workspaceId: string,
   intents: string[],
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; drafts: OutboundDraft[] } | { ok: false; error: string }> {
   const clean = intents.map((i) => i.trim()).filter(Boolean).slice(0, MAX_INTENTS);
   if (!clean.length) return { ok: false, error: "Write at least one instruction (one per line)." };
 
   return runWithUsage(workspaceId, "outbound-compose", async () => {
-    const { company, context, replyStyle, signature } = await loadComposeContext(workspaceId);
+    const { company, context, replyStyle, signature } = await loadComposeContext(workspaceId, scopeUserId);
     const now = new Date();
 
     const rows = await Promise.all(
@@ -109,6 +117,7 @@ export async function composeOutboundDrafts(
         const base = {
           id: randomUUID(),
           workspace_id: workspaceId,
+          member_user_id: scopeUserId,
           intent,
           created_at: now,
           updated_at: now,
@@ -120,6 +129,7 @@ export async function composeOutboundDrafts(
             workspaceId,
             composed.recipient_name,
             composed.recipient_email,
+            scopeUserId,
           );
           const body = signature ? `${composed.body.trimEnd()}\n\n${signature}` : composed.body;
           return {
@@ -182,6 +192,7 @@ export async function updateOutboundDraft(
   workspaceId: string,
   id: string,
   patch: { to_email?: string; cc?: string; bcc?: string; subject?: string; body?: string },
+  scopeUserId: string | null = null,
 ): Promise<ActionResult> {
   const set: Record<string, unknown> = { updated_at: new Date() };
   if (typeof patch.to_email === "string") {
@@ -195,7 +206,13 @@ export async function updateOutboundDraft(
   await db
     .update(outboundDrafts)
     .set(set)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    );
   return { ok: true };
 }
 
@@ -212,7 +229,9 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
     return { ok: false as const, error };
   };
   if (!EMAIL_RE.test(to)) return markFailed("No valid recipient.");
-  const token = await getValidAccessToken(row.workspace_id, "Gmail");
+  // Deliver from the plane the draft belongs to — a member's draft sends from the
+  // MEMBER's own Gmail, never the owner's.
+  const token = await getValidAccessToken(row.workspace_id, "Gmail", row.member_user_id);
   if (!token) return markFailed("Gmail isn't connected.");
   try {
     // Pull each attachment's bytes from storage; a missing file is skipped, not fatal.
@@ -244,16 +263,19 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
     .update(outboundDrafts)
     .set({ status: "sent", error: "", scheduled_at: null, sent_at: now, updated_at: now })
     .where(eq(outboundDrafts.id, id));
-  await db.insert(activityEvents).values({
-    id: randomUUID(),
-    workspace_id: row.workspace_id,
-    task_id: null,
-    event_type: "integration_touched",
-    actor_type: "human",
-    actor_id: "owner",
-    summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
-    created_at: now,
-  });
+  // Activity log is the owner plane — record only the owner's sends.
+  if (!row.member_user_id) {
+    await db.insert(activityEvents).values({
+      id: randomUUID(),
+      workspace_id: row.workspace_id,
+      task_id: null,
+      event_type: "integration_touched",
+      actor_type: "human",
+      actor_id: "owner",
+      summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
+      created_at: now,
+    });
+  }
   return { ok: true };
 }
 
@@ -262,11 +284,18 @@ export async function addOutboundAttachment(
   workspaceId: string,
   draftId: string,
   att: { name: string; path: string; mime: string; size: number },
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; attachment: OutboundAttachment } | { ok: false; error: string }> {
   const [row] = await db
     .select({ attachments: outboundDrafts.attachments })
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, draftId),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
   const current = (row.attachments ?? []) as OutboundAttachment[];
@@ -281,7 +310,13 @@ export async function addOutboundAttachment(
   await db
     .update(outboundDrafts)
     .set({ attachments: [...current, attachment], updated_at: new Date() })
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, draftId),
+      ),
+    );
   return { ok: true, attachment };
 }
 
@@ -290,11 +325,18 @@ export async function removeOutboundAttachment(
   workspaceId: string,
   draftId: string,
   attachmentId: string,
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true }> {
   const [row] = await db
     .select({ attachments: outboundDrafts.attachments })
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, draftId),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: true };
   const current = (row.attachments ?? []) as OutboundAttachment[];
@@ -302,20 +344,36 @@ export async function removeOutboundAttachment(
   await db
     .update(outboundDrafts)
     .set({ attachments: current.filter((a) => a.id !== attachmentId), updated_at: new Date() })
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, draftId)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, draftId),
+      ),
+    );
   if (gone) await deleteAttachmentAt(gone.path);
   return { ok: true };
 }
 
 /** Send one draft now. Requires a valid, user-visible recipient — outbound to
  *  others never guesses an address. */
-export async function sendOutboundDraft(workspaceId: string, id: string): Promise<ActionResult> {
+export async function sendOutboundDraft(
+  workspaceId: string,
+  id: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
   if (executionKilled()) return { ok: false, error: "Sending is paused (the kill switch is on)." };
 
   const [row] = await db
     .select()
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
   if (row.status === "sent") return { ok: true };
@@ -332,6 +390,7 @@ export async function scheduleOutboundDraft(
   workspaceId: string,
   id: string,
   whenISO: string,
+  scopeUserId: string | null = null,
 ): Promise<ActionResult> {
   const when = new Date(whenISO);
   if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid time." };
@@ -339,23 +398,45 @@ export async function scheduleOutboundDraft(
   const [row] = await db
     .select()
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
   if (!EMAIL_RE.test(row.to_email.trim())) return { ok: false, error: "Add a valid recipient first." };
   await db
     .update(outboundDrafts)
     .set({ scheduled_at: when, status: "draft", error: "", updated_at: new Date() })
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    );
   return { ok: true };
 }
 
 /** Cancel a scheduled send (back to a plain draft). */
-export async function unscheduleOutboundDraft(workspaceId: string, id: string): Promise<ActionResult> {
+export async function unscheduleOutboundDraft(
+  workspaceId: string,
+  id: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
   await db
     .update(outboundDrafts)
     .set({ scheduled_at: null, updated_at: new Date() })
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    );
   return { ok: true };
 }
 
@@ -367,6 +448,7 @@ export async function unscheduleOutboundDraft(workspaceId: string, id: string): 
 async function flushDue(
   workspaceId: string | null,
   limit: number,
+  scopeUserId: string | null = null,
 ): Promise<{ sent: string[]; failed: { id: string; error: string }[] }> {
   if (executionKilled()) return { sent: [], failed: [] };
   const now = new Date();
@@ -375,7 +457,13 @@ async function flushDue(
     lte(outboundDrafts.scheduled_at, now),
     inArray(outboundDrafts.status, ["draft", "failed"]),
   ];
-  if (workspaceId) dueConds.push(eq(outboundDrafts.workspace_id, workspaceId));
+  // App path: scoped to one workspace + the caller's plane. Cron path (no
+  // workspaceId): flush EVERY plane across all workspaces — each row is delivered
+  // via its own plane's token in deliverOutbound.
+  if (workspaceId) {
+    dueConds.push(eq(outboundDrafts.workspace_id, workspaceId));
+    dueConds.push(scopeFilter(outboundDrafts.member_user_id, scopeUserId));
+  }
   // tenant-scope-exempt: with no workspaceId this is the cron flushing due drafts
   // across ALL workspaces; each row carries its own workspace_id for delivery.
   const dueIds = await db
@@ -392,6 +480,7 @@ async function flushDue(
       workspaceId
         ? and(
             eq(outboundDrafts.workspace_id, workspaceId),
+            scopeFilter(outboundDrafts.member_user_id, scopeUserId),
             inArray(outboundDrafts.id, ids),
             inArray(outboundDrafts.status, ["draft", "failed"]),
           )
@@ -421,21 +510,23 @@ export async function sendDueOutboundDrafts(limit = 50): Promise<{ sent: number;
  *  update only those cards. */
 export async function flushDueOutboundDrafts(
   workspaceId: string,
+  scopeUserId: string | null = null,
 ): Promise<{ sent: string[]; failed: { id: string; error: string }[] }> {
-  return flushDue(workspaceId, 25);
+  return flushDue(workspaceId, 25, scopeUserId);
 }
 
 /** Send every provided draft sequentially. */
 export async function bulkSendOutboundDrafts(
   workspaceId: string,
   ids: string[],
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; sent: number; failed: number } | { ok: false; error: string }> {
   const unique = [...new Set(ids)].filter(Boolean);
   if (!unique.length) return { ok: false, error: "No drafts selected." };
   let sent = 0;
   let failed = 0;
   for (const id of unique) {
-    const r = await sendOutboundDraft(workspaceId, id);
+    const r = await sendOutboundDraft(workspaceId, id, scopeUserId);
     if (r.ok) sent += 1;
     else failed += 1;
   }
@@ -448,18 +539,25 @@ export async function refineOutboundDraft(
   workspaceId: string,
   id: string,
   instruction: string,
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; draft: OutboundDraft } | { ok: false; error: string }> {
   const inst = instruction.trim();
   if (!inst) return { ok: false, error: "Tell the agent how to change it." };
   const [row] = await db
     .select()
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
 
   return runWithUsage(workspaceId, "outbound-refine", async () => {
-    const ctx = await loadComposeContext(workspaceId);
+    const ctx = await loadComposeContext(workspaceId, scopeUserId);
     const message = stripSignature(row.body, ctx.signature);
     let refined;
     try {
@@ -477,7 +575,13 @@ export async function refineOutboundDraft(
     const [updated] = await db
       .update(outboundDrafts)
       .set({ subject: refined.subject, body, status: "draft", error: "", updated_at: new Date() })
-      .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+      .where(
+        and(
+          eq(outboundDrafts.workspace_id, workspaceId),
+          scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+          eq(outboundDrafts.id, id),
+        ),
+      )
       .returning();
     return { ok: true as const, draft: toDraft(updated) };
   });
@@ -487,17 +591,24 @@ export async function refineOutboundDraft(
 export async function regenerateOutboundDraft(
   workspaceId: string,
   id: string,
+  scopeUserId: string | null = null,
 ): Promise<{ ok: true; draft: OutboundDraft } | { ok: false; error: string }> {
   const [row] = await db
     .select()
     .from(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    )
     .limit(1);
   if (!row) return { ok: false, error: "Draft not found." };
   if (!row.intent.trim()) return { ok: false, error: "No original instruction to regenerate from." };
 
   return runWithUsage(workspaceId, "outbound-compose", async () => {
-    const ctx = await loadComposeContext(workspaceId);
+    const ctx = await loadComposeContext(workspaceId, scopeUserId);
     let composed;
     try {
       composed = await composeOutbound({
@@ -513,16 +624,32 @@ export async function regenerateOutboundDraft(
     const [updated] = await db
       .update(outboundDrafts)
       .set({ subject: composed.subject, body, status: "draft", error: "", updated_at: new Date() })
-      .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)))
+      .where(
+        and(
+          eq(outboundDrafts.workspace_id, workspaceId),
+          scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+          eq(outboundDrafts.id, id),
+        ),
+      )
       .returning();
     return { ok: true as const, draft: toDraft(updated) };
   });
 }
 
 /** Discard a draft. */
-export async function discardOutboundDraft(workspaceId: string, id: string): Promise<ActionResult> {
+export async function discardOutboundDraft(
+  workspaceId: string,
+  id: string,
+  scopeUserId: string | null = null,
+): Promise<ActionResult> {
   await db
     .delete(outboundDrafts)
-    .where(and(eq(outboundDrafts.workspace_id, workspaceId), eq(outboundDrafts.id, id)));
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.id, id),
+      ),
+    );
   return { ok: true };
 }

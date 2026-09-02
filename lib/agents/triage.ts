@@ -7,6 +7,7 @@ import {
   activityEvents,
   agents,
   businessBriefs,
+  emailSettings,
   emailTriage,
   executiveMemory,
   taskAssets,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
+import { getEmailPersona } from "@/lib/agents/email-settings";
 import { getMessageDetail, listInboxMessages, type GmailMessage } from "@/lib/integrations/google";
 import { triageEmails } from "@/lib/ai/triage";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -101,9 +103,9 @@ async function _triageAndStore(
 ): Promise<{ replyDrafts: number; actionTasks: number }> {
   const now = new Date();
   const { brief } = await getPlanningContext(workspaceId);
-  // A member's inbox uses default voice (no shared owner signature/style).
+  // Owner drafts in the brief's voice; a member drafts in their OWN saved voice.
   const { signature, replyStyle } = scopeUserId
-    ? { signature: "", replyStyle: "" }
+    ? await getEmailPersona(workspaceId, scopeUserId)
     : await getEmailStyle(workspaceId);
 
   const triaged = await triageEmails(emails, brief, { replyStyle });
@@ -423,6 +425,34 @@ export async function runDueEmailTriage(): Promise<{ ran: number }> {
       .where(eq(businessBriefs.workspace_id, r.ws));
     try {
       await runEmailTriage(r.ws);
+      ran += 1;
+    } catch {
+      /* skip and continue */
+    }
+  }
+
+  // Operator Lite: sweep each team member's OWN auto-triage cadence too, on their
+  // own plane (their mailbox, their triage rows) — independent of the owner's.
+  // tenant-scope-exempt: cron sweeps every member's configured cadence; each run
+  // below is scoped to its workspace_id + member plane.
+  const memberRows = await db
+    .select({
+      ws: emailSettings.workspace_id,
+      uid: emailSettings.member_user_id,
+      cadence: emailSettings.cadence,
+      last: emailSettings.last_run_at,
+    })
+    .from(emailSettings);
+  for (const r of memberRows) {
+    const interval = r.cadence === "hourly" ? 3_600_000 : r.cadence === "daily" ? 86_400_000 : 0;
+    if (!interval) continue;
+    if (r.last && now - r.last.getTime() < interval) continue;
+    await db
+      .update(emailSettings)
+      .set({ last_run_at: new Date(now) })
+      .where(and(eq(emailSettings.workspace_id, r.ws), eq(emailSettings.member_user_id, r.uid)));
+    try {
+      await runEmailTriage(r.ws, r.uid);
       ran += 1;
     } catch {
       /* skip and continue */

@@ -470,6 +470,13 @@
       "when": 1788304526051,
       "tag": "0066_fixed_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1788310919230,
+      "tag": "0067_bitter_jazinda",
+      "breakpoints": true
     }
   ]
 }

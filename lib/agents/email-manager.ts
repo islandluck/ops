@@ -3,9 +3,10 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { activityEvents, businessBriefs, emailTriage } from "@/lib/db/schema";
+import { activityEvents, emailTriage } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
+import { getEmailSettingsFor, saveEmailSettingsFor } from "@/lib/agents/email-settings";
 import {
   archiveMessage,
   getMessageDetail,
@@ -19,7 +20,6 @@ import {
 import { learnEmailStyle, type LearnedStyle } from "@/lib/ai/email-style";
 import type {
   EmailBody,
-  EmailCadence,
   EmailListItem,
   EmailManagerState,
   EmailSettings,
@@ -72,25 +72,9 @@ export type ActionResult = { ok: true } | { ok: false; error: string };
 
 /* -------------------------------- settings -------------------------------- */
 
-const CADENCES: EmailCadence[] = ["off", "hourly", "daily"];
-
-const DEFAULT_SETTINGS: EmailSettings = { signature: "", reply_style: "", cadence: "off" };
-
 async function getSettings(workspaceId: string, scopeUserId: string | null = null): Promise<EmailSettings> {
-  // Email settings live on the (shared) business brief — the owner's. A member
-  // uses defaults for now; they never read or write the owner's signature/style.
-  if (scopeUserId) return { ...DEFAULT_SETTINGS };
-  const [b] = await db
-    .select({
-      signature: businessBriefs.email_signature,
-      reply_style: businessBriefs.email_reply_style,
-      cadence: businessBriefs.email_triage_cadence,
-    })
-    .from(businessBriefs)
-    .where(eq(businessBriefs.workspace_id, workspaceId))
-    .limit(1);
-  const cadence = (CADENCES as string[]).includes(b?.cadence ?? "") ? (b!.cadence as EmailCadence) : "off";
-  return { signature: b?.signature ?? "", reply_style: b?.reply_style ?? "", cadence };
+  // Owner = the business brief; a member = their own email_settings row.
+  return getEmailSettingsFor(workspaceId, scopeUserId);
 }
 
 export async function saveEmailSettings(
@@ -98,18 +82,7 @@ export async function saveEmailSettings(
   settings: EmailSettings,
   scopeUserId: string | null = null,
 ): Promise<ActionResult> {
-  // The shared brief settings are the owner's; a member can't change them.
-  if (scopeUserId) return { ok: true };
-  const cadence: EmailCadence = (CADENCES as string[]).includes(settings.cadence) ? settings.cadence : "off";
-  await db
-    .update(businessBriefs)
-    .set({
-      email_signature: settings.signature.slice(0, 2000),
-      email_reply_style: settings.reply_style.slice(0, 2000),
-      email_triage_cadence: cadence,
-      updated_at: new Date(),
-    })
-    .where(eq(businessBriefs.workspace_id, workspaceId));
+  await saveEmailSettingsFor(workspaceId, settings, scopeUserId);
   return { ok: true };
 }
 

@@ -28,9 +28,14 @@ function firstEmailIn(s: string): string {
 }
 
 /** Find an address from the founder's Gmail history: first as a sender (they
- *  emailed you), then as a recipient (you emailed them). Best-effort. */
-async function resolveViaGmail(workspaceId: string, name: string): Promise<string> {
-  const token = await getValidAccessToken(workspaceId, "Gmail");
+ *  emailed you), then as a recipient (you emailed them). Best-effort. Uses the
+ *  viewer's OWN Gmail (owner or member). */
+async function resolveViaGmail(
+  workspaceId: string,
+  name: string,
+  scopeUserId: string | null = null,
+): Promise<string> {
+  const token = await getValidAccessToken(workspaceId, "Gmail", scopeUserId);
   if (!token) return "";
   const quoted = `"${name.replace(/"/g, "")}"`;
   try {
@@ -58,6 +63,7 @@ export async function resolveRecipientCandidates(
   workspaceId: string,
   name: string,
   explicitEmail?: string,
+  scopeUserId: string | null = null,
 ): Promise<{ primary: ResolvedRecipient; candidates: RecipientCandidate[] }> {
   // 1) An address stated right in the ask.
   const stated = (explicitEmail && EMAIL_RE.test(explicitEmail) && explicitEmail) || firstEmailIn(name);
@@ -71,8 +77,9 @@ export async function resolveRecipientCandidates(
 
   const candidates: RecipientCandidate[] = [];
 
-  // 2) The CRM address book (multiple matches possible → the user picks).
-  const hsToken = await getValidAccessToken(workspaceId, "HubSpot");
+  // 2) The CRM address book (multiple matches possible → the user picks). Uses the
+  // viewer's own plane — a member taps their own CRM if connected, never the owner's.
+  const hsToken = await getValidAccessToken(workspaceId, "HubSpot", scopeUserId);
   if (hsToken) {
     const contacts = await hsSearchContactsByName(hsToken, cleanName, 5);
     for (const c of contacts) {
@@ -82,7 +89,7 @@ export async function resolveRecipientCandidates(
   }
 
   // 3) Your own Gmail history (add it if it's a new address).
-  const fromGmail = await resolveViaGmail(workspaceId, cleanName);
+  const fromGmail = await resolveViaGmail(workspaceId, cleanName, scopeUserId);
   if (fromGmail && !candidates.some((c) => c.email.toLowerCase() === fromGmail.toLowerCase())) {
     candidates.push({ email: fromGmail, name: cleanName, source: "gmail" });
   }

@@ -432,6 +432,30 @@ export const outboundDrafts = pgTable(
 );
 
 /**
+ * Operator Lite: per-member email settings (signature, reply style, auto-triage
+ * cadence). The OWNER's live on the business brief; each team member gets their own
+ * row here so their inbox/outbound is personalized in their OWN voice. `last_run_at`
+ * lets the cron sweep a member's own auto-triage cadence independently.
+ */
+export const emailSettings = pgTable(
+  "email_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    member_user_id: uuid("member_user_id").notNull(),
+    signature: text("signature").notNull().default(""),
+    reply_style: text("reply_style").notNull().default(""),
+    // off | hourly | daily
+    cadence: text("cadence").notNull().default("off"),
+    last_run_at: timestamp("last_run_at", { withTimezone: true }),
+    updated_at: updatedAt,
+  },
+  (t) => [uniqueIndex("email_settings_ws_member_uniq").on(t.workspace_id, t.member_user_id)],
+);
+
+/**
  * The Boardroom — a standing board of specialized AI advisors (a domain lens per
  * seat, modeled after blue-chip VC wisdom) whose mandate is to drive the company
  * to a $10B valuation, fast, biased to action. Members deliberate + debate; the
