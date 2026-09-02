@@ -1,7 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, FileText, Loader2, NotebookPen, Plus, Sparkles, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  CalendarDays,
+  Check,
+  Copy,
+  ExternalLink,
+  FileText,
+  Loader2,
+  Mail,
+  NotebookPen,
+  Plus,
+  Send,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -11,9 +25,11 @@ import {
   createTeamMeetingAction,
   deleteTeamMeetingAction,
   importNotionMeetingAction,
+  listMeetingAssignmentsAction,
   listNotionMeetingPagesAction,
   listTeamMeetingsAction,
   previewNotionMeetingAction,
+  stageOutboundDraftAction,
   updateTeamMeetingAction,
 } from "@/app/actions";
 import type { TeamMeeting, TeamMember } from "@/lib/types";
@@ -27,6 +43,177 @@ type ActionRow = {
   due: string | null;
   include: boolean;
 };
+
+type BriefTask = { title: string; assignee: string | null; due: string | null };
+
+/**
+ * Format a meeting's action items + summary as an email body — ACTION ITEMS FIRST
+ * (assignee + deadline), then the meeting summary — ready to copy or send to the team.
+ */
+function buildMeetingEmail(input: {
+  title: string;
+  date: string;
+  summary: string;
+  tasks: BriefTask[];
+}): { subject: string; body: string } {
+  const dateLabel = input.date ? fmtDate(input.date) : "";
+  const lines: string[] = [];
+  lines.push("Hi team,");
+  lines.push("");
+  lines.push(`Here are the action items and notes from ${input.title}${dateLabel ? ` (${dateLabel})` : ""}.`);
+  lines.push("");
+  if (input.tasks.length) {
+    lines.push("ACTION ITEMS");
+    for (const t of input.tasks) {
+      const bits: string[] = [];
+      if (t.assignee) bits.push(t.assignee);
+      if (t.due) bits.push(`due ${fmtDate(t.due)}`);
+      lines.push(`• ${t.title}${bits.length ? ` — ${bits.join(", ")}` : ""}`);
+    }
+    lines.push("");
+  }
+  if (input.summary.trim()) {
+    lines.push("MEETING SUMMARY");
+    lines.push(input.summary.trim());
+    lines.push("");
+  }
+  lines.push("Thanks");
+  return { subject: `Action items & notes — ${input.title}`, body: lines.join("\n") };
+}
+
+/**
+ * Review + send a meeting brief as an email: an editable preview (tasks first, then
+ * summary), pre-addressed to the attendees. Copy it, or stage it as a draft in the
+ * Email Manager to review and send there. Nothing sends from here.
+ */
+function EmailBriefDialog({
+  open,
+  onClose,
+  meeting,
+  tasks,
+  recipients,
+  loading,
+}: {
+  open: boolean;
+  onClose: () => void;
+  meeting: { title: string; date: string; summary: string };
+  tasks: BriefTask[];
+  recipients: { name: string; email: string }[];
+  loading: boolean;
+}) {
+  const router = useRouter();
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (!open || loading) return;
+    const e = buildMeetingEmail({ title: meeting.title, date: meeting.date, summary: meeting.summary, tasks });
+    setSubject(e.subject);
+    setBody(e.body);
+    setCopied(false);
+    setResult(null);
+  }, [open, loading, meeting.title, meeting.date, meeting.summary, tasks]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(`${subject}\n\n${body}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setResult({ ok: false, msg: "Couldn't copy — select the text and copy manually." });
+    }
+  }
+
+  async function draft() {
+    setDrafting(true);
+    setResult(null);
+    const to = recipients[0]?.email ?? "";
+    const cc = recipients.slice(1).map((r) => r.email).join(", ");
+    const r = await stageOutboundDraftAction({
+      to,
+      cc,
+      subject,
+      body,
+      recipientName: recipients.map((x) => x.name).join(", "),
+    });
+    setDrafting(false);
+    if ("ok" in r && r.ok) setResult({ ok: true, msg: "Drafted in the Email Manager — review recipients and send there." });
+    else setResult({ ok: false, msg: "error" in r ? r.error : "Couldn't create the draft." });
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Email the team" className="max-w-2xl">
+      {loading ? (
+        <div className="flex justify-center py-10 text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      ) : (
+        <div className="flex max-h-[75vh] flex-col gap-3 overflow-y-auto pr-1">
+          <div>
+            <Label>To</Label>
+            {recipients.length ? (
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {recipients.map((r) => (
+                  <span
+                    key={r.email}
+                    className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground"
+                    title={r.email}
+                  >
+                    {r.name}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">
+                No attendee emails on file — you can add recipients in the Email Manager after drafting.
+              </p>
+            )}
+          </div>
+          <div>
+            <Label>Subject</Label>
+            <Input value={subject} onChange={(e) => setSubject(e.target.value)} />
+          </div>
+          <div>
+            <Label>Message (action items first, then the summary)</Label>
+            <Textarea rows={14} value={body} onChange={(e) => setBody(e.target.value)} className="font-mono text-[12.5px]" />
+          </div>
+
+          {result && (
+            <div
+              className={cn(
+                "flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[13px]",
+                result.ok
+                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+              )}
+            >
+              <span>{result.msg}</span>
+              {result.ok && (
+                <Button size="sm" variant="outline" onClick={() => router.push("/email")}>
+                  <ExternalLink className="h-3.5 w-3.5" /> Open Email Manager
+                </Button>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={copy}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+            <Button size="sm" onClick={draft} disabled={drafting}>
+              {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Draft in Email Manager
+            </Button>
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}
 
 /** Pull the trailing 32-hex page id out of a Notion page URL (or accept a raw id). */
 function parseNotionPageId(input: string): string | null {
@@ -194,10 +381,12 @@ function NotionImportDialog({
   // Review-step state (the confirmed, editable meeting).
   const [title, setTitle] = useState("");
   const [date, setDate] = useState("");
+  const [summary, setSummary] = useState("");
   const [notes, setNotes] = useState("");
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
   const [rows, setRows] = useState<ActionRow[]>([]);
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -207,9 +396,11 @@ function NotionImportDialog({
     setPageErr(null);
     setTitle("");
     setDate("");
+    setSummary("");
     setNotes("");
     setAttendeeIds([]);
     setRows([]);
+    setCopied(false);
     void loadPages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -234,6 +425,7 @@ function NotionImportDialog({
     }
     setTitle(p.title);
     setDate(p.date ?? new Date().toISOString().slice(0, 10));
+    setSummary(p.summary ?? "");
     setNotes(p.summary ? `${p.summary}\n\n${p.notes}` : p.notes);
     setAttendeeIds(p.attendee_ids);
     setRows(p.actions.map((a) => ({ ...a, include: true })));
@@ -275,6 +467,25 @@ function NotionImportDialog({
       onClose();
     } else {
       setErr("error" in r ? r.error : "Couldn't import the meeting.");
+    }
+  }
+
+  /** Copy the action items + summary for pasting into an email — before importing. */
+  async function copyForEmail() {
+    const tasks: BriefTask[] = rows
+      .filter((r) => r.include && r.title.trim())
+      .map((r) => ({
+        title: r.title,
+        assignee: r.member_id ? members.find((m) => m.id === r.member_id)?.name ?? null : r.owner_name || null,
+        due: r.due,
+      }));
+    const { subject, body } = buildMeetingEmail({ title, date, summary: summary || notes, tasks });
+    try {
+      await navigator.clipboard.writeText(`${subject}\n\n${body}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard blocked — no-op */
     }
   }
 
@@ -480,10 +691,16 @@ function NotionImportDialog({
             <Button variant="ghost" onClick={() => setStep("pick")}>
               Back
             </Button>
-            <Button onClick={doImport} disabled={saving}>
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              Import meeting{assignedCount > 0 ? ` + ${assignedCount} task${assignedCount === 1 ? "" : "s"}` : ""}
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={copyForEmail} title="Copy the tasks + summary to paste into an email">
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copied ? "Copied" : "Copy for email"}
+              </Button>
+              <Button onClick={doImport} disabled={saving}>
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Import meeting{assignedCount > 0 ? ` + ${assignedCount} task${assignedCount === 1 ? "" : "s"}` : ""}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -496,6 +713,13 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<{ open: boolean; meeting: TeamMeeting | null }>({ open: false, meeting: null });
   const [importing, setImporting] = useState(false);
+  const [brief, setBrief] = useState<{
+    open: boolean;
+    loading: boolean;
+    meeting: { title: string; date: string; summary: string };
+    tasks: BriefTask[];
+    recipients: { name: string; email: string }[];
+  }>({ open: false, loading: false, meeting: { title: "", date: "", summary: "" }, tasks: [], recipients: [] });
 
   async function refresh() {
     setMeetings(await listTeamMeetingsAction());
@@ -509,6 +733,28 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
     if (!window.confirm(`Delete the notes for "${m.title}"?`)) return;
     setMeetings((prev) => prev.filter((x) => x.id !== m.id));
     await deleteTeamMeetingAction(m.id);
+  }
+
+  /** Open the email brief for a saved meeting — fetch its assigned tasks + resolve
+   *  attendee emails (excluding you), then hand it to the EmailBriefDialog. */
+  async function openEmailBrief(m: TeamMeeting) {
+    const recipients = m.attendee_ids
+      .map((id) => members.find((mem) => mem.id === id))
+      .filter((mem): mem is TeamMember => !!mem && !mem.is_owner && !!mem.email && !!mem.email.trim())
+      .map((mem) => ({ name: mem.name, email: mem.email.trim() }));
+    setBrief({
+      open: true,
+      loading: true,
+      meeting: { title: m.title, date: m.meeting_date, summary: m.notes ?? "" },
+      tasks: [],
+      recipients,
+    });
+    const rows = await listMeetingAssignmentsAction(m.id);
+    setBrief((prev) => ({
+      ...prev,
+      loading: false,
+      tasks: rows.map((a) => ({ title: a.title, assignee: a.member_name || null, due: a.deadline })),
+    }));
   }
 
   return (
@@ -554,14 +800,25 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
                 {m.notes && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{m.notes}</p>}
               </button>
               {canManage && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 shrink-0 opacity-0 transition group-hover:opacity-100"
-                  onClick={() => remove(m)}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={() => openEmailBrief(m)}
+                    title="Email the action items + summary to the team"
+                  >
+                    <Mail className="h-3.5 w-3.5" /> Email
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 opacity-0 transition group-hover:opacity-100"
+                    onClick={() => remove(m)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
               )}
             </Card>
           ))}
@@ -582,6 +839,15 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
         members={members}
         onClose={() => setImporting(false)}
         onImported={refresh}
+      />
+
+      <EmailBriefDialog
+        open={brief.open}
+        loading={brief.loading}
+        meeting={brief.meeting}
+        tasks={brief.tasks}
+        recipients={brief.recipients}
+        onClose={() => setBrief((prev) => ({ ...prev, open: false }))}
       />
     </div>
   );

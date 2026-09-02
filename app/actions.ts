@@ -121,6 +121,7 @@ import {
   removeOutboundAttachment,
   scheduleOutboundDraft,
   sendOutboundDraft,
+  stageOutboundDraft,
   unscheduleOutboundDraft,
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
@@ -208,6 +209,7 @@ import {
   listChatChannels,
   listChatMessages,
   listHumanProjects,
+  listMeetingAssignments,
   listTeamDocuments,
   listTeamEvents,
   listTeamGoals,
@@ -3923,6 +3925,45 @@ export async function listTeamMeetingsAction() {
     return await listTeamMeetings(ws);
   } catch {
     return [];
+  }
+}
+
+/** The action items (assigned tasks) created from one meeting — for the email brief. */
+export async function listMeetingAssignmentsAction(meetingId: string) {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listMeetingAssignments(ws, meetingId);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Stage a ready-made email in the Email Manager's outbound queue (no AI compose) —
+ * used by "Email the team" on meeting briefs. Owner-plane; the user reviews +
+ * sends it in /email. Returns the new draft id.
+ */
+export async function stageOutboundDraftAction(input: {
+  to?: string;
+  cc?: string;
+  subject: string;
+  body: string;
+  recipientName?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  if (!input.subject.trim() && !input.body.trim()) return { ok: false as const, error: "Nothing to draft." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await stageOutboundDraft(ws, input, scopeUserId);
+    return { ok: true as const, draftId: r.draft.id };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't stage the draft." };
   }
 }
 

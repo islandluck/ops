@@ -166,6 +166,40 @@ export async function composeOutboundDrafts(
   });
 }
 
+/**
+ * Stage a ready-made outbound draft (no AI compose) — content is already written by
+ * the caller (e.g. a meeting brief). Lands in the Email Manager's outbound review
+ * queue for the user to confirm recipients and send. Nothing sends on its own.
+ */
+export async function stageOutboundDraft(
+  workspaceId: string,
+  input: { to?: string; cc?: string; subject: string; body: string; recipientName?: string; intent?: string },
+  scopeUserId: string | null = null,
+): Promise<{ ok: true; draft: OutboundDraft }> {
+  const to = (input.to ?? "").trim();
+  const now = new Date();
+  const [row] = await db
+    .insert(outboundDrafts)
+    .values({
+      id: randomUUID(),
+      workspace_id: workspaceId,
+      member_user_id: scopeUserId,
+      intent: input.intent ?? "",
+      recipient_name: input.recipientName ?? "",
+      to_email: to,
+      recipient_source: to ? "manual" : "none",
+      cc: (input.cc ?? "").trim(),
+      subject: input.subject.slice(0, 300),
+      body: input.body,
+      status: "draft",
+      error: "",
+      created_at: now,
+      updated_at: now,
+    })
+    .returning();
+  return { ok: true, draft: toDraft(row) };
+}
+
 /** The review queue — everything not yet sent, newest first. */
 export async function listOutboundDrafts(
   workspaceId: string,

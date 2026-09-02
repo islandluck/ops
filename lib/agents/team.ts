@@ -1217,6 +1217,26 @@ export async function listAssignments(workspaceId: string): Promise<TeamAssignme
   return rows.map((r) => toAssignment(r.a, r.memberName ?? "—", r.projectTitle ?? null));
 }
 
+/** The action items created from one meeting (ref_type "meeting"), oldest first. */
+export async function listMeetingAssignments(
+  workspaceId: string,
+  meetingId: string,
+): Promise<TeamAssignment[]> {
+  const rows = await db
+    .select({ a: teamAssignments, memberName: teamMembers.name })
+    .from(teamAssignments)
+    .leftJoin(teamMembers, eq(teamAssignments.member_id, teamMembers.id))
+    .where(
+      and(
+        eq(teamAssignments.workspace_id, workspaceId),
+        eq(teamAssignments.ref_type, "meeting"),
+        eq(teamAssignments.ref_id, meetingId),
+      ),
+    )
+    .orderBy(asc(teamAssignments.created_at));
+  return rows.map((r) => toAssignment(r.a, r.memberName ?? "—"));
+}
+
 export interface AssignmentInput {
   member_id: string;
   title: string;
