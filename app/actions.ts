@@ -307,7 +307,7 @@ import type { ExecImage } from "@/lib/ai/executive";
 import { computeKpiTrends } from "@/lib/executive/kpis";
 import type { BillingState, EntitlementView, KpiTrendSeries } from "@/lib/types";
 import { getBillingState, isWorkspaceOwner, openPortal, startCheckout } from "@/lib/billing/service";
-import { ALL_FEATURES, getEntitlement } from "@/lib/billing/entitlements";
+import { ALL_FEATURES, getEntitlement, getSeatUsage } from "@/lib/billing/entitlements";
 import type { PlanTier } from "@/lib/billing/plans";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
@@ -3279,10 +3279,39 @@ export async function createTeamMemberAction(input: TeamMemberInput) {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  // Per-seat billing: a new teammate consumes a seat (advisors don't). Blocked only
+  // when billing is enforced and the plan's seats are full.
+  if (input.member_type !== "advisor") {
+    const seat = await seatGuard(ws);
+    if (!seat.ok) return seat;
+  }
   try {
     return await createTeamMember(ws, input);
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the member." };
+  }
+}
+
+/** Per-seat gate: does the workspace have room for one more teammate? Owner-facing message. */
+async function seatGuard(workspaceId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const seat = await getSeatUsage(workspaceId);
+  if (seat.canAdd) return { ok: true };
+  return {
+    ok: false,
+    error: `You've used all ${seat.included} team seat${seat.included === 1 ? "" : "s"} on your plan. Upgrade in Billing to add more team members.`,
+  };
+}
+
+/** Operator Lite / per-seat billing: team seat usage vs. the plan allowance. */
+export async function getSeatUsageAction() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getSeatUsage(ws);
+  } catch {
+    return null;
   }
 }
 
@@ -4153,6 +4182,12 @@ export async function inviteTeamMemberAction(input: {
   if (!user) return { ok: false as const, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
+  // Per-seat billing: a brand-new invite consumes a seat. Re-inviting an existing
+  // roster member (memberId set) doesn't, so only gate genuinely new teammates.
+  if (!input.memberId) {
+    const seat = await seatGuard(ws);
+    if (!seat.ok) return seat;
+  }
   try {
     // Build the accept link from the ACTUAL request host, so it's always the live
     // domain even if NEXT_PUBLIC_APP_URL isn't set/redeployed yet.

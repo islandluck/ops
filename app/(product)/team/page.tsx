@@ -36,6 +36,7 @@ import {
   listAssignmentsAction,
   listHumanProjectsAction,
   getMemberWorkloadsAction,
+  getSeatUsageAction,
   listInvitesAction,
   listTeamMembersAction,
   setMemberPageAccessAction,
@@ -887,6 +888,8 @@ export default function TeamPage() {
   const [invites, setInvites] = useState<{ id: string; member_id: string; accept_url: string }[]>([]);
   // Operator Lite oversight: each linked member's open-work + email-connected status.
   const [workloads, setWorkloads] = useState<Record<string, { openTasks: number; hasEmail: boolean }>>({});
+  // Per-seat billing: teammate seats used vs. the plan allowance.
+  const [seats, setSeats] = useState<{ used: number; included: number; enforced: boolean; canAdd: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -901,13 +904,14 @@ export default function TeamPage() {
   });
 
   async function refresh() {
-    const [m, a, inv, p, ap, wl] = await Promise.all([
+    const [m, a, inv, p, ap, wl, st] = await Promise.all([
       listTeamMembersAction(),
       listAssignmentsAction(),
       listInvitesAction(),
       listHumanProjectsAction(),
       getAssignedProjectsAction(),
       getMemberWorkloadsAction(),
+      getSeatUsageAction(),
     ]);
     setMembers(m);
     setAssignments(a);
@@ -915,6 +919,7 @@ export default function TeamPage() {
     setProjects(p);
     setAssignedProjects(ap);
     setWorkloads(wl);
+    setSeats(st);
     setLoading(false);
   }
 
@@ -1092,9 +1097,22 @@ export default function TeamPage() {
               }
             />
             {view === "roster" ? (
-              <Button size="sm" onClick={() => setMemberDialog({ open: true, member: null })}>
-                <UserPlus className="h-4 w-4" /> Add member
-              </Button>
+              <div className="flex items-center gap-2.5">
+                {seats && seats.included > 0 && (
+                  <span
+                    className={cn(
+                      "text-[12px] tabular-nums",
+                      seats.enforced && seats.used >= seats.included ? "font-medium text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+                    )}
+                    title="Team seats used on your plan"
+                  >
+                    {seats.used}/{seats.included} seats
+                  </span>
+                )}
+                <Button size="sm" onClick={() => setMemberDialog({ open: true, member: null })}>
+                  <UserPlus className="h-4 w-4" /> Add member
+                </Button>
+              </div>
             ) : view === "projects" ? (
               <Button size="sm" onClick={() => setProjectDialog({ open: true, project: null })}>
                 <Plus className="h-4 w-4" /> New project

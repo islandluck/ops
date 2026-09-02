@@ -40,7 +40,7 @@ export const PLANS: PlanDef[] = [
     amountLabel: "$149",
     cadence: "/mo",
     tagline: "Solo founders testing the water.",
-    features: ["Social + Content agents", "1 workspace", "Core integrations", "Human-in-the-loop approvals"],
+    features: ["Social + Content agents", "1 team seat", "Core integrations", "Human-in-the-loop approvals"],
   },
   {
     key: "operator",
@@ -52,7 +52,7 @@ export const PLANS: PlanDef[] = [
     features: [
       "Every agent (Executive, Boardroom, more)",
       "All integrations",
-      "1 workspace",
+      "5 team seats (Operator Lite)",
       "Human-in-the-loop approvals",
     ],
     anchor: true,
@@ -64,7 +64,7 @@ export const PLANS: PlanDef[] = [
     amountLabel: "$999",
     cadence: "/mo",
     tagline: "Small agencies running multiple clients.",
-    features: ["Everything in Operator", "Multiple client workspaces", "More seats", "Priority support"],
+    features: ["Everything in Operator", "Multiple client workspaces", "20 team seats", "Priority support"],
   },
 ];
 

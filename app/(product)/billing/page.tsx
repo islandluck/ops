@@ -1,14 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, CreditCard, ExternalLink, Loader2, Sparkles } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, CreditCard, ExternalLink, Loader2, Sparkles, UsersRound } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { getBillingStateAction, openBillingPortalAction, startSubscriptionCheckoutAction } from "@/app/actions";
+import {
+  getBillingStateAction,
+  getSeatUsageAction,
+  openBillingPortalAction,
+  startSubscriptionCheckoutAction,
+} from "@/app/actions";
 import type { BillingState } from "@/lib/types";
 import type { PlanTier } from "@/lib/billing/plans";
+
+type Seats = { used: number; included: number; enforced: boolean; canAdd: boolean; tier: string };
 
 function statusLine(s: BillingState): { text: string; tone: "ok" | "warn" | "muted" } {
   const end = s.periodEnd ? new Date(s.periodEnd).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : null;
@@ -21,7 +29,9 @@ function statusLine(s: BillingState): { text: string; tone: "ok" | "warn" | "mut
 }
 
 export default function BillingPage() {
+  const router = useRouter();
   const [state, setState] = useState<BillingState | null>(null);
+  const [seats, setSeats] = useState<Seats | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
@@ -31,6 +41,9 @@ export default function BillingPage() {
       .then(setState)
       .catch(() => setState(null))
       .finally(() => setLoading(false));
+    getSeatUsageAction()
+      .then((s) => setSeats(s))
+      .catch(() => setSeats(null));
     try {
       const q = new URLSearchParams(window.location.search).get("checkout");
       if (q === "success") setNotice({ text: "You're subscribed — welcome aboard. It may take a moment to reflect below.", tone: "ok" });
@@ -128,6 +141,49 @@ export default function BillingPage() {
                 </Button>
               )}
             </Card>
+
+            {/* Team seats */}
+            {seats && (
+              <Card className="flex flex-col gap-3 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <UsersRound className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <p className="text-[12px] font-medium uppercase tracking-wide text-muted-foreground">Team seats</p>
+                      <p className="text-[17px] font-semibold leading-tight">
+                        {seats.used} <span className="text-muted-foreground">of {seats.included}</span> used
+                      </p>
+                      <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                        {seats.included === 0
+                          ? "Your plan doesn't include team seats — upgrade to add teammates as Operator Lite users."
+                          : seats.used >= seats.included
+                            ? seats.enforced
+                              ? "You've used every seat. Upgrade to add more teammates."
+                              : "You're at your plan's seat count (not enforced yet)."
+                            : `${seats.included - seats.used} seat${seats.included - seats.used === 1 ? "" : "s"} left for teammates.`}
+                      </p>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => router.push("/team")}>
+                    <UsersRound className="h-4 w-4" />
+                    Manage team
+                  </Button>
+                </div>
+                {seats.included > 0 && (
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all",
+                        seats.used >= seats.included ? "bg-amber-500" : "bg-primary",
+                      )}
+                      style={{ width: `${Math.min(100, Math.round((seats.used / seats.included) * 100))}%` }}
+                    />
+                  </div>
+                )}
+              </Card>
+            )}
 
             {/* Plans */}
             <div className="grid gap-3 md:grid-cols-3">

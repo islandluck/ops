@@ -1,8 +1,8 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, count, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { workspaces } from "@/lib/db/schema";
+import { teamMembers, workspaces } from "@/lib/db/schema";
 import type { PlanTier } from "./plans";
 
 /**
@@ -16,6 +16,13 @@ import type { PlanTier } from "./plans";
  */
 
 export const TIER_RANK: Record<PlanTier, number> = { free: 0, starter: 1, operator: 2, agency: 3 };
+
+/**
+ * Team member ("Operator Lite") seats included in each tier. A seat is a teammate
+ * who can log in — invited or active (advisors + the owner don't consume a seat).
+ * Enforced only when BILLING_ENFORCED=1; always surfaced so the owner sees the model.
+ */
+export const SEATS_PER_TIER: Record<PlanTier, number> = { free: 0, starter: 1, operator: 5, agency: 20 };
 
 /** Gated features → the minimum tier that unlocks them. Anything not listed is
  *  "core" and available on every tier (tasks, approvals, today, brief, settings…). */
@@ -121,4 +128,35 @@ export async function getEntitlement(workspaceId: string): Promise<Entitlement> 
 
 export async function canUseFeature(workspaceId: string, feature: Feature): Promise<boolean> {
   return (await getEntitlement(workspaceId)).canUse(feature);
+}
+
+export interface SeatUsage {
+  /** Teammate seats in use (invited or active). */
+  used: number;
+  /** Seats included in the workspace's effective tier. */
+  included: number;
+  /** Whether seat limits are actually enforced right now. */
+  enforced: boolean;
+  /** Room for at least one more teammate (always true when not enforced). */
+  canAdd: boolean;
+  tier: PlanTier;
+}
+
+/** Team-member seat usage vs. the tier's allowance. */
+export async function getSeatUsage(workspaceId: string): Promise<SeatUsage> {
+  const ent = await getEntitlement(workspaceId);
+  const included = SEATS_PER_TIER[ent.effectiveTier];
+  const [row] = await db
+    .select({ n: count() })
+    .from(teamMembers)
+    .where(
+      and(
+        eq(teamMembers.workspace_id, workspaceId),
+        eq(teamMembers.member_type, "teammate"),
+        eq(teamMembers.is_owner, false),
+        inArray(teamMembers.status, ["active", "invited"]),
+      ),
+    );
+  const used = row?.n ?? 0;
+  return { used, included, enforced: ent.enforced, canAdd: !ent.enforced || used < included, tier: ent.effectiveTier };
 }
