@@ -11,6 +11,7 @@ import {
   Gavel,
   ListChecks,
   Loader2,
+  MessageSquare,
   Pencil,
   Plus,
   Radar,
@@ -30,10 +31,12 @@ import { cn } from "@/lib/cn";
 import { markdownToHtml } from "@/lib/content/format";
 import { DEFAULT_BOARD_GOAL } from "@/lib/constants";
 import {
+  acceptBoardVerdictAction,
   advanceBoardAction,
   boardAlertToTaskAction,
   conveneBoardAction,
   deleteBoardSessionAction,
+  discussWithBoardAction,
   getBoardroomAction,
   getBoardSessionAction,
   handVerdictToExecutiveAction,
@@ -130,6 +133,8 @@ function blankSession(id: string, title: string): BoardSession {
     accountability: "",
     project_id: null,
     contributions: [],
+    discussion: [],
+    accepted_at: null,
     error: "",
     created_at: new Date().toISOString(),
     completed_at: null,
@@ -151,6 +156,9 @@ function BoardroomPageInner() {
   const [directives, setDirectives] = useState<BoardDirective[]>([]);
   const [settings, setSettings] = useState<BoardSettings>({ cadence: "daily", last_scan_at: null, mission: "" });
   const [founderReply, setFounderReply] = useState("");
+  const [discussReply, setDiscussReply] = useState("");
+  const [discussing, setDiscussing] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [handingOff, setHandingOff] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -312,6 +320,39 @@ function BoardroomPageInner() {
     void load();
   }
 
+  // Discuss the verdict with the board after they've ruled (they may revise it).
+  async function discuss() {
+    if (!active || discussing) return;
+    const text = discussReply.trim();
+    if (!text) return;
+    setDiscussing(true);
+    setError("");
+    setDiscussReply("");
+    const r = await discussWithBoardAction(active.id, text);
+    setDiscussing(false);
+    if (!r.ok) {
+      setError(r.error ?? "The board couldn't respond.");
+      setDiscussReply(text); // restore so it isn't lost
+      return;
+    }
+    setActive(r.session);
+  }
+
+  // Accept the verdict as final — locks the discussion, enables the handoff.
+  async function accept() {
+    if (!active || accepting) return;
+    setAccepting(true);
+    setError("");
+    const r = await acceptBoardVerdictAction(active.id);
+    setAccepting(false);
+    if (!r.ok) {
+      setError(r.error ?? "Couldn't accept the verdict.");
+      return;
+    }
+    setActive(r.session);
+    setNotice("Verdict accepted — it's locked in.");
+  }
+
   async function deleteSession(id: string) {
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (active?.id === id) setActive(null);
@@ -354,6 +395,12 @@ function BoardroomPageInner() {
             founderReply={founderReply}
             onFounderReply={setFounderReply}
             onRespond={respond}
+            discussReply={discussReply}
+            onDiscussReply={setDiscussReply}
+            onDiscuss={discuss}
+            discussing={discussing}
+            onAccept={accept}
+            accepting={accepting}
             onHandOff={handOff}
             handingOff={handingOff}
             onDelete={() => deleteSession(active.id)}
@@ -598,6 +645,12 @@ function Deliberation({
   founderReply,
   onFounderReply,
   onRespond,
+  discussReply,
+  onDiscussReply,
+  onDiscuss,
+  discussing,
+  onAccept,
+  accepting,
   onHandOff,
   handingOff,
   onDelete,
@@ -607,6 +660,12 @@ function Deliberation({
   founderReply: string;
   onFounderReply: (v: string) => void;
   onRespond: (skip: boolean) => void;
+  discussReply: string;
+  onDiscussReply: (v: string) => void;
+  onDiscuss: () => void;
+  discussing: boolean;
+  onAccept: () => void;
+  accepting: boolean;
   onHandOff: () => void;
   handingOff: boolean;
   onDelete: () => void;
@@ -710,21 +769,69 @@ function Deliberation({
       {session.status === "complete" && (
         <>
           <Verdict session={session} />
-          <div className="flex flex-wrap items-center gap-2">
-            {session.project_id ? (
+
+          {/* Post-verdict discussion transcript */}
+          {session.discussion.length > 0 && (
+            <Section title="Your discussion with the board">
+              {session.discussion.map((t) => (
+                <DiscussionTurn key={t.id} turn={t} />
+              ))}
+            </Section>
+          )}
+
+          {session.accepted_at ? (
+            <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800">
-                <CheckCircle2 className="h-4 w-4" /> Handed to the Executive — it's a project now.
-                <Link href="/projects" className="underline underline-offset-2">
-                  Open Projects
-                </Link>
+                <CheckCircle2 className="h-4 w-4" /> Verdict accepted
               </span>
-            ) : (
-              <Button size="sm" disabled={handingOff} onClick={onHandOff}>
-                {handingOff ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
-                Hand to the Executive
-              </Button>
-            )}
-          </div>
+              {session.project_id ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] font-medium text-emerald-800">
+                  Handed to the Executive — it's a project now.
+                  <Link href="/projects" className="underline underline-offset-2">
+                    Open Projects
+                  </Link>
+                </span>
+              ) : (
+                <Button size="sm" disabled={handingOff} onClick={onHandOff}>
+                  {handingOff ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUpRight className="h-4 w-4" />}
+                  Hand to the Executive
+                </Button>
+              )}
+            </div>
+          ) : (
+            <Card className="border-primary/30 bg-primary/[0.03] p-4">
+              <p className="flex items-center gap-1.5 text-[13px] font-semibold">
+                <MessageSquare className="h-4 w-4 text-primary" /> Discuss with the board — or accept
+              </p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground">
+                Push back, add context, or point out where they got it wrong — the board will respond and revise the
+                verdict if you're right. Accept when you're satisfied to lock it in and enable the handoff.
+              </p>
+              <Textarea
+                value={discussReply}
+                onChange={(e) => onDiscussReply(e.target.value)}
+                rows={3}
+                placeholder="e.g. You assumed we're pre-revenue — we're at $40k MRR. Does that change the raise recommendation?"
+                className="mt-3 text-[13px]"
+                disabled={discussing}
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={discussing || accepting || !discussReply.trim()}
+                  onClick={onDiscuss}
+                >
+                  {discussing ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageSquare className="h-4 w-4" />}
+                  {discussing ? "The board is responding…" : "Send to the board"}
+                </Button>
+                <Button size="sm" disabled={accepting || discussing} onClick={onAccept}>
+                  {accepting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Accept verdict
+                </Button>
+              </div>
+            </Card>
+          )}
         </>
       )}
 
@@ -765,6 +872,31 @@ function StageSpinner({ label }: { label: string }) {
       <Loader2 className="h-4 w-4 animate-spin" />
       {label}
     </div>
+  );
+}
+
+function DiscussionTurn({ turn }: { turn: BoardSession["discussion"][number] }) {
+  const isFounder = turn.role === "founder";
+  return (
+    <Card
+      className={cn(
+        "p-3.5",
+        isFounder ? "border-primary/20 bg-primary/[0.03]" : "border-primary/30 bg-primary/[0.05]",
+      )}
+    >
+      <div className="mb-1 flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-[14px] text-primary">
+          {isFounder ? "🧑" : <Gavel className="h-4 w-4" />}
+        </span>
+        <p className="text-[12.5px] font-semibold">{turn.author}</p>
+        {turn.revised && (
+          <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+            Revised the verdict
+          </span>
+        )}
+      </div>
+      <Md className="text-[12.5px] leading-relaxed text-foreground/90">{turn.content}</Md>
+    </Card>
   );
 }
 

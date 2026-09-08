@@ -1228,6 +1228,18 @@ export interface BoardRecommendation {
   detail: string;
 }
 
+/** One turn of the post-verdict discussion between the founder and the board (Chair). */
+export interface BoardDiscussionTurn {
+  id: string;
+  role: "founder" | "board";
+  author: string;
+  content: string;
+  /** True for a board turn that revised the verdict (vs. held its position). */
+  revised: boolean;
+  seq: number;
+  created_at: string;
+}
+
 /** A full board deliberation: the debate transcript + the Chair's verdict. */
 export interface BoardSession {
   id: string;
@@ -1243,6 +1255,10 @@ export interface BoardSession {
   /** The project spawned when the verdict was handed to the Executive. */
   project_id: string | null;
   contributions: BoardContribution[];
+  /** Post-verdict back-and-forth with the board, oldest first. */
+  discussion: BoardDiscussionTurn[];
+  /** Set once the founder accepts the verdict as final (locks it, enables handoff). */
+  accepted_at: string | null;
   error: string;
   created_at: string;
   completed_at: string | null;

@@ -8,6 +8,7 @@ import {
   boardAlerts,
   boardContributions,
   boardDirectives,
+  boardDiscussion,
   boardMembers,
   boardSessions,
   boardSettings,
@@ -20,7 +21,7 @@ import { createProject } from "@/lib/agents/project";
 import { computeKpis } from "@/lib/executive/kpis";
 import { researchTopics } from "@/lib/ai/research";
 import { runWithUsage } from "@/lib/ai/usage";
-import { boardOpening, boardRebuttal, boardScan, boardVerdict, buildMission } from "@/lib/ai/board";
+import { boardDiscuss, boardOpening, boardRebuttal, boardScan, boardVerdict, buildMission } from "@/lib/ai/board";
 import { DEFAULT_BOARD_MEMBERS } from "@/lib/constants";
 import type {
   BoardAlert,
@@ -29,6 +30,7 @@ import type {
   BoardContribution,
   BoardDirective,
   BoardDirectiveStatus,
+  BoardDiscussionTurn,
   BoardMember,
   BoardRecommendation,
   BoardRole,
@@ -416,23 +418,38 @@ function toContribution(r: typeof boardContributions.$inferSelect): BoardContrib
   };
 }
 
+function toDiscussion(r: typeof boardDiscussion.$inferSelect): BoardDiscussionTurn {
+  return {
+    id: r.id,
+    role: (r.role as BoardDiscussionTurn["role"]) ?? "founder",
+    author: r.author,
+    content: r.content,
+    revised: r.revised,
+    seq: r.seq,
+    created_at: new Date(r.created_at).toISOString(),
+  };
+}
+
 export async function getBoardSession(workspaceId: string, sessionId: string): Promise<BoardSession> {
   const [s] = await db
     .select()
     .from(boardSessions)
     .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
     .limit(1);
-  const contributions = s
-    ? (
-        await db
+  const [contributions, discussion] = s
+    ? await Promise.all([
+        db
           .select()
           .from(boardContributions)
-          .where(
-            and(eq(boardContributions.workspace_id, workspaceId), eq(boardContributions.session_id, sessionId)),
-          )
-          .orderBy(asc(boardContributions.seq))
-      ).map(toContribution)
-    : [];
+          .where(and(eq(boardContributions.workspace_id, workspaceId), eq(boardContributions.session_id, sessionId)))
+          .orderBy(asc(boardContributions.seq)),
+        db
+          .select()
+          .from(boardDiscussion)
+          .where(and(eq(boardDiscussion.workspace_id, workspaceId), eq(boardDiscussion.session_id, sessionId)))
+          .orderBy(asc(boardDiscussion.seq)),
+      ])
+    : [[], []];
   const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
   return {
     id: s?.id ?? sessionId,
@@ -445,11 +462,132 @@ export async function getBoardSession(workspaceId: string, sessionId: string): P
     recommendations: (s?.recommendations ?? []) as BoardRecommendation[],
     accountability: s?.accountability ?? "",
     project_id: s?.project_id ?? null,
-    contributions,
+    contributions: contributions.map(toContribution),
+    discussion: discussion.map(toDiscussion),
+    accepted_at: iso(s?.accepted_at),
     error: s?.error ?? "",
     created_at: iso(s?.created_at) ?? new Date().toISOString(),
     completed_at: iso(s?.completed_at),
   };
+}
+
+/**
+ * Post-verdict discussion: the founder pushes back / corrects / questions the
+ * verdict; the Chair responds for the board and, when the founder has surfaced a
+ * genuine error or new information, revises the verdict in place. Only allowed once
+ * the board has ruled and before the founder accepts (locks) it.
+ */
+export async function discussWithBoard(
+  workspaceId: string,
+  sessionId: string,
+  message: string,
+): Promise<{ ok: true; session: BoardSession } | { ok: false; error: string }> {
+  const text = message.trim();
+  if (!text) return { ok: false, error: "Write something to the board first." };
+  const [s] = await db
+    .select()
+    .from(boardSessions)
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
+    .limit(1);
+  if (!s) return { ok: false, error: "Session not found." };
+  if (s.status !== "complete") return { ok: false, error: "The board hasn't ruled yet." };
+  if (s.accepted_at) return { ok: false, error: "You've already accepted this verdict — it's final." };
+
+  return runWithUsage(workspaceId, "boardroom", async () => {
+    try {
+      const [openings, rebuttals, priorThread] = await Promise.all([
+        contributionsFor(workspaceId, sessionId, "opening"),
+        contributionsFor(workspaceId, sessionId, "rebuttal"),
+        db
+          .select()
+          .from(boardDiscussion)
+          .where(and(eq(boardDiscussion.workspace_id, workspaceId), eq(boardDiscussion.session_id, sessionId)))
+          .orderBy(asc(boardDiscussion.seq)),
+      ]);
+      const company = await companyName(workspaceId);
+      const mission = buildMission((await getBoardSettings(workspaceId)).mission);
+      const now = new Date();
+      const nextSeq = priorThread.length;
+
+      // Record the founder's turn first (so it isn't lost if the AI call fails).
+      await db.insert(boardDiscussion).values({
+        id: randomUUID(),
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        role: "founder",
+        author: "You",
+        content: text.slice(0, 4000),
+        revised: false,
+        seq: nextSeq,
+        created_at: now,
+      });
+
+      const reply = await boardDiscuss({
+        company,
+        context: s.context,
+        question: s.title,
+        openings,
+        rebuttals,
+        verdict: s.verdict,
+        disagreements: (s.disagreements ?? []) as string[],
+        recommendations: (s.recommendations ?? []) as BoardRecommendation[],
+        accountability: s.accountability,
+        thread: priorThread.map((t) => ({ role: t.role as "founder" | "board", content: t.content })),
+        message: text,
+        mission,
+      });
+
+      await db.insert(boardDiscussion).values({
+        id: randomUUID(),
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        role: "board",
+        author: "The Chair",
+        content: reply.reply,
+        revised: reply.revised,
+        seq: nextSeq + 1,
+        created_at: new Date(),
+      });
+
+      // Apply a revision to the live verdict when the board changed its call.
+      if (reply.revised && reply.verdict) {
+        await db
+          .update(boardSessions)
+          .set({
+            verdict: reply.verdict,
+            disagreements: reply.disagreements ?? [],
+            recommendations: reply.recommendations ?? [],
+            accountability: reply.accountability ?? s.accountability,
+          })
+          .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)));
+      }
+
+      return { ok: true as const, session: await getBoardSession(workspaceId, sessionId) };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "The board couldn't respond — try again." };
+    }
+  });
+}
+
+/** Accept the verdict as final — locks the discussion and enables the handoff. */
+export async function acceptBoardVerdict(
+  workspaceId: string,
+  sessionId: string,
+): Promise<{ ok: true; session: BoardSession } | { ok: false; error: string }> {
+  const [s] = await db
+    .select({ status: boardSessions.status, accepted_at: boardSessions.accepted_at })
+    .from(boardSessions)
+    .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)))
+    .limit(1);
+  if (!s) return { ok: false, error: "Session not found." };
+  if (s.status !== "complete") return { ok: false, error: "The board hasn't ruled yet." };
+  if (!s.accepted_at) {
+    await db
+      .update(boardSessions)
+      .set({ accepted_at: new Date() })
+      .where(and(eq(boardSessions.workspace_id, workspaceId), eq(boardSessions.id, sessionId)));
+  }
+  return { ok: true, session: await getBoardSession(workspaceId, sessionId) };
 }
 
 export async function listBoardSessions(workspaceId: string, limit = 20): Promise<BoardSessionSummary[]> {

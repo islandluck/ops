@@ -509,6 +509,9 @@ export const boardSessions = pgTable(
     error: text("error").notNull().default(""),
     created_at: createdAt,
     completed_at: timestamp("completed_at", { withTimezone: true }),
+    // The founder accepted the verdict as final — locks it + enables the handoff.
+    // Null while the founder is still discussing/correcting it with the board.
+    accepted_at: timestamp("accepted_at", { withTimezone: true }),
   },
   (t) => [index("board_sessions_ws_idx").on(t.workspace_id, t.created_at)],
 );
@@ -535,6 +538,34 @@ export const boardContributions = pgTable(
     created_at: createdAt,
   },
   (t) => [index("board_contributions_session_idx").on(t.session_id)],
+);
+
+/**
+ * Post-verdict discussion on a deliberation: the founder pushes back, asks a
+ * question, or corrects a mistake, and the Chair responds — and may revise the
+ * verdict — until the founder accepts it. Distinct from the pre-verdict
+ * `founder_input` pause and from the per-member `board_contributions` transcript.
+ */
+export const boardDiscussion = pgTable(
+  "board_discussion",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    session_id: uuid("session_id")
+      .notNull()
+      .references(() => boardSessions.id, { onDelete: "cascade" }),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    // founder | board
+    role: text("role").notNull().default("founder"),
+    author: text("author").notNull().default(""),
+    content: text("content").notNull().default(""),
+    // A board turn that revised the verdict (vs. one that held its position).
+    revised: boolean("revised").notNull().default(false),
+    seq: integer("seq").notNull().default(0),
+    created_at: createdAt,
+  },
+  (t) => [index("board_discussion_session_idx").on(t.session_id, t.seq)],
 );
 
 /** An unprompted finding the board raised during an autonomous research scan. */

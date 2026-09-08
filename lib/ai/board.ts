@@ -178,6 +178,117 @@ export async function boardVerdict(input: {
   };
 }
 
+export interface BoardDiscussReply {
+  /** The Chair's response to the founder (always present). */
+  reply: string;
+  /** True when the founder's point changed the board's call → the verdict fields below apply. */
+  revised: boolean;
+  verdict?: string;
+  disagreements?: string[];
+  recommendations?: BoardRecommendation[];
+  accountability?: string;
+}
+
+/**
+ * Post-verdict discussion. The founder pushes back on / questions / corrects the
+ * board's verdict; the Chair answers for the board — and, only when the founder has
+ * surfaced a genuine error or new information, REVISES the verdict. Pressure alone is
+ * never enough to move it.
+ */
+export async function boardDiscuss(input: {
+  company: string;
+  context: string;
+  question: string;
+  openings: { name: string; role: string; content: string }[];
+  rebuttals: { name: string; role: string; content: string }[];
+  verdict: string;
+  disagreements: string[];
+  recommendations: BoardRecommendation[];
+  accountability: string;
+  thread: { role: "founder" | "board"; content: string }[];
+  message: string;
+  mission: string;
+}): Promise<BoardDiscussReply> {
+  const client = getAnthropic();
+  const system = [
+    `You are the Chair of the board of directors for ${input.company || "the company"}.`,
+    input.mission,
+    "",
+    "The board already deliberated and you delivered the verdict below. The founder is now discussing it with you — pushing back, adding context, or pointing out a mistake. Answer AS THE CHAIR, speaking for the board: address their point head-on, with a spine.",
+    "If they've surfaced a GENUINE error or new information that changes the right call, REVISE the verdict and say what changed and why. If they're applying pressure, rationalizing, or dodging, hold the board's position and tell them so directly. Do NOT capitulate just because they disagree. Never invent facts.",
+    "",
+    "Respond with ONLY JSON, no markdown fences:",
+    '{"reply": string (the Chair\'s response to the founder, 1–3 tight paragraphs), "revise": boolean, "verdict": string (REQUIRED only if revise=true — the full updated verdict, 1–3 paragraphs), "disagreements": string[] (0–4 lines, only if revise=true), "recommendations": [{"title": string, "detail": string}] (3–6 concrete next moves, only if revise=true), "accountability": string (only if revise=true)}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const recsText = input.recommendations.map((r, i) => `${i + 1}. ${r.title}${r.detail ? ` — ${r.detail}` : ""}`).join("\n");
+  const threadText = input.thread
+    .map((t) => `${t.role === "founder" ? "FOUNDER" : "CHAIR"}: ${t.content}`)
+    .join("\n\n");
+  const priorVerdict = [
+    `VERDICT:\n${input.verdict}`,
+    input.disagreements.length ? `WHERE THE BOARD SPLIT:\n- ${input.disagreements.join("\n- ")}` : "",
+    recsText ? `RECOMMENDATIONS:\n${recsText}` : "",
+    input.accountability ? `ACCOUNTABILITY:\n${input.accountability}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 4000,
+    system,
+    messages: [
+      {
+        role: "user",
+        content: `Matter: ${input.question}\n\nTHE BOARD'S CURRENT POSITION:\n${priorVerdict}${
+          threadText ? `\n\nDISCUSSION SO FAR:\n${threadText}` : ""
+        }\n\nTHE FOUNDER NOW SAYS:\n${input.message}\n\nContext:\n${input.context}`.slice(0, 20000),
+      },
+    ],
+  });
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+
+  const salvage = (): BoardDiscussReply => {
+    const m = text.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    const reply = m
+      ? m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\")
+      : text.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+    return { reply: reply || "The board stands by its verdict.", revised: false };
+  };
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) return salvage();
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+  } catch {
+    return salvage();
+  }
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const strArr = (v: unknown) => (Array.isArray(v) ? v.map((x) => str(x)).filter(Boolean).slice(0, 6) : []);
+  const reply = str(parsed.reply) || salvage().reply;
+  const revised = parsed.revise === true && str(parsed.verdict).length > 0;
+  if (!revised) return { reply, revised: false };
+  const recs = Array.isArray(parsed.recommendations)
+    ? parsed.recommendations
+        .map((r) => (r ?? {}) as Record<string, unknown>)
+        .map((r) => ({ title: str(r.title), detail: str(r.detail) }))
+        .filter((r) => r.title)
+        .slice(0, 6)
+    : [];
+  return {
+    reply,
+    revised: true,
+    verdict: str(parsed.verdict),
+    disagreements: strArr(parsed.disagreements),
+    recommendations: recs,
+    accountability: str(parsed.accountability),
+  };
+}
+
 export interface BoardScanAlert {
   member_role: string;
   severity: "info" | "attention" | "urgent";

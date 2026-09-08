@@ -477,6 +477,13 @@
       "when": 1788310919230,
       "tag": "0067_bitter_jazinda",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1788890087203,
+      "tag": "0068_chief_rhodey",
+      "breakpoints": true
     }
   ]
 }

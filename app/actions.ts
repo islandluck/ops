@@ -126,10 +126,12 @@ import {
   updateOutboundDraft,
 } from "@/lib/agents/outbound";
 import {
+  acceptBoardVerdict,
   advanceBoard,
   alertToTask,
   conveneBoard,
   deleteBoardSession,
+  discussWithBoard,
   getBoardSession,
   getBoardroom,
   handVerdictToExecutive,
@@ -2524,6 +2526,24 @@ export async function respondToBoardAction(sessionId: string, text: string) {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false as const, error: "No workspace." };
   return respondToBoard(ws, sessionId, text);
+}
+
+/** Post-verdict: discuss the verdict with the board (they may revise it). */
+export async function discussWithBoardAction(sessionId: string, message: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return discussWithBoard(ws, sessionId, message);
+}
+
+/** Accept the board's verdict as final — locks it and enables the handoff. */
+export async function acceptBoardVerdictAction(sessionId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  return acceptBoardVerdict(ws, sessionId);
 }
 
 /** Delete a deliberation. */
