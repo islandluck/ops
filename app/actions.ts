@@ -64,7 +64,8 @@ import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
 import { analyzeTweetStyle, cleanUpTweets, growthBoostTweet, suggestReplies } from "@/lib/ai/style";
 import { getUserTweets } from "@/lib/integrations/x";
-import { parseTweets, scheduleBulkTweets } from "@/lib/agents/social-bulk";
+import { parseTweets, postSingleTweetNow, scheduleBulkTweets, scheduleSingleTweet } from "@/lib/agents/social-bulk";
+import { getSocialStats } from "@/lib/agents/social-stats";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
 import {
   clearIntegration,
@@ -398,6 +399,7 @@ import type {
   Product,
   Project,
   ReplyOpportunity,
+  SocialStats,
   XTarget,
   EmailListItem,
   EmailManagerState,
@@ -1942,6 +1944,54 @@ export async function bulkScheduleTweetsAction(
     return { ok: true, scheduled: res.scheduled, when: res.when };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't schedule the tweets." };
+  }
+}
+
+/** Composer: post ONE tweet to X right now (real publish; lands in the sent tally). */
+export async function postTweetNowAction(
+  text: string,
+  mediaId?: string | null,
+): Promise<{ ok: boolean; summary?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await postSingleTweetNow(ws, { text, mediaId: mediaId ?? null }, { name: displayName(user), email: user.email ?? "" });
+    return r.ok ? { ok: true, summary: r.summary } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't post the tweet." };
+  }
+}
+
+/** Composer: schedule ONE tweet at a specific future time. */
+export async function scheduleTweetAction(
+  text: string,
+  whenISO: string,
+  mediaId?: string | null,
+): Promise<{ ok: boolean; when?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await scheduleSingleTweet(ws, { text, mediaId: mediaId ?? null, whenISO }, { name: displayName(user) });
+    return r.ok ? { ok: true, when: r.when } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't schedule the tweet." };
+  }
+}
+
+/** Social page right rail: follower count, growth trend, tweets/day, last 20 sent. */
+export async function getSocialStatsAction(): Promise<SocialStats | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await getSocialStats(ws);
+  } catch {
+    return null;
   }
 }
 

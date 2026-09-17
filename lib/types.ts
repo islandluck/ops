@@ -907,6 +907,30 @@ export interface ReplyOpportunity {
   created_at: string;
 }
 
+/** One tweet that actually went out — for the Social page's "sent" tally. */
+export interface SentTweet {
+  id: string;
+  text: string;
+  /** ISO instant it was published. */
+  at: string;
+  /** Live tweet URL when captured, else null. */
+  url: string | null;
+}
+
+/** Account stats for the Social page's right rail (follower count, growth, cadence, sent). */
+export interface SocialStats {
+  /** Whether X is connected (drives the connect prompt). */
+  connected: boolean;
+  /** Current follower count (null when unavailable / not connected). */
+  followers: number | null;
+  /** Follower count over time — latest per day, up to 30 days. */
+  followerTrend: { date: string; followers: number }[];
+  /** Tweets published per day over the last 14 days (zero-filled). */
+  tweetsPerDay: { date: string; count: number }[];
+  /** The last 20 tweets that went out, newest first. */
+  sent: SentTweet[];
+}
+
 export interface Integration {
   id: string;
   name: string;

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { activityEvents, agents, approvalDecisions, taskAssets, tasks } from "@/lib/db/schema";
 import { getPlanningContext, linkMediaToTask, saveDocument } from "@/lib/db/queries";
 import { fitToX } from "@/lib/social/x-post";
+import { runTaskExecution } from "@/lib/integrations/execute";
 import { nextPublishSlots } from "./slots";
 
 /**
@@ -176,4 +177,123 @@ export async function scheduleBulkTweets(
   });
 
   return { scheduled: n, when: slots.slice(0, n).map((s) => s.toISOString()) };
+}
+
+/* --------------------------- single tweet (composer) ---------------------- */
+
+/** Stage ONE X task written by the user: approved + queued at `slot`, or approved +
+ *  ready-to-run (execution_status "none") when slot is null. Returns its ids. */
+async function stageXTask(
+  workspaceId: string,
+  input: { text: string; mediaId?: string | null; slot: Date | null },
+  actor: { name: string },
+): Promise<{ taskId: string; assetId: string } | null> {
+  const text = fitToX(input.text.trim());
+  if (!text) return null;
+  const now = new Date();
+  const taskId = randomUUID();
+  const assetId = randomUUID();
+  const heading = `X post: ${text.slice(0, 60)}`.slice(0, 120);
+  const [socialAgent] = await db
+    .select({ folder: agents.folder })
+    .from(agents)
+    .where(and(eq(agents.workspace_id, workspaceId), eq(agents.kind, "social")))
+    .limit(1);
+  const folder = socialAgent?.folder || "Social";
+  const scheduled = input.slot != null;
+
+  await db.insert(tasks).values({
+    id: taskId,
+    workspace_id: workspaceId,
+    category: "content",
+    title: heading,
+    description: scheduled
+      ? "Scheduled from the composer to auto-publish to X. Cancel any time before it posts."
+      : "Posted to X from the composer.",
+    rationale: "Written by you in the composer.",
+    status: "approved",
+    risk_level: "low",
+    priority: "medium",
+    due_at: null,
+    scheduled_at: input.slot,
+    agent_id: null,
+    created_by_type: "human",
+    requires_approval: false,
+    approval_status: "approved",
+    execution_status: scheduled ? "queued" : "none",
+    affected_systems: ["X (Twitter)"],
+    proposed_actions: 1,
+    impact_score: 40,
+    created_at: now,
+    updated_at: now,
+  });
+  await db.insert(taskAssets).values({
+    id: assetId,
+    task_id: taskId,
+    asset_type: "social_post",
+    title: "X post",
+    content: text,
+    metadata: { channel: "X (Twitter)", chars: text.length },
+  });
+  await db.insert(approvalDecisions).values({
+    id: randomUUID(),
+    task_id: taskId,
+    decided_by: actor.name,
+    decision_type: "approve",
+    comment: scheduled ? `Scheduled for ${input.slot!.toISOString()}` : "Posted now",
+    created_at: now,
+  });
+  await saveDocument({
+    workspaceId,
+    agentId: null,
+    authorName: actor.name,
+    taskId,
+    taskTitle: heading,
+    name: heading,
+    content: text,
+    folder,
+    docType: "social_post",
+  });
+  if (input.mediaId) await linkMediaToTask(workspaceId, input.mediaId, taskId);
+  return { taskId, assetId };
+}
+
+/** Schedule ONE tweet at a specific future time (composer "Schedule"). */
+export async function scheduleSingleTweet(
+  workspaceId: string,
+  input: { text: string; mediaId?: string | null; whenISO: string },
+  actor: { name: string },
+): Promise<{ ok: true; when: string } | { ok: false; error: string }> {
+  if (!input.text.trim()) return { ok: false, error: "Write your tweet first." };
+  const when = new Date(input.whenISO);
+  if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid time." };
+  if (when.getTime() < Date.now() + 30_000) return { ok: false, error: "Pick a time in the future." };
+  const r = await stageXTask(workspaceId, { text: input.text, mediaId: input.mediaId, slot: when }, actor);
+  if (!r) return { ok: false, error: "Write your tweet first." };
+  await db.insert(activityEvents).values({
+    id: randomUUID(),
+    workspace_id: workspaceId,
+    task_id: r.taskId,
+    event_type: "agent_updated_draft",
+    actor_type: "human",
+    actor_id: actor.name,
+    summary: `Scheduled a tweet to auto-publish to X on ${when.toISOString()}.`,
+    created_at: new Date(),
+  });
+  return { ok: true, when: when.toISOString() };
+}
+
+/** Post ONE tweet to X right now (composer "Post now") — stages the task then runs
+ *  the real publish immediately, so it lands in the sent tally with a live URL. */
+export async function postSingleTweetNow(
+  workspaceId: string,
+  input: { text: string; mediaId?: string | null },
+  actor: { name: string; email: string },
+): Promise<{ ok: true; summary?: string; taskId: string } | { ok: false; error: string }> {
+  if (!input.text.trim()) return { ok: false, error: "Write your tweet first." };
+  const r = await stageXTask(workspaceId, { text: input.text, mediaId: input.mediaId, slot: null }, actor);
+  if (!r) return { ok: false, error: "Write your tweet first." };
+  const exec = await runTaskExecution(workspaceId, r.taskId, actor);
+  if (!exec.ok) return { ok: false, error: exec.error ?? "Couldn't post to X." };
+  return { ok: true, summary: exec.summary, taskId: r.taskId };
 }

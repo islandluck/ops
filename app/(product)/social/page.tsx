@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bot,
   CalendarClock,
   Check,
+  CheckCircle2,
+  ChevronDown,
   Clock,
   ExternalLink,
   ImagePlus,
@@ -19,6 +22,8 @@ import {
   Trash2,
   TrendingUp,
   Upload,
+  User,
+  Users,
   Wand2,
   X,
 } from "lucide-react";
@@ -31,27 +36,34 @@ import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import {
   addXTargetAction,
+  approveScheduledPostAction,
   attachStockImageAction,
   bulkPreviewTweetsAction,
   bulkScheduleTweetsAction,
+  deleteTaskAction,
   dismissOpportunityAction,
   draftOpportunityRepliesAction,
   getReplyOpportunitiesAction,
+  getSocialStatsAction,
   getXStyleAction,
   getXTargetsAction,
   growthBoostTweetAction,
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
   postOpportunityReplyAction,
+  postTweetNowAction,
   refreshReplyRadarAction,
   removePostImageAction,
   removeXTargetAction,
   saveXStyleAction,
+  scheduleTweetAction,
   searchStockAction,
   suggestRepliesAction,
+  unscheduleTaskAction,
+  updateTaskAssetAction,
   uploadPostImageAction,
 } from "@/app/actions";
-import type { PostImage, ReplyOpportunity, XTarget } from "@/lib/types";
+import type { PostImage, ReplyOpportunity, SocialStats, Task, XTarget } from "@/lib/types";
 import type { StockImage } from "@/lib/ai/stock";
 
 function fmtWhen(iso: string, tz?: string): string {
@@ -70,18 +82,41 @@ function fmtWhen(iso: string, tz?: string): string {
 }
 
 export default function SocialPage() {
+  const [stats, setStats] = useState<SocialStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const refreshStats = useCallback(() => {
+    void getSocialStatsAction().then((s) => {
+      setStats(s);
+      setStatsLoading(false);
+    });
+  }, []);
+  useEffect(() => {
+    refreshStats();
+  }, [refreshStats]);
+
   return (
     <>
       <PageHeader
         title="Social — X"
-        description="Teach Operator your voice, then drop in a batch of ideas and schedule them across the week in one click."
+        description="Write a tweet, schedule it, or let the growth marketer sharpen it — then watch your account grow."
       />
-      <PageBody className="max-w-3xl space-y-5">
-        <VoiceSection />
-        <ComposerSection />
-        <ReplyAssistantSection />
-        <ReplyRadarSection />
-        <QueueSection />
+      <PageBody className="max-w-6xl">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+          {/* Main column */}
+          <div className="min-w-0 space-y-5">
+            <ComposeBox onPosted={refreshStats} />
+            <ComposerSection />
+            <QueueSection />
+            <SentTallySection stats={stats} loading={statsLoading} onRefresh={refreshStats} />
+            <ReplyAssistantSection />
+            <ReplyRadarSection />
+          </div>
+          {/* Right rail */}
+          <div className="space-y-5">
+            <AccountPanel stats={stats} loading={statsLoading} onRefresh={refreshStats} />
+            <VoiceSection />
+          </div>
+        </div>
       </PageBody>
     </>
   );
@@ -90,6 +125,7 @@ export default function SocialPage() {
 /* -------------------------------- Voice ---------------------------------- */
 
 function VoiceSection() {
+  const [open, setOpen] = useState(false);
   const [profile, setProfile] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"x" | "paste" | "save" | null>(null);
@@ -151,87 +187,264 @@ function VoiceSection() {
   }
 
   return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <Sparkles className="h-5 w-5" />
-          </div>
-          <div>
-            <h2 className="text-[15px] font-semibold">Your voice</h2>
-            <p className="text-[12.5px] text-muted-foreground">
-              Learned from your tweets and matched on everything Operator drafts for X.
-            </p>
-          </div>
+    <Card className="p-4">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2.5 text-left">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Sparkles className="h-4 w-4" />
         </div>
-        {profile && !editing && (
-          <div className="flex gap-1.5">
-            <Button size="sm" variant="ghost" onClick={() => { setDraft(profile); setEditing(true); }}>
-              <Pencil className="h-3.5 w-3.5" />
-              Edit
-            </Button>
-            <Button size="sm" variant="outline" onClick={learnFromX} disabled={busy !== null}>
-              {busy === "x" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Re-learn
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {loading ? (
-        <div className="mt-4 flex justify-center py-6 text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" />
-        </div>
-      ) : editing ? (
-        <div className="mt-4 space-y-2">
-          <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} className="min-h-[160px] font-mono text-[12.5px]" />
-          <div className="flex gap-2">
-            <Button size="sm" variant="success" onClick={saveEdit} disabled={busy === "save"}>
-              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              Save voice
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
-          </div>
-        </div>
-      ) : profile ? (
-        <div className="mt-4 whitespace-pre-line rounded-xl border border-border bg-muted/30 p-4 text-[13px] leading-relaxed text-foreground/90">
-          {profile}
-        </div>
-      ) : (
-        <div className="mt-4 space-y-3">
-          <p className="text-[13px] text-muted-foreground">
-            Operator can study how you write and match it. Pull from your connected X, or paste a handful of tweets you love.
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[14px] font-semibold">Your voice</h2>
+          <p className="truncate text-[11.5px] text-muted-foreground">
+            {loading ? "Loading…" : profile ? "Learned — matched on every X draft" : "Not set — teach Operator your voice"}
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={learnFromX} disabled={busy !== null}>
-              {busy === "x" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Learn from my X
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setShowPaste((s) => !s)}>
-              Paste examples
-            </Button>
+        </div>
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div className="mt-3">
+          {profile && !editing && (
+            <div className="mb-2 flex gap-1.5">
+              <Button size="sm" variant="ghost" onClick={() => { setDraft(profile); setEditing(true); }}>
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </Button>
+              <Button size="sm" variant="outline" onClick={learnFromX} disabled={busy !== null}>
+                {busy === "x" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                Re-learn
+              </Button>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex justify-center py-6 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : editing ? (
+            <div className="space-y-2">
+              <Textarea value={draft} onChange={(e) => setDraft(e.target.value)} className="min-h-[160px] font-mono text-[12.5px]" />
+              <div className="flex gap-2">
+                <Button size="sm" variant="success" onClick={saveEdit} disabled={busy === "save"}>
+                  {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save voice
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+              </div>
+            </div>
+          ) : profile ? (
+            <div className="whitespace-pre-line rounded-xl border border-border bg-muted/30 p-3 text-[12.5px] leading-relaxed text-foreground/90">
+              {profile}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-[12.5px] text-muted-foreground">
+                Operator can study how you write and match it. Pull from your connected X, or paste a handful of tweets you love.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={learnFromX} disabled={busy !== null}>
+                  {busy === "x" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  Learn from my X
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setShowPaste((s) => !s)}>
+                  Paste examples
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {showPaste && !editing && (
+            <div className="mt-3 space-y-2 rounded-xl border border-border p-3">
+              <Label>Paste a few of your tweets (one per line)</Label>
+              <Textarea
+                value={paste}
+                onChange={(e) => setPaste(e.target.value)}
+                className="min-h-[120px]"
+                placeholder={"just shipped a thing i'm proud of\nhot take: most dashboards are decoration\n..."}
+              />
+              <Button size="sm" onClick={learnFromPaste} disabled={busy === "paste" || paste.trim().length < 10}>
+                {busy === "paste" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                Learn from these
+              </Button>
+            </div>
+          )}
+
+          {msg && <p className="mt-3 text-[12.5px] text-emerald-600">{msg}</p>}
+          {err && <p className="mt-3 text-[12.5px] text-amber-600">{err}</p>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ---------------------------- Single composer ----------------------------- */
+
+/** The headline compose box — write a tweet and post it now, schedule it, attach an
+ *  image, or have the growth marketer sharpen it for reach in your voice. */
+function ComposeBox({ onPosted }: { onPosted: () => void }) {
+  const { reloadWorkspace } = useStore();
+  const [text, setText] = useState("");
+  const [image, setImage] = useState<PostImage | null>(null);
+  const [posting, setPosting] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [when, setWhen] = useState("");
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const [boosting, setBoosting] = useState(false);
+  const [options, setOptions] = useState<{ boosted: string; note: string }[] | null>(null);
+
+  const len = text.length;
+  const over = len > 280;
+  const canSend = text.trim().length > 0 && !over && !posting && !scheduling;
+
+  async function boost() {
+    setBoosting(true);
+    setMsg(null);
+    setOptions(null);
+    const r = await growthBoostTweetAction(text);
+    setBoosting(false);
+    if (r.ok && r.suggestions?.length) setOptions(r.suggestions);
+    else setMsg({ tone: "err", text: r.error ?? "Couldn't sharpen this one." });
+  }
+
+  async function postNow() {
+    setPosting(true);
+    setMsg(null);
+    const r = await postTweetNowAction(text.trim(), image?.id ?? null);
+    setPosting(false);
+    if (r.ok) {
+      setText("");
+      setImage(null);
+      setOptions(null);
+      setMsg({ tone: "ok", text: "Posted to X." });
+      onPosted();
+      void reloadWorkspace();
+    } else {
+      setMsg({ tone: "err", text: r.error ?? "Couldn't post the tweet." });
+    }
+  }
+
+  async function schedule() {
+    if (!when) {
+      setMsg({ tone: "err", text: "Pick a date and time." });
+      return;
+    }
+    setScheduling(true);
+    setMsg(null);
+    const iso = new Date(when).toISOString();
+    const r = await scheduleTweetAction(text.trim(), iso, image?.id ?? null);
+    setScheduling(false);
+    if (r.ok) {
+      setText("");
+      setImage(null);
+      setOptions(null);
+      setShowSchedule(false);
+      setWhen("");
+      setMsg({ tone: "ok", text: "Scheduled — see the queue below." });
+      void reloadWorkspace();
+    } else {
+      setMsg({ tone: "err", text: r.error ?? "Couldn't schedule the tweet." });
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <Textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="What's happening?"
+        className="min-h-[120px] resize-none border-0 bg-transparent p-1 text-[15px] leading-relaxed shadow-none focus-visible:ring-0"
+      />
+
+      {options && (
+        <div className="mb-2 rounded-lg border border-violet-200 bg-violet-50/70 p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700">
+            <TrendingUp className="h-3 w-3" /> Growth Marketer — sharper takes in your voice
           </div>
+          <div className="mt-2 space-y-1.5">
+            {options.map((o, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => {
+                  setText(o.boosted);
+                  setOptions(null);
+                }}
+                className="block w-full rounded-md bg-white/70 p-2 text-left text-[12.5px] leading-relaxed text-foreground transition hover:bg-white"
+              >
+                {o.note && <span className="mr-1 font-semibold text-violet-700">{o.note}:</span>}
+                {o.boosted}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setOptions(null)}
+            className="mt-1.5 text-[11px] font-medium text-violet-600 hover:underline"
+          >
+            Keep mine
+          </button>
         </div>
       )}
 
-      {showPaste && !editing && (
-        <div className="mt-3 space-y-2 rounded-xl border border-border p-3">
-          <Label>Paste a few of your tweets (one per line)</Label>
-          <Textarea
-            value={paste}
-            onChange={(e) => setPaste(e.target.value)}
-            className="min-h-[120px]"
-            placeholder={"just shipped a thing i'm proud of\nhot take: most dashboards are decoration\n..."}
-          />
-          <Button size="sm" onClick={learnFromPaste} disabled={busy === "paste" || paste.trim().length < 10}>
-            {busy === "paste" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Learn from these
+      <TweetImageSlot image={image} onImage={setImage} />
+
+      <div className="mt-2 flex items-center justify-between border-t border-border pt-2.5">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={boost}
+            disabled={boosting || text.trim().length < 4}
+            title="Sharpen for reach in your voice"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-violet-600 transition hover:bg-violet-50 disabled:pointer-events-none disabled:opacity-40"
+          >
+            {boosting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
+            Growth Marketer
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSchedule((v) => !v)}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium transition hover:bg-accent",
+              showSchedule ? "text-primary" : "text-muted-foreground",
+            )}
+          >
+            <CalendarClock className="h-3.5 w-3.5" />
+            Schedule
+          </button>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <span className={cn("text-[12px] tabular-nums", over ? "font-semibold text-destructive" : "text-muted-foreground")}>
+            {len}/280
+          </span>
+          <Button size="sm" onClick={postNow} disabled={!canSend}>
+            {posting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            Post now
+          </Button>
+        </div>
+      </div>
+
+      {showSchedule && (
+        <div className="mt-2.5 flex flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/30 p-2.5">
+          <div className="space-y-1">
+            <Label>Send at</Label>
+            <Input
+              type="datetime-local"
+              value={when}
+              onChange={(e) => setWhen(e.target.value)}
+              className="w-56"
+            />
+          </div>
+          <Button size="sm" variant="success" onClick={schedule} disabled={!text.trim() || over || scheduling}>
+            {scheduling ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
+            Add to queue
           </Button>
         </div>
       )}
 
-      {msg && <p className="mt-3 text-[12.5px] text-emerald-600">{msg}</p>}
-      {err && <p className="mt-3 text-[12.5px] text-amber-600">{err}</p>}
+      {msg && (
+        <p className={cn("mt-2.5 text-[12.5px]", msg.tone === "ok" ? "text-emerald-600" : "text-amber-600")}>{msg.text}</p>
+      )}
     </Card>
   );
 }
@@ -1165,21 +1378,44 @@ function OpportunityCard({ opp, onDone }: { opp: ReplyOpportunity; onDone: (id: 
 
 /* -------------------------------- Queue ---------------------------------- */
 
-function QueueSection() {
-  const { state } = useStore();
-  const tz = state?.brief?.timezone;
+/** How a queued tweet is classified for its status pill. */
+function queueStatus(t: Task): { label: string; cls: string } {
+  if (t.execution_status === "queued" && t.scheduled_at) {
+    return { label: "Scheduled", cls: "bg-sky-100 text-sky-700" };
+  }
+  if (t.approval_status === "pending") return { label: "Suggested", cls: "bg-amber-100 text-amber-700" };
+  if (t.approval_status === "approved") return { label: "Approved", cls: "bg-emerald-100 text-emerald-700" };
+  return { label: "Draft", cls: "bg-muted text-muted-foreground" };
+}
 
-  const upcoming = useMemo(() => {
-    const now = Date.now();
+function QueueSection() {
+  const { state, reloadWorkspace } = useStore();
+  const tz = state?.brief?.timezone;
+  const agentNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of state?.agents ?? []) m.set(a.id, a.name);
+    return m;
+  }, [state?.agents]);
+
+  const items = useMemo(() => {
     return (state?.tasks ?? [])
       .filter(
         (t) =>
-          t.execution_status === "queued" &&
+          !t.archived &&
           t.affected_systems.includes("X (Twitter)") &&
-          t.scheduled_at &&
-          new Date(t.scheduled_at).getTime() > now,
+          t.assets.some((a) => a.asset_type === "social_post") &&
+          t.execution_status !== "completed" &&
+          t.status !== "done" &&
+          ((t.execution_status === "queued" && !!t.scheduled_at) ||
+            t.approval_status === "pending" ||
+            t.approval_status === "approved"),
       )
-      .sort((a, b) => new Date(a.scheduled_at!).getTime() - new Date(b.scheduled_at!).getTime());
+      .sort((a, b) => {
+        const at = a.scheduled_at ? new Date(a.scheduled_at).getTime() : Infinity;
+        const bt = b.scheduled_at ? new Date(b.scheduled_at).getTime() : Infinity;
+        if (at !== bt) return at - bt;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
   }, [state?.tasks]);
 
   return (
@@ -1191,28 +1427,343 @@ function QueueSection() {
         <div>
           <h2 className="text-[15px] font-semibold">Scheduled queue</h2>
           <p className="text-[12.5px] text-muted-foreground">
-            {upcoming.length ? `${upcoming.length} post${upcoming.length === 1 ? "" : "s"} queued to auto-publish.` : "Nothing scheduled yet."}
+            {items.length
+              ? `${items.length} tweet${items.length === 1 ? "" : "s"} — scheduled, approved, or suggested by an agent.`
+              : "Nothing in the queue yet."}
           </p>
         </div>
       </div>
 
-      {upcoming.length > 0 && (
+      {items.length > 0 && (
         <div className="mt-4 space-y-2">
-          {upcoming.map((t) => {
-            const content = t.assets.find((a) => a.asset_type === "social_post")?.content ?? t.title;
-            return (
-              <div key={t.id} className="flex items-start gap-3 rounded-xl border border-border p-3">
-                <div className="mt-0.5 flex h-6 shrink-0 items-center gap-1 rounded-md bg-muted px-2 text-[11px] font-medium text-muted-foreground">
-                  <CalendarClock className="h-3 w-3" />
-                  {fmtWhen(t.scheduled_at!, tz)}
-                </div>
-                <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/90">{content}</p>
-              </div>
-            );
-          })}
-          <p className="pt-1 text-[11.5px] text-muted-foreground">Manage or cancel any of these from the board.</p>
+          {items.map((t) => (
+            <QueueRow
+              key={t.id}
+              task={t}
+              tz={tz}
+              source={t.created_by_type === "agent" ? agentNames.get(t.agent_id) ?? "Agent" : "You"}
+              onChanged={reloadWorkspace}
+            />
+          ))}
         </div>
       )}
     </Card>
+  );
+}
+
+function QueueRow({
+  task,
+  tz,
+  source,
+  onChanged,
+}: {
+  task: Task;
+  tz?: string;
+  source: string;
+  onChanged: () => void;
+}) {
+  const asset = task.assets.find((a) => a.asset_type === "social_post");
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(asset?.content ?? task.title);
+  const [busy, setBusy] = useState<null | "save" | "delete" | "approve">(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const status = queueStatus(task);
+  const fromAgent = task.created_by_type === "agent";
+  const isSuggested = task.approval_status === "pending";
+
+  async function save() {
+    if (!asset) return;
+    setBusy("save");
+    setErr(null);
+    const r = await updateTaskAssetAction(asset.id, text.trim());
+    setBusy(null);
+    if (r.ok) {
+      setEditing(false);
+      onChanged();
+    } else {
+      setErr(r.error ?? "Couldn't save.");
+    }
+  }
+
+  async function remove() {
+    if (!window.confirm("Remove this tweet from the queue?")) return;
+    setBusy("delete");
+    await deleteTaskAction(task.id);
+    setBusy(null);
+    onChanged();
+  }
+
+  async function approve() {
+    setBusy("approve");
+    setErr(null);
+    const r = await approveScheduledPostAction(task.id);
+    setBusy(null);
+    if (r.ok) onChanged();
+    else setErr(r.error ?? "Couldn't approve.");
+  }
+
+  return (
+    <div className="rounded-xl border border-border p-3">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+        <span className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold", status.cls)}>
+          {status.label}
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+          {fromAgent ? <Bot className="h-3 w-3" /> : <User className="h-3 w-3" />}
+          {source}
+        </span>
+        {task.scheduled_at && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10.5px] font-medium text-muted-foreground">
+            <CalendarClock className="h-3 w-3" />
+            {fmtWhen(task.scheduled_at, tz)}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-0.5">
+          {isSuggested && (
+            <button
+              type="button"
+              onClick={approve}
+              disabled={busy !== null}
+              title="Approve — schedules it to auto-publish"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-emerald-600 transition hover:bg-emerald-50 disabled:opacity-40"
+            >
+              {busy === "approve" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Approve
+            </button>
+          )}
+          {!editing && (
+            <button
+              type="button"
+              onClick={() => {
+                setText(asset?.content ?? task.title);
+                setEditing(true);
+              }}
+              disabled={!asset}
+              title="Edit"
+              className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-40"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={remove}
+            disabled={busy !== null}
+            title="Delete from queue"
+            className="rounded p-1 text-muted-foreground hover:text-red-600 disabled:opacity-40"
+          >
+            {busy === "delete" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="space-y-1.5">
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            className="min-h-[70px] resize-none text-[13px] leading-relaxed"
+          />
+          <div className="flex items-center gap-2">
+            <span className={cn("text-[11px] tabular-nums", text.length > 280 ? "font-semibold text-destructive" : "text-muted-foreground")}>
+              {text.length}/280
+            </span>
+            <div className="ml-auto flex gap-1.5">
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" variant="success" onClick={save} disabled={busy === "save" || !text.trim() || text.length > 280}>
+                {busy === "save" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                Save
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-[13px] leading-relaxed text-foreground/90">{asset?.content ?? task.title}</p>
+      )}
+      {err && <p className="mt-1 text-[11px] text-amber-600">{err}</p>}
+    </div>
+  );
+}
+
+/* ------------------------------ Sent tally ------------------------------- */
+
+function SentTallySection({
+  stats,
+  loading,
+  onRefresh,
+}: {
+  stats: SocialStats | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const { state } = useStore();
+  const tz = state?.brief?.timezone;
+  const sent = stats?.sent ?? [];
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Send className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[15px] font-semibold">Recently sent</h2>
+          <p className="text-[12.5px] text-muted-foreground">
+            {sent.length ? `The last ${sent.length} tweet${sent.length === 1 ? "" : "s"} that went out.` : "Nothing sent yet."}
+          </p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onRefresh} title="Refresh">
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {loading && !stats ? (
+        <div className="mt-4 flex justify-center py-6 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      ) : sent.length > 0 ? (
+        <div className="mt-3 divide-y divide-border">
+          {sent.map((s) => (
+            <div key={s.id} className="flex items-start gap-3 py-2.5">
+              <span className="mt-0.5 shrink-0 text-[11px] tabular-nums text-muted-foreground">{fmtWhen(s.at, tz)}</span>
+              <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/90">{s.text}</p>
+              {s.url && (
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary"
+                  title="Open on X"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+/* ---------------------------- Account panel ------------------------------ */
+
+function AccountPanel({
+  stats,
+  loading,
+  onRefresh,
+}: {
+  stats: SocialStats | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const trend = stats?.followerTrend ?? [];
+  const delta = trend.length >= 2 ? trend[trend.length - 1].followers - trend[0].followers : 0;
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Users className="h-4 w-4" />
+        </div>
+        <h2 className="flex-1 text-[14px] font-semibold">Account</h2>
+        <Button size="sm" variant="ghost" onClick={onRefresh} title="Refresh">
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {loading && !stats ? (
+        <div className="flex justify-center py-8 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      ) : !stats?.connected ? (
+        <div className="mt-3 rounded-lg border border-dashed border-border p-3 text-[12.5px] text-muted-foreground">
+          Connect X to track followers and growth.{" "}
+          <a href="/integrations" className="font-medium text-primary underline">
+            Connect in Integrations
+          </a>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-4">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">Followers</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-[28px] font-bold tabular-nums leading-tight">
+                {stats.followers != null ? stats.followers.toLocaleString() : "—"}
+              </span>
+              {delta !== 0 && (
+                <span
+                  className={cn(
+                    "text-[12px] font-semibold",
+                    delta > 0 ? "text-emerald-600" : "text-destructive",
+                  )}
+                >
+                  {delta > 0 ? "+" : ""}
+                  {delta.toLocaleString()}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {trend.length >= 2 && (
+            <div>
+              <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                Growth over time
+              </p>
+              <Sparkline values={trend.map((t) => t.followers)} />
+            </div>
+          )}
+
+          <div>
+            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              Tweets / day · last 14d
+            </p>
+            <MiniBars data={stats.tweetsPerDay} />
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** A tiny inline sparkline for the follower trend. */
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const w = 260;
+  const h = 44;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pts = values
+    .map((v, i) => {
+      const x = (i / (values.length - 1)) * w;
+      const y = h - 2 - ((v - min) / span) * (h - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-11 w-full" preserveAspectRatio="none">
+      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth={2} className="text-primary" />
+    </svg>
+  );
+}
+
+/** Tiny bar chart of tweets per day. */
+function MiniBars({ data }: { data: { date: string; count: number }[] }) {
+  const max = Math.max(1, ...data.map((d) => d.count));
+  return (
+    <div className="flex h-12 items-end gap-[3px]">
+      {data.map((d) => (
+        <div
+          key={d.date}
+          className="flex-1 rounded-sm bg-primary/70"
+          style={{ height: `${Math.max(6, (d.count / max) * 100)}%` }}
+          title={`${d.date}: ${d.count} tweet${d.count === 1 ? "" : "s"}`}
+        />
+      ))}
+    </div>
   );
 }
