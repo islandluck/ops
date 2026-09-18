@@ -64,7 +64,7 @@ import { draftWithClaude } from "@/lib/ai/draft";
 import { planTask } from "@/lib/ai/plan";
 import { analyzeTweetStyle, cleanUpTweets, growthBoostTweet, suggestReplies } from "@/lib/ai/style";
 import { getUserTweets } from "@/lib/integrations/x";
-import { parseTweets, postSingleTweetNow, scheduleBulkTweets, scheduleSingleTweet } from "@/lib/agents/social-bulk";
+import { makeThreadFromText, parseTweets, postSingleTweetNow, scheduleBulkTweets, scheduleSingleTweet } from "@/lib/agents/social-bulk";
 import { getSocialStats } from "@/lib/agents/social-stats";
 import { isProviderConfigured, providerByKey } from "@/lib/integrations/registry";
 import {
@@ -1951,34 +1951,52 @@ export async function bulkScheduleTweetsAction(
 export async function postTweetNowAction(
   text: string,
   mediaId?: string | null,
+  thread?: string[] | null,
 ): Promise<{ ok: boolean; summary?: string; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   try {
-    const r = await postSingleTweetNow(ws, { text, mediaId: mediaId ?? null }, { name: displayName(user), email: user.email ?? "" });
+    const r = await postSingleTweetNow(ws, { text, mediaId: mediaId ?? null, thread: thread ?? null }, { name: displayName(user), email: user.email ?? "" });
     return r.ok ? { ok: true, summary: r.summary } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't post the tweet." };
   }
 }
 
-/** Composer: schedule ONE tweet at a specific future time. */
+/** Composer: schedule ONE tweet — or a whole thread — at a specific future time. */
 export async function scheduleTweetAction(
   text: string,
   whenISO: string,
   mediaId?: string | null,
+  thread?: string[] | null,
 ): Promise<{ ok: boolean; when?: string; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
   try {
-    const r = await scheduleSingleTweet(ws, { text, mediaId: mediaId ?? null, whenISO }, { name: displayName(user) });
+    const r = await scheduleSingleTweet(ws, { text, mediaId: mediaId ?? null, whenISO, thread: thread ?? null }, { name: displayName(user) });
     return r.ok ? { ok: true, when: r.when } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't schedule the tweet." };
+  }
+}
+
+/** Composer: turn pasted long text into a growth-optimized X thread (owner voice). */
+export async function makeThreadAction(
+  text: string,
+): Promise<{ ok: boolean; tweets?: string[]; changes?: string[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await makeThreadFromText(ws, text, { boost: true });
+    return r.ok ? { ok: true, tweets: r.tweets, changes: r.changes } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't build the thread." };
   }
 }
 

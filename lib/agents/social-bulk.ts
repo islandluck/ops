@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { activityEvents, agents, approvalDecisions, taskAssets, tasks } from "@/lib/db/schema";
-import { getPlanningContext, linkMediaToTask, saveDocument } from "@/lib/db/queries";
+import { getPlanningContext, getXStyleProfile, linkMediaToTask, saveDocument } from "@/lib/db/queries";
 import { fitToX } from "@/lib/social/x-post";
 import { runTaskExecution } from "@/lib/integrations/execute";
+import { atomizeToThread, growthBoostLongform } from "@/lib/ai/content";
+import { runWithUsage } from "@/lib/ai/usage";
 import { nextPublishSlots } from "./slots";
 
 /**
@@ -181,19 +183,24 @@ export async function scheduleBulkTweets(
 
 /* --------------------------- single tweet (composer) ---------------------- */
 
-/** Stage ONE X task written by the user: approved + queued at `slot`, or approved +
- *  ready-to-run (execution_status "none") when slot is null. Returns its ids. */
+/** Stage ONE X task written by the user — a single tweet, or a THREAD (when `thread`
+ *  has 2+ tweets). Approved + queued at `slot`, or approved + ready-to-run
+ *  (execution_status "none") when slot is null. Returns its ids. A thread stores its
+ *  ordered tweets on the asset's `metadata.thread_json` — the publish path posts it
+ *  as a connected thread. */
 async function stageXTask(
   workspaceId: string,
-  input: { text: string; mediaId?: string | null; slot: Date | null },
+  input: { text: string; mediaId?: string | null; slot: Date | null; thread?: string[] | null },
   actor: { name: string },
 ): Promise<{ taskId: string; assetId: string } | null> {
-  const text = fitToX(input.text.trim());
+  const thread = (input.thread ?? []).map((t) => fitToX(t.trim())).filter(Boolean);
+  const isThread = thread.length > 1;
+  const text = isThread ? thread[0] : fitToX(input.text.trim());
   if (!text) return null;
   const now = new Date();
   const taskId = randomUUID();
   const assetId = randomUUID();
-  const heading = `X post: ${text.slice(0, 60)}`.slice(0, 120);
+  const heading = `${isThread ? "X thread" : "X post"}: ${text.slice(0, 54)}`.slice(0, 120);
   const [socialAgent] = await db
     .select({ folder: agents.folder })
     .from(agents)
@@ -201,6 +208,7 @@ async function stageXTask(
     .limit(1);
   const folder = socialAgent?.folder || "Social";
   const scheduled = input.slot != null;
+  const label = isThread ? `thread (${thread.length} tweets)` : "tweet";
 
   await db.insert(tasks).values({
     id: taskId,
@@ -208,8 +216,8 @@ async function stageXTask(
     category: "content",
     title: heading,
     description: scheduled
-      ? "Scheduled from the composer to auto-publish to X. Cancel any time before it posts."
-      : "Posted to X from the composer.",
+      ? `Scheduled from the composer to auto-publish this ${label} to X. Cancel any time before it posts.`
+      : `Posted this ${label} to X from the composer.`,
     rationale: "Written by you in the composer.",
     status: "approved",
     risk_level: "low",
@@ -222,7 +230,7 @@ async function stageXTask(
     approval_status: "approved",
     execution_status: scheduled ? "queued" : "none",
     affected_systems: ["X (Twitter)"],
-    proposed_actions: 1,
+    proposed_actions: isThread ? thread.length : 1,
     impact_score: 40,
     created_at: now,
     updated_at: now,
@@ -231,9 +239,11 @@ async function stageXTask(
     id: assetId,
     task_id: taskId,
     asset_type: "social_post",
-    title: "X post",
+    title: isThread ? "X thread" : "X post",
     content: text,
-    metadata: { channel: "X (Twitter)", chars: text.length },
+    metadata: isThread
+      ? { channel: "X (Twitter)", chars: text.length, thread_json: JSON.stringify(thread), thread_count: thread.length }
+      : { channel: "X (Twitter)", chars: text.length },
   });
   await db.insert(approvalDecisions).values({
     id: randomUUID(),
@@ -250,7 +260,7 @@ async function stageXTask(
     taskId,
     taskTitle: heading,
     name: heading,
-    content: text,
+    content: isThread ? thread.map((t, i) => `${i + 1}/ ${t}`).join("\n\n") : text,
     folder,
     docType: "social_post",
   });
@@ -258,17 +268,55 @@ async function stageXTask(
   return { taskId, assetId };
 }
 
+/**
+ * Turn pasted long text into an X thread. Applies a growth-marketer viral pass
+ * (unless boost=false), then atomizes into ordered, self-contained tweets in the
+ * owner's X voice. Returns the tweets + a short note of the growth levers applied.
+ */
+export async function makeThreadFromText(
+  workspaceId: string,
+  text: string,
+  opts: { boost?: boolean } = {},
+): Promise<{ ok: true; tweets: string[]; changes: string[] } | { ok: false; error: string }> {
+  const body = text.trim();
+  if (body.length < 40) return { ok: false, error: "Paste more text — a thread needs something to work with." };
+  return runWithUsage(workspaceId, "social-thread", async () => {
+    try {
+      const { brief } = await getPlanningContext(workspaceId);
+      const styleProfile = await getXStyleProfile(workspaceId);
+      const ctx = { brief, styleProfile };
+      let post = { title: "", dek: "", body_md: body };
+      let changes: string[] = [];
+      if (opts.boost !== false) {
+        const boosted = await growthBoostLongform(post, ctx);
+        post = { title: boosted.title, dek: boosted.dek, body_md: boosted.body_md };
+        changes = boosted.changes;
+      }
+      const tweets = (await atomizeToThread(post, ctx, { maxTweets: 12 })).map((t) => fitToX(t)).filter(Boolean);
+      if (tweets.length < 2) return { ok: false as const, error: "Couldn't make a thread from that — try more text." };
+      return { ok: true as const, tweets, changes };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't build the thread." };
+    }
+  });
+}
+
 /** Schedule ONE tweet at a specific future time (composer "Schedule"). */
 export async function scheduleSingleTweet(
   workspaceId: string,
-  input: { text: string; mediaId?: string | null; whenISO: string },
+  input: { text: string; mediaId?: string | null; whenISO: string; thread?: string[] | null },
   actor: { name: string },
 ): Promise<{ ok: true; when: string } | { ok: false; error: string }> {
-  if (!input.text.trim()) return { ok: false, error: "Write your tweet first." };
+  const isThread = (input.thread?.length ?? 0) > 1;
+  if (!input.text.trim() && !isThread) return { ok: false, error: "Write your tweet first." };
   const when = new Date(input.whenISO);
   if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid time." };
   if (when.getTime() < Date.now() + 30_000) return { ok: false, error: "Pick a time in the future." };
-  const r = await stageXTask(workspaceId, { text: input.text, mediaId: input.mediaId, slot: when }, actor);
+  const r = await stageXTask(
+    workspaceId,
+    { text: input.text, mediaId: input.mediaId, slot: when, thread: input.thread },
+    actor,
+  );
   if (!r) return { ok: false, error: "Write your tweet first." };
   await db.insert(activityEvents).values({
     id: randomUUID(),
@@ -277,7 +325,7 @@ export async function scheduleSingleTweet(
     event_type: "agent_updated_draft",
     actor_type: "human",
     actor_id: actor.name,
-    summary: `Scheduled a tweet to auto-publish to X on ${when.toISOString()}.`,
+    summary: `Scheduled a ${isThread ? "thread" : "tweet"} to auto-publish to X on ${when.toISOString()}.`,
     created_at: new Date(),
   });
   return { ok: true, when: when.toISOString() };
@@ -287,11 +335,16 @@ export async function scheduleSingleTweet(
  *  the real publish immediately, so it lands in the sent tally with a live URL. */
 export async function postSingleTweetNow(
   workspaceId: string,
-  input: { text: string; mediaId?: string | null },
+  input: { text: string; mediaId?: string | null; thread?: string[] | null },
   actor: { name: string; email: string },
 ): Promise<{ ok: true; summary?: string; taskId: string } | { ok: false; error: string }> {
-  if (!input.text.trim()) return { ok: false, error: "Write your tweet first." };
-  const r = await stageXTask(workspaceId, { text: input.text, mediaId: input.mediaId, slot: null }, actor);
+  const isThread = (input.thread?.length ?? 0) > 1;
+  if (!input.text.trim() && !isThread) return { ok: false, error: "Write your tweet first." };
+  const r = await stageXTask(
+    workspaceId,
+    { text: input.text, mediaId: input.mediaId, slot: null, thread: input.thread },
+    actor,
+  );
   if (!r) return { ok: false, error: "Write your tweet first." };
   const exec = await runTaskExecution(workspaceId, r.taskId, actor);
   if (!exec.ok) return { ok: false, error: exec.error ?? "Couldn't post to X." };

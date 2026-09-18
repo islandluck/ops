@@ -10,6 +10,7 @@ import {
   Clock,
   ExternalLink,
   ImagePlus,
+  ListOrdered,
   Loader2,
   Pencil,
   Plus,
@@ -50,6 +51,7 @@ import {
   growthBoostTweetAction,
   learnXStyleFromTextAction,
   learnXStyleFromXAction,
+  makeThreadAction,
   postOpportunityReplyAction,
   postTweetNowAction,
   refreshReplyRadarAction,
@@ -293,9 +295,19 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
   const [boosting, setBoosting] = useState(false);
   const [options, setOptions] = useState<{ boosted: string; note: string }[] | null>(null);
 
+  // Thread-maker mode: paste long text → AI turns it into a growth-optimized thread.
+  const [thread, setThread] = useState<string[] | null>(null);
+  const [threading, setThreading] = useState(false);
+  const [threadChanges, setThreadChanges] = useState<string[]>([]);
+
+  const inThread = thread !== null;
   const len = text.length;
   const over = len > 280;
-  const canSend = text.trim().length > 0 && !over && !posting && !scheduling;
+  const threadValid =
+    inThread && thread!.length >= 2 && thread!.every((t) => t.trim().length > 0 && t.length <= 280);
+  const canSend = inThread
+    ? threadValid && !posting && !scheduling
+    : text.trim().length > 0 && !over && !posting && !scheduling;
 
   async function boost() {
     setBoosting(true);
@@ -307,20 +319,56 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
     else setMsg({ tone: "err", text: r.error ?? "Couldn't sharpen this one." });
   }
 
+  async function makeThread() {
+    setThreading(true);
+    setMsg(null);
+    setOptions(null);
+    const r = await makeThreadAction(text);
+    setThreading(false);
+    if (r.ok && r.tweets?.length) {
+      setThread(r.tweets);
+      setThreadChanges(r.changes ?? []);
+    } else {
+      setMsg({ tone: "err", text: r.error ?? "Couldn't build the thread." });
+    }
+  }
+
+  function updateTweet(i: number, value: string) {
+    setThread((cur) => (cur ? cur.map((t, idx) => (idx === i ? value : t)) : cur));
+  }
+  function removeTweet(i: number) {
+    setThread((cur) => (cur && cur.length > 2 ? cur.filter((_, idx) => idx !== i) : cur));
+  }
+  function addTweet(i: number) {
+    setThread((cur) => (cur ? [...cur.slice(0, i + 1), "", ...cur.slice(i + 1)] : cur));
+  }
+  function discardThread() {
+    setThread(null);
+    setThreadChanges([]);
+  }
+
+  function resetAll() {
+    setText("");
+    setImage(null);
+    setOptions(null);
+    setThread(null);
+    setThreadChanges([]);
+  }
+
   async function postNow() {
     setPosting(true);
     setMsg(null);
-    const r = await postTweetNowAction(text.trim(), image?.id ?? null);
+    const r = inThread
+      ? await postTweetNowAction(thread![0], image?.id ?? null, thread)
+      : await postTweetNowAction(text.trim(), image?.id ?? null);
     setPosting(false);
     if (r.ok) {
-      setText("");
-      setImage(null);
-      setOptions(null);
-      setMsg({ tone: "ok", text: "Posted to X." });
+      resetAll();
+      setMsg({ tone: "ok", text: inThread ? "Thread posted to X." : "Posted to X." });
       onPosted();
       void reloadWorkspace();
     } else {
-      setMsg({ tone: "err", text: r.error ?? "Couldn't post the tweet." });
+      setMsg({ tone: "err", text: r.error ?? "Couldn't post to X." });
     }
   }
 
@@ -332,75 +380,180 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
     setScheduling(true);
     setMsg(null);
     const iso = new Date(when).toISOString();
-    const r = await scheduleTweetAction(text.trim(), iso, image?.id ?? null);
+    const r = inThread
+      ? await scheduleTweetAction(thread![0], iso, image?.id ?? null, thread)
+      : await scheduleTweetAction(text.trim(), iso, image?.id ?? null);
     setScheduling(false);
     if (r.ok) {
-      setText("");
-      setImage(null);
-      setOptions(null);
+      resetAll();
       setShowSchedule(false);
       setWhen("");
-      setMsg({ tone: "ok", text: "Scheduled — see the queue below." });
+      setMsg({ tone: "ok", text: `${inThread ? "Thread" : "Tweet"} scheduled — see the queue below.` });
       void reloadWorkspace();
     } else {
-      setMsg({ tone: "err", text: r.error ?? "Couldn't schedule the tweet." });
+      setMsg({ tone: "err", text: r.error ?? "Couldn't schedule it." });
     }
   }
 
   return (
     <Card className="p-4">
-      <Textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="What's happening?"
-        className="min-h-[120px] resize-none border-0 bg-transparent p-1 text-[15px] leading-relaxed shadow-none focus-visible:ring-0"
-      />
+      {inThread ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
+              <ListOrdered className="h-3.5 w-3.5 text-sky-600" />
+              Thread · {thread!.length} tweets
+            </div>
+            <button
+              type="button"
+              onClick={discardThread}
+              className="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline"
+            >
+              Discard thread
+            </button>
+          </div>
 
-      {options && (
-        <div className="mb-2 rounded-lg border border-violet-200 bg-violet-50/70 p-2.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700">
-            <TrendingUp className="h-3 w-3" /> Growth Marketer — sharper takes in your voice
+          {threadChanges.length > 0 && (
+            <div className="rounded-lg border border-violet-200 bg-violet-50/70 p-2.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700">
+                <TrendingUp className="h-3 w-3" /> Growth levers applied
+              </div>
+              <ul className="mt-1.5 space-y-0.5 text-[12px] leading-relaxed text-violet-900/80">
+                {threadChanges.slice(0, 5).map((c, i) => (
+                  <li key={i} className="flex gap-1.5">
+                    <span className="text-violet-400">•</span>
+                    <span>{c}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {thread!.map((t, i) => {
+              const tOver = t.length > 280;
+              return (
+                <div key={i} className="rounded-lg border border-border bg-background/60 p-2.5">
+                  <div className="mb-1 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold tabular-nums text-muted-foreground">
+                      {i + 1}/{thread!.length}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "text-[11px] tabular-nums",
+                          tOver ? "font-semibold text-destructive" : "text-muted-foreground",
+                        )}
+                      >
+                        {t.length}/280
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => addTweet(i)}
+                        title="Add a tweet after this one"
+                        className="text-muted-foreground transition hover:text-foreground"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      {thread!.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => removeTweet(i)}
+                          title="Remove this tweet"
+                          className="text-muted-foreground transition hover:text-destructive"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <Textarea
+                    value={t}
+                    onChange={(e) => updateTweet(i, e.target.value)}
+                    className={cn(
+                      "min-h-[64px] resize-none border-0 bg-transparent p-1 text-[14px] leading-relaxed shadow-none focus-visible:ring-0",
+                      tOver && "text-destructive",
+                    )}
+                  />
+                  {i === 0 && <TweetImageSlot image={image} onImage={setImage} />}
+                </div>
+              );
+            })}
           </div>
-          <div className="mt-2 space-y-1.5">
-            {options.map((o, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => {
-                  setText(o.boosted);
-                  setOptions(null);
-                }}
-                className="block w-full rounded-md bg-white/70 p-2 text-left text-[12.5px] leading-relaxed text-foreground transition hover:bg-white"
-              >
-                {o.note && <span className="mr-1 font-semibold text-violet-700">{o.note}:</span>}
-                {o.boosted}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => setOptions(null)}
-            className="mt-1.5 text-[11px] font-medium text-violet-600 hover:underline"
-          >
-            Keep mine
-          </button>
+          <p className="text-[11px] text-muted-foreground">
+            Any image attaches to the first tweet. Edit freely — this posts as a connected thread.
+          </p>
         </div>
-      )}
+      ) : (
+        <>
+          <Textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="What's happening? Paste long text and hit Make thread to turn it into a thread."
+            className="min-h-[120px] resize-none border-0 bg-transparent p-1 text-[15px] leading-relaxed shadow-none focus-visible:ring-0"
+          />
 
-      <TweetImageSlot image={image} onImage={setImage} />
+          {options && (
+            <div className="mb-2 rounded-lg border border-violet-200 bg-violet-50/70 p-2.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700">
+                <TrendingUp className="h-3 w-3" /> Growth Marketer — sharper takes in your voice
+              </div>
+              <div className="mt-2 space-y-1.5">
+                {options.map((o, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => {
+                      setText(o.boosted);
+                      setOptions(null);
+                    }}
+                    className="block w-full rounded-md bg-white/70 p-2 text-left text-[12.5px] leading-relaxed text-foreground transition hover:bg-white"
+                  >
+                    {o.note && <span className="mr-1 font-semibold text-violet-700">{o.note}:</span>}
+                    {o.boosted}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setOptions(null)}
+                className="mt-1.5 text-[11px] font-medium text-violet-600 hover:underline"
+              >
+                Keep mine
+              </button>
+            </div>
+          )}
+
+          <TweetImageSlot image={image} onImage={setImage} />
+        </>
+      )}
 
       <div className="mt-2 flex items-center justify-between border-t border-border pt-2.5">
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={boost}
-            disabled={boosting || text.trim().length < 4}
-            title="Sharpen for reach in your voice"
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-violet-600 transition hover:bg-violet-50 disabled:pointer-events-none disabled:opacity-40"
-          >
-            {boosting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
-            Growth Marketer
-          </button>
+          {!inThread && (
+            <>
+              <button
+                type="button"
+                onClick={boost}
+                disabled={boosting || text.trim().length < 4}
+                title="Sharpen for reach in your voice"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-violet-600 transition hover:bg-violet-50 disabled:pointer-events-none disabled:opacity-40"
+              >
+                {boosting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
+                Growth Marketer
+              </button>
+              <button
+                type="button"
+                onClick={makeThread}
+                disabled={threading || text.trim().length < 60}
+                title="Turn pasted long text into a growth-optimized thread"
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-sky-600 transition hover:bg-sky-50 disabled:pointer-events-none disabled:opacity-40"
+              >
+                {threading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListOrdered className="h-3.5 w-3.5" />}
+                Make thread
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setShowSchedule((v) => !v)}
@@ -414,12 +567,23 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
           </button>
         </div>
         <div className="flex items-center gap-2.5">
-          <span className={cn("text-[12px] tabular-nums", over ? "font-semibold text-destructive" : "text-muted-foreground")}>
-            {len}/280
-          </span>
+          {inThread ? (
+            <span
+              className={cn(
+                "text-[12px] tabular-nums",
+                threadValid ? "text-muted-foreground" : "font-semibold text-destructive",
+              )}
+            >
+              {thread!.length} tweets
+            </span>
+          ) : (
+            <span className={cn("text-[12px] tabular-nums", over ? "font-semibold text-destructive" : "text-muted-foreground")}>
+              {len}/280
+            </span>
+          )}
           <Button size="sm" onClick={postNow} disabled={!canSend}>
             {posting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            Post now
+            {inThread ? "Post thread" : "Post now"}
           </Button>
         </div>
       </div>
@@ -435,9 +599,14 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
               className="w-56"
             />
           </div>
-          <Button size="sm" variant="success" onClick={schedule} disabled={!text.trim() || over || scheduling}>
+          <Button
+            size="sm"
+            variant="success"
+            onClick={schedule}
+            disabled={(inThread ? !threadValid : !text.trim() || over) || scheduling}
+          >
             {scheduling ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
-            Add to queue
+            {inThread ? "Add thread to queue" : "Add to queue"}
           </Button>
         </div>
       )}
