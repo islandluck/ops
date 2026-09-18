@@ -282,6 +282,81 @@ function VoiceSection() {
 
 /** The headline compose box — write a tweet and post it now, schedule it, attach an
  *  image, or have the growth marketer sharpen it for reach in your voice. */
+/** Break a too-long unit into ≤limit chunks at word boundaries (hard-slicing a
+ *  single oversized token, e.g. a giant URL, so nothing exceeds the limit). */
+function breakLongUnit(unit: string, limit: number): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const word of unit.split(/\s+/)) {
+    if (word.length > limit) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+      let rest = word;
+      while (rest.length > limit) {
+        out.push(rest.slice(0, limit));
+        rest = rest.slice(limit);
+      }
+      cur = rest;
+      continue;
+    }
+    const candidate = cur ? `${cur} ${word}` : word;
+    if (candidate.length <= limit) cur = candidate;
+    else {
+      if (cur) out.push(cur);
+      cur = word;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Split pasted long text into tweets that each fit X's character limit, breaking
+ *  at paragraph → sentence → word boundaries (never mid-word, except a single token
+ *  longer than the limit). Purely mechanical — no rewriting. Growth marketing is a
+ *  separate, optional pass applied afterward. */
+function splitTextIntoTweets(input: string, limit = 280): string[] {
+  const text = input.replace(/\r\n/g, "\n").trim();
+  if (!text) return [];
+
+  type Seg = { text: string; newPara: boolean };
+  const segs: Seg[] = [];
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\n/g, " ").trim())
+    .filter(Boolean);
+  paragraphs.forEach((para, pIdx) => {
+    const sentences = para.match(/[^.!?]+[.!?]+["')\]]*\s*|[^.!?]+$/g) ?? [para];
+    let first = true;
+    for (const raw of sentences) {
+      const sentence = raw.trim();
+      if (!sentence) continue;
+      const pieces = sentence.length <= limit ? [sentence] : breakLongUnit(sentence, limit);
+      pieces.forEach((piece, i) => {
+        segs.push({ text: piece, newPara: pIdx > 0 && first && i === 0 });
+        first = false;
+      });
+    }
+  });
+
+  // Greedily pack segments into tweets, joining sentences with a space and
+  // paragraphs with a blank line where they still fit.
+  const tweets: string[] = [];
+  let buf = "";
+  for (const seg of segs) {
+    const sep = buf === "" ? "" : seg.newPara ? "\n\n" : " ";
+    const candidate = buf + sep + seg.text;
+    if (candidate.length <= limit) buf = candidate;
+    else {
+      if (buf) tweets.push(buf);
+      buf = seg.text;
+    }
+  }
+  if (buf) tweets.push(buf);
+  return tweets;
+}
+
 function ComposeBox({ onPosted }: { onPosted: () => void }) {
   const { reloadWorkspace } = useStore();
   const [text, setText] = useState("");
@@ -295,9 +370,10 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
   const [boosting, setBoosting] = useState(false);
   const [options, setOptions] = useState<{ boosted: string; note: string }[] | null>(null);
 
-  // Thread-maker mode: paste long text → AI turns it into a growth-optimized thread.
+  // Thread-maker mode: split pasted long text into a thread that fits X's limit.
+  // The growth marketer is an optional pass applied to the built thread.
   const [thread, setThread] = useState<string[] | null>(null);
-  const [threading, setThreading] = useState(false);
+  const [boostingThread, setBoostingThread] = useState(false);
   const [threadChanges, setThreadChanges] = useState<string[]>([]);
 
   const inThread = thread !== null;
@@ -306,7 +382,7 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
   const threadValid =
     inThread && thread!.length >= 2 && thread!.every((t) => t.trim().length > 0 && t.length <= 280);
   const canSend = inThread
-    ? threadValid && !posting && !scheduling
+    ? threadValid && !posting && !scheduling && !boostingThread
     : text.trim().length > 0 && !over && !posting && !scheduling;
 
   async function boost() {
@@ -319,17 +395,33 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
     else setMsg({ tone: "err", text: r.error ?? "Couldn't sharpen this one." });
   }
 
-  async function makeThread() {
-    setThreading(true);
+  function makeThread() {
     setMsg(null);
     setOptions(null);
-    const r = await makeThreadAction(text);
-    setThreading(false);
+    const tweets = splitTextIntoTweets(text, 280);
+    if (tweets.length < 2) {
+      setMsg({ tone: "err", text: "That already fits in a single tweet — no thread needed." });
+      return;
+    }
+    setThread(tweets);
+    setThreadChanges([]);
+  }
+
+  // Optional: run the growth marketer over the built thread (viral rewrite +
+  // re-atomize in your voice), respecting any edits you've made.
+  async function boostThread() {
+    if (!thread) return;
+    const joined = thread.map((t) => t.trim()).filter(Boolean).join("\n\n");
+    if (!joined) return;
+    setBoostingThread(true);
+    setMsg(null);
+    const r = await makeThreadAction(joined);
+    setBoostingThread(false);
     if (r.ok && r.tweets?.length) {
       setThread(r.tweets);
       setThreadChanges(r.changes ?? []);
     } else {
-      setMsg({ tone: "err", text: r.error ?? "Couldn't build the thread." });
+      setMsg({ tone: "err", text: r.error ?? "Couldn't apply the growth marketer." });
     }
   }
 
@@ -404,13 +496,29 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
               <ListOrdered className="h-3.5 w-3.5 text-sky-600" />
               Thread · {thread!.length} tweets
             </div>
-            <button
-              type="button"
-              onClick={discardThread}
-              className="text-[11px] font-medium text-muted-foreground hover:text-foreground hover:underline"
-            >
-              Discard thread
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={boostThread}
+                disabled={boostingThread || !thread!.some((t) => t.trim().length > 0)}
+                title="Optional: rewrite the thread for reach in your voice"
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-violet-600 transition hover:underline disabled:pointer-events-none disabled:no-underline disabled:opacity-40"
+              >
+                {boostingThread ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <TrendingUp className="h-3 w-3" />
+                )}
+                Growth marketer
+              </button>
+              <button
+                type="button"
+                onClick={discardThread}
+                className="text-[11px] font-medium text-muted-foreground transition hover:text-foreground hover:underline"
+              >
+                Discard thread
+              </button>
+            </div>
           </div>
 
           {threadChanges.length > 0 && (
@@ -481,7 +589,8 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
             })}
           </div>
           <p className="text-[11px] text-muted-foreground">
-            Any image attaches to the first tweet. Edit freely — this posts as a connected thread.
+            Split to fit X's limit — edit freely, or tap Growth marketer to optimize for reach (optional).
+            Any image attaches to the first tweet; this posts as a connected thread.
           </p>
         </div>
       ) : (
@@ -545,11 +654,11 @@ function ComposeBox({ onPosted }: { onPosted: () => void }) {
               <button
                 type="button"
                 onClick={makeThread}
-                disabled={threading || text.trim().length < 60}
-                title="Turn pasted long text into a growth-optimized thread"
+                disabled={text.trim().length < 100}
+                title="Split pasted long text into a thread that fits X's limit"
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] font-medium text-sky-600 transition hover:bg-sky-50 disabled:pointer-events-none disabled:opacity-40"
               >
-                {threading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListOrdered className="h-3.5 w-3.5" />}
+                <ListOrdered className="h-3.5 w-3.5" />
                 Make thread
               </button>
             </>
