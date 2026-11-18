@@ -349,7 +349,7 @@ function MeetingDialog({
   if (!canManage) {
     return (
       <Dialog open={open} onClose={onClose} title={meeting?.title ?? "Meeting"}>
-        <div className="flex flex-col gap-2">
+        <div className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto pr-1">
           <div className="text-xs text-muted-foreground">{meeting ? fmtDate(meeting.meeting_date) : ""}</div>
           {meeting?.attendee_names.length ? (
             <div className="text-xs text-muted-foreground">Attendees: {meeting.attendee_names.join(", ")}</div>
@@ -365,7 +365,7 @@ function MeetingDialog({
 
   return (
     <Dialog open={open} onClose={onClose} title={meeting ? "Meeting notes" : "New meeting"}>
-      <div className="flex flex-col gap-3">
+      <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto pr-1">
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <div>
             <Label>Title *</Label>
