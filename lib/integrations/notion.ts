@@ -155,28 +155,96 @@ export async function searchNotionPages(
   }
 }
 
-/** Flatten a page's block children into readable plain text (best-effort). */
-export async function getNotionPageContent(accessToken: string, pageId: string): Promise<string> {
-  try {
-    const res = await fetch(
-      `https://api.notion.com/v1/blocks/${pageId}/children?page_size=100`,
-      { headers: notionHeaders(accessToken) },
-    );
-    if (!res.ok) return "";
-    const json = (await res.json()) as { results?: Array<Record<string, unknown>> };
-    const lines: string[] = [];
-    for (const block of json.results ?? []) {
-      const type = block.type as string | undefined;
-      if (!type) continue;
-      const body = block[type] as { rich_text?: Array<{ plain_text?: string }>; checked?: boolean } | undefined;
-      const text = (body?.rich_text ?? []).map((t) => t.plain_text ?? "").join("").trim();
-      if (!text) continue;
-      const prefix =
-        type === "to_do" ? `- [${body?.checked ? "x" : " "}] ` : type.startsWith("heading") ? "## " : type.includes("list_item") ? "- " : "";
-      lines.push(`${prefix}${text}`);
-    }
-    return lines.join("\n").slice(0, 9000);
-  } catch {
-    return "";
+/** One block's own plain text (not its children). Handles the common Notion
+ *  shapes, including table rows (text is in `cells`) and child-page/db titles. */
+function blockText(block: Record<string, unknown>): string {
+  const type = block.type as string | undefined;
+  if (!type) return "";
+  const body = block[type] as
+    | {
+        rich_text?: Array<{ plain_text?: string }>;
+        checked?: boolean;
+        title?: string;
+        cells?: Array<Array<{ plain_text?: string }>>;
+      }
+    | undefined;
+
+  // Table rows keep their text in `cells` (array of cells, each an array of rich_text).
+  if (type === "table_row" && Array.isArray(body?.cells)) {
+    const cells = body.cells.map((cell) => (cell ?? []).map((t) => t.plain_text ?? "").join("").trim());
+    return cells.some(Boolean) ? cells.join(" | ") : "";
   }
+  // A nested page or database shows up as a title-only block.
+  if (type === "child_page" || type === "child_database") return (body?.title ?? "").trim();
+
+  const text = (body?.rich_text ?? []).map((t) => t.plain_text ?? "").join("").trim();
+  if (!text) return "";
+  const prefix =
+    type === "to_do"
+      ? `- [${body?.checked ? "x" : " "}] `
+      : type.startsWith("heading")
+        ? "## "
+        : type.includes("list_item")
+          ? "- "
+          : type === "quote"
+            ? "> "
+            : "";
+  return `${prefix}${text}`;
+}
+
+/**
+ * Flatten a Notion page into readable plain text (best-effort).
+ *
+ * Notion AI "Meeting Notes" and the AI transcriber wrap their summary and
+ * transcript inside CONTAINER blocks — toggles, callouts, column_list/column,
+ * synced blocks — whose own level has no text; the real content lives in their
+ * child blocks. So we RECURSE into any block that has children (bounded by depth
+ * and a total-block cap) and also paginate each level, instead of reading only
+ * the top level. Reading just the first level is why those pages used to come
+ * back blank. We don't descend into child pages/databases (title only) to avoid
+ * pulling in unrelated pages.
+ */
+export async function getNotionPageContent(accessToken: string, pageId: string): Promise<string> {
+  const lines: string[] = [];
+  const MAX_BLOCKS = 400;
+  const MAX_CHARS = 14000;
+  const MAX_DEPTH = 5;
+  let count = 0;
+
+  async function walk(blockId: string, depth: number): Promise<void> {
+    if (depth > MAX_DEPTH || count >= MAX_BLOCKS) return;
+    let cursor: string | undefined;
+    do {
+      const url = new URL(`https://api.notion.com/v1/blocks/${blockId}/children`);
+      url.searchParams.set("page_size", "100");
+      if (cursor) url.searchParams.set("start_cursor", cursor);
+      const res = await fetch(url, { headers: notionHeaders(accessToken) });
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        results?: Array<Record<string, unknown>>;
+        next_cursor?: string | null;
+        has_more?: boolean;
+      };
+      for (const block of json.results ?? []) {
+        if (count >= MAX_BLOCKS) break;
+        count++;
+        const text = blockText(block);
+        if (text) lines.push(text);
+        const type = block.type as string | undefined;
+        // Descend into containers (toggle, callout, column_list/column, synced_block,
+        // list items with sub-items, tables…) — never into nested pages/databases.
+        if (block.has_children && type !== "child_page" && type !== "child_database") {
+          await walk(block.id as string, depth + 1);
+        }
+      }
+      cursor = json.has_more ? json.next_cursor ?? undefined : undefined;
+    } while (cursor && count < MAX_BLOCKS);
+  }
+
+  try {
+    await walk(pageId, 0);
+  } catch {
+    /* return whatever we gathered so far */
+  }
+  return lines.join("\n").slice(0, MAX_CHARS);
 }

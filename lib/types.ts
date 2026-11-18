@@ -418,6 +418,29 @@ export interface TeamMeeting {
   attendee_ids: string[];
   attendee_names: string[];
   created_at: string;
+  /** At-a-glance rollup of the tasks created from this meeting (null = none). */
+  task_rollup?: MeetingTaskRollup | null;
+}
+
+/** A task created from a meeting's action items — a teammate assignment or an
+ *  owner/advisor board task — normalized for the Meetings view. */
+export interface MeetingTask {
+  id: string;
+  title: string;
+  /** Who's doing it (team member name, or the owner for owner/advisor items). */
+  assignee_name: string;
+  status: AssignmentStatus;
+  deadline: string | null;
+  kind: "assignment" | "task";
+}
+
+/** Per-meeting summary of the tasks it generated. */
+export interface MeetingTaskRollup {
+  total: number;
+  done: number;
+  open: number;
+  /** Distinct assignee names, for an at-a-glance "who". */
+  people: string[];
 }
 
 export type AgentStatus = "idle" | "working" | "waiting" | "paused";

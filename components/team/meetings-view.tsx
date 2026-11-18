@@ -8,6 +8,7 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  ListChecks,
   Loader2,
   Mail,
   NotebookPen,
@@ -15,6 +16,7 @@ import {
   Send,
   Sparkles,
   Trash2,
+  User as UserIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,13 +28,14 @@ import {
   deleteTeamMeetingAction,
   importNotionMeetingAction,
   listMeetingAssignmentsAction,
+  listMeetingTasksAction,
   listNotionMeetingPagesAction,
   listTeamMeetingsAction,
   previewNotionMeetingAction,
   stageOutboundDraftAction,
   updateTeamMeetingAction,
 } from "@/app/actions";
-import type { TeamMeeting, TeamMember } from "@/lib/types";
+import type { AssignmentStatus, MeetingTask, TeamMeeting, TeamMember } from "@/lib/types";
 
 type NotionPage = Awaited<ReturnType<typeof listNotionMeetingPagesAction>>["pages"][number];
 type ActionRow = {
@@ -229,6 +232,71 @@ function fmtDate(iso: string): string {
   }
 }
 
+const STATUS_META: Record<AssignmentStatus, { label: string; cls: string }> = {
+  assigned: { label: "Assigned", cls: "border-border bg-muted/50 text-muted-foreground" },
+  in_progress: { label: "In progress", cls: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400" },
+  blocked: { label: "Blocked", cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400" },
+  done: { label: "Done", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
+};
+
+/**
+ * The tasks a meeting produced — teammate assignments + the owner's own board
+ * items — each with its assignee and live status, loaded on demand. This is the
+ * record of "who's doing what" from the meeting.
+ */
+function MeetingTasksSection({ meetingId }: { meetingId: string }) {
+  const [rows, setRows] = useState<MeetingTask[] | null>(null);
+
+  useEffect(() => {
+    let on = true;
+    listMeetingTasksAction(meetingId).then((r) => {
+      if (on) setRows(r);
+    });
+    return () => {
+      on = false;
+    };
+  }, [meetingId]);
+
+  return (
+    <div>
+      <Label>Tasks from this meeting</Label>
+      {rows === null ? (
+        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading tasks…
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          No tasks were created from this meeting. Use “Import from Notion” to turn action items into assigned tasks.
+        </p>
+      ) : (
+        <div className="mt-1 flex flex-col gap-1.5">
+          {rows.map((t) => {
+            const meta = STATUS_META[t.status];
+            return (
+              <div
+                key={t.id}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 px-2.5 py-1.5"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] font-medium">{t.title}</div>
+                  <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <UserIcon className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{t.assignee_name}</span>
+                    {t.deadline && <span className="shrink-0">· due {fmtDate(t.deadline)}</span>}
+                  </div>
+                </div>
+                <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", meta.cls)}>
+                  {meta.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MeetingDialog({
   open,
   meeting,
@@ -286,9 +354,10 @@ function MeetingDialog({
           {meeting?.attendee_names.length ? (
             <div className="text-xs text-muted-foreground">Attendees: {meeting.attendee_names.join(", ")}</div>
           ) : null}
-          <div className="max-h-[55vh] overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 text-sm">
+          <div className="max-h-[45vh] overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 text-sm">
             {meeting?.notes || "No notes."}
           </div>
+          {meeting && <MeetingTasksSection meetingId={meeting.id} />}
         </div>
       </Dialog>
     );
@@ -343,6 +412,7 @@ function MeetingDialog({
             Tip: to auto-create tasks from action items, use “Import from Notion” instead of typing notes here.
           </p>
         </div>
+        {meeting && <MeetingTasksSection meetingId={meeting.id} />}
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="mt-1 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
@@ -798,6 +868,27 @@ export function MeetingsView({ canManage, members }: { canManage: boolean; membe
                   {m.attendee_names.length > 0 && <span>· {m.attendee_names.join(", ")}</span>}
                 </div>
                 {m.notes && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{m.notes}</p>}
+                {m.task_rollup && m.task_rollup.total > 0 && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-muted-foreground">
+                      <ListChecks className="h-3 w-3" />
+                      {m.task_rollup.total} task{m.task_rollup.total === 1 ? "" : "s"}
+                    </span>
+                    {m.task_rollup.done > 0 && (
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-700 dark:text-emerald-400">
+                        {m.task_rollup.done} done
+                      </span>
+                    )}
+                    {m.task_rollup.open > 0 && (
+                      <span className="rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-medium text-sky-700 dark:text-sky-400">
+                        {m.task_rollup.open} open
+                      </span>
+                    )}
+                    {m.task_rollup.people.length > 0 && (
+                      <span className="truncate text-muted-foreground">· {m.task_rollup.people.join(", ")}</span>
+                    )}
+                  </div>
+                )}
               </button>
               {canManage && (
                 <div className="flex shrink-0 items-center gap-1">

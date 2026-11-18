@@ -213,6 +213,7 @@ import {
   listChatMessages,
   listHumanProjects,
   listMeetingAssignments,
+  listMeetingTasks,
   listTeamDocuments,
   listTeamEvents,
   listTeamGoals,
@@ -249,7 +250,7 @@ import {
   revokeInvite,
 } from "@/lib/agents/team-invites";
 import { clearPlan, getLatestPlan, planApprovalCenter, setTaskPriority } from "@/lib/agents/task-plan";
-import type { AssignmentStatus, Priority } from "@/lib/types";
+import type { AssignmentStatus, MeetingTask, Priority } from "@/lib/types";
 import type { AdCampaign, AdPlatform, BoardAlertStatus, BoardCadence, BoardDirectiveStatus } from "@/lib/types";
 import { getAiUsageReport, isAdminEmail, type AiUsageReport } from "@/lib/ai/report";
 import {
@@ -4024,6 +4025,20 @@ export async function listMeetingAssignmentsAction(meetingId: string) {
   if (!ws) return [];
   try {
     return await listMeetingAssignments(ws, meetingId);
+  } catch {
+    return [];
+  }
+}
+
+/** Every task created from a meeting — teammate assignments + owner/advisor
+ *  board tasks — with assignee + live status, for the Meetings view. */
+export async function listMeetingTasksAction(meetingId: string): Promise<MeetingTask[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listMeetingTasks(ws, meetingId);
   } catch {
     return [];
   }

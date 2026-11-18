@@ -49,6 +49,8 @@ import type {
   GoogleCalItem,
   HumanProject,
   HumanProjectStatus,
+  MeetingTask,
+  MeetingTaskRollup,
   TeamAssignment,
   TeamDocument,
   TeamDocumentKind,
@@ -1237,6 +1239,68 @@ export async function listMeetingAssignments(
   return rows.map((r) => toAssignment(r.a, r.memberName ?? "—"));
 }
 
+/** Map an Approval Center task's status onto the simpler assignment-status
+ *  vocabulary the Meetings rollup uses (so owner/advisor tasks read alongside
+ *  teammate assignments). */
+function taskStatusToAssignment(status: string, archived: boolean): AssignmentStatus {
+  if (archived || status === "done") return "done";
+  if (status === "agent_working" || status === "approved") return "in_progress";
+  if (status === "changes_requested") return "blocked";
+  return "assigned";
+}
+
+/**
+ * Every task created from a meeting's action items, normalized: the teammate
+ * assignments (linked via team_assignments.ref_id) PLUS the owner/advisor items
+ * that routed to the owner's Approval Center board (linked via
+ * tasks.source_meeting_id). Gives the Meetings view "who's doing what + status".
+ */
+export async function listMeetingTasks(
+  workspaceId: string,
+  meetingId: string,
+): Promise<MeetingTask[]> {
+  const assignments = await listMeetingAssignments(workspaceId, meetingId);
+  const fromAssignments: MeetingTask[] = assignments.map((a) => ({
+    id: a.id,
+    title: a.title,
+    assignee_name: a.member_name,
+    status: a.status,
+    deadline: a.deadline,
+    kind: "assignment",
+  }));
+
+  const taskRows = await db
+    .select({
+      id: tasks.id,
+      title: tasks.title,
+      status: tasks.status,
+      archived: tasks.archived,
+      due_at: tasks.due_at,
+    })
+    .from(tasks)
+    .where(and(eq(tasks.workspace_id, workspaceId), eq(tasks.source_meeting_id, meetingId)))
+    .orderBy(asc(tasks.created_at));
+
+  // Owner/advisor items land on the owner's own board — the owner owns them.
+  const [owner] = await db
+    .select({ name: teamMembers.name })
+    .from(teamMembers)
+    .where(and(eq(teamMembers.workspace_id, workspaceId), eq(teamMembers.is_owner, true)))
+    .limit(1);
+  const ownerName = owner?.name ?? "You";
+
+  const fromTasks: MeetingTask[] = taskRows.map((t) => ({
+    id: t.id,
+    title: t.title,
+    assignee_name: ownerName,
+    status: taskStatusToAssignment(t.status, t.archived),
+    deadline: t.due_at ? new Date(t.due_at).toISOString() : null,
+    kind: "task",
+  }));
+
+  return [...fromAssignments, ...fromTasks];
+}
+
 export interface AssignmentInput {
   member_id: string;
   title: string;
@@ -2423,11 +2487,64 @@ export async function listTeamMeetings(workspaceId: string): Promise<TeamMeeting
     .orderBy(desc(teamMeetings.meeting_date));
   if (!rows.length) return [];
   const memberRows = await db
-    .select({ id: teamMembers.id, name: teamMembers.name })
+    .select({ id: teamMembers.id, name: teamMembers.name, is_owner: teamMembers.is_owner })
     .from(teamMembers)
     .where(eq(teamMembers.workspace_id, workspaceId));
   const nameById = new Map(memberRows.map((m) => [m.id, m.name]));
-  return rows.map((r) => toMeeting(r, nameById));
+
+  // At-a-glance task rollup per meeting: teammate assignments (ref_id) + the
+  // owner/advisor items that routed to the owner's board (source_meeting_id).
+  const meetingIds = rows.map((r) => r.id);
+  const [asgRows, taskRows] = await Promise.all([
+    db
+      .select({ ref_id: teamAssignments.ref_id, status: teamAssignments.status, member_id: teamAssignments.member_id })
+      .from(teamAssignments)
+      .where(
+        and(
+          eq(teamAssignments.workspace_id, workspaceId),
+          eq(teamAssignments.ref_type, "meeting"),
+          inArray(teamAssignments.ref_id, meetingIds),
+        ),
+      ),
+    db
+      .select({ mid: tasks.source_meeting_id, status: tasks.status, archived: tasks.archived })
+      .from(tasks)
+      .where(and(eq(tasks.workspace_id, workspaceId), inArray(tasks.source_meeting_id, meetingIds))),
+  ]);
+  const ownerName = memberRows.find((m) => m.is_owner)?.name ?? "You";
+
+  type Agg = { total: number; done: number; people: Set<string> };
+  const agg = new Map<string, Agg>();
+  const slot = (id: string | null): Agg | null => {
+    if (!id) return null;
+    let a = agg.get(id);
+    if (!a) {
+      a = { total: 0, done: 0, people: new Set() };
+      agg.set(id, a);
+    }
+    return a;
+  };
+  for (const r of asgRows) {
+    const a = slot(r.ref_id);
+    if (!a) continue;
+    a.total++;
+    if (r.status === "done") a.done++;
+    const nm = r.member_id ? nameById.get(r.member_id) : null;
+    if (nm) a.people.add(nm);
+  }
+  for (const r of taskRows) {
+    const a = slot(r.mid);
+    if (!a) continue;
+    a.total++;
+    if (r.archived || r.status === "done") a.done++;
+    a.people.add(ownerName);
+  }
+  const rollupById = new Map<string, MeetingTaskRollup>();
+  for (const [id, a] of agg) {
+    rollupById.set(id, { total: a.total, done: a.done, open: a.total - a.done, people: Array.from(a.people) });
+  }
+
+  return rows.map((r) => ({ ...toMeeting(r, nameById), task_rollup: rollupById.get(r.id) ?? null }));
 }
 
 export interface TeamMeetingInput {
@@ -2606,7 +2723,11 @@ export async function previewNotionMeeting(
     return { ...empty, error: "Couldn't read that Notion page. Make sure it's shared with the Operator integration." };
   }
   if (!notes.trim()) {
-    return { ...empty, error: "That Notion page looks empty — is the transcript on the page itself?" };
+    return {
+      ...empty,
+      error:
+        "That Notion page came back empty. If it's a Notion AI meeting note, open the page's ••• menu → Connections and share the page itself (not just the database) with Operator, and make sure the transcript/summary is on the page.",
+    };
   }
 
   const memberRows = await db
@@ -2724,6 +2845,7 @@ export async function importNotionMeeting(
         risk_level: "low",
         priority: "medium",
         due_at: a.deadline ? new Date(a.deadline) : null,
+        source_meeting_id: created.meeting.id,
         created_by_type: "human",
         requires_approval: false,
         approval_status: "pending",

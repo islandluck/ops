@@ -231,6 +231,11 @@ export const tasks = pgTable("tasks", {
   project_phase: integer("project_phase"),
   project_step_kind: text("project_step_kind").$type<"deliverable" | "action" | "page">(),
   agent_id: uuid("agent_id"),
+  /** When a task was created from a Team meeting's action items (owner/advisor
+   *  items route to the owner's board as tasks), the meeting it came from — lets
+   *  the Meetings view roll up every task created from a meeting, not just the
+   *  teammate assignments. Teammate items link via team_assignments.ref_id. */
+  source_meeting_id: uuid("source_meeting_id"),
   created_by_type: text("created_by_type").$type<CreatedByType>().notNull().default("agent"),
   requires_approval: boolean("requires_approval").notNull().default(true),
   approval_status: text("approval_status").$type<ApprovalStatus>().notNull().default("pending"),
@@ -253,6 +258,7 @@ export const tasks = pgTable("tasks", {
   index("tasks_ws_created_idx").on(t.workspace_id, t.created_at),
   index("tasks_ws_status_idx").on(t.workspace_id, t.status),
   index("tasks_ws_project_idx").on(t.workspace_id, t.project_id),
+  index("tasks_ws_meeting_idx").on(t.workspace_id, t.source_meeting_id),
 ]);
 
 /**
