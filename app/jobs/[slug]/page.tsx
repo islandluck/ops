@@ -136,11 +136,11 @@ function ApplySection({
           </Field>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Phone" hint="(optional)">
-            <input name="phone" className={inputCls} />
+          <Field label="Phone">
+            <input name="phone" required className={inputCls} />
           </Field>
           <Field label="Links" hint="(portfolio, LinkedIn — comma separated)">
-            <input name="links" className={inputCls} />
+            <input name="links" required className={inputCls} />
           </Field>
         </div>
 

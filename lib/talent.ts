@@ -406,8 +406,12 @@ export async function submitApplication(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const name = (input.name ?? "").trim();
   const email = (input.email ?? "").trim().toLowerCase();
+  const phone = (input.phone ?? "").trim();
+  const links = (input.links ?? []).map((l) => l.trim()).filter(Boolean);
   if (!name) return { ok: false, error: "Enter your name." };
   if (!EMAIL_RE.test(email)) return { ok: false, error: "Enter a valid email." };
+  if (!phone) return { ok: false, error: "Enter a phone number." };
+  if (links.length === 0) return { ok: false, error: "Add at least one link (portfolio or LinkedIn)." };
 
   const job = await getPublishedJobBySlug(input.jobSlug);
   if (!job) return { ok: false, error: "This role isn't accepting applications right now." };
@@ -438,9 +442,9 @@ export async function submitApplication(
       .update(candidates)
       .set({
         name: name.slice(0, 200),
-        phone: input.phone?.trim().slice(0, 40) || existing.phone,
+        phone: phone.slice(0, 40),
         resume_path: resumePath ?? existing.resume_path,
-        links: (input.links ?? existing.links ?? []).slice(0, 10),
+        links: links.slice(0, 10),
       })
       .where(and(eq(candidates.workspace_id, ws), eq(candidates.id, existing.id)));
   } else {
@@ -450,9 +454,9 @@ export async function submitApplication(
       workspace_id: ws,
       name: name.slice(0, 200),
       email,
-      phone: input.phone?.trim().slice(0, 40) || null,
+      phone: phone.slice(0, 40),
       resume_path: resumePath,
-      links: (input.links ?? []).slice(0, 10),
+      links: links.slice(0, 10),
       source: "applied",
       created_at: new Date(),
     });

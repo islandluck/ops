@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   AlarmClock,
   Bot,
+  Briefcase,
   CheckCheck,
   ChevronsUpDown,
   CircleDot,
@@ -76,6 +77,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
     title: "Intelligence",
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/talent", label: "Talent", icon: Briefcase },
       { href: "/deep-dive", label: "Deep Dive", icon: Telescope },
       { href: "/opportunities", label: "Opportunities", icon: Target },
     ],
