@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCareersBoard } from "@/lib/talent";
+import { formatPay } from "@/lib/talent/format";
 import type { EmploymentType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export default async function CareersBoardPage({ params }: { params: Promise<{ s
                   <div className="min-w-0">
                     <p className="truncate text-lg font-semibold text-slate-900 group-hover:underline">{job.title}</p>
                     <p className="mt-0.5 text-sm text-slate-500">
-                      {[job.location, EMPLOYMENT_LABEL[job.employment_type]].filter(Boolean).join(" · ")}
+                      {[job.location, EMPLOYMENT_LABEL[job.employment_type], formatPay(job)].filter(Boolean).join(" · ")}
                     </p>
                   </div>
                   <span className="shrink-0 text-sm font-medium text-slate-400 group-hover:text-slate-900">

@@ -15,6 +15,7 @@ import type {
   EmploymentType,
   JobPost,
   JobStatus,
+  PayType,
   ScreeningQuestion,
 } from "@/lib/types";
 
@@ -72,12 +73,42 @@ function toJob(r: JobRow): JobPost {
     location: r.location,
     employment_type: r.employment_type,
     description_md: r.description_md,
+    pay_type: r.pay_type,
+    pay_min: r.pay_min,
+    pay_max: r.pay_max,
+    pay_currency: r.pay_currency,
+    compliance_md: r.compliance_md,
     status: r.status,
     slug: r.slug,
     screening_questions: (r.screening_questions ?? []) as ScreeningQuestion[],
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
   };
+}
+
+/** Clamp a pay amount (integer cents) to a sane, non-negative range. */
+function cleanCents(v: number | null | undefined): number | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const n = Math.round(v);
+  if (n <= 0) return null;
+  return Math.min(n, 2_000_000_000); // ~$20M ceiling, safely under int4 max
+}
+
+/** Normalize the compensation fields on an input before persisting. */
+function cleanPay(input: {
+  pay_type?: PayType;
+  pay_min?: number | null;
+  pay_max?: number | null;
+  pay_currency?: string;
+}): { pay_type: PayType; pay_min: number | null; pay_max: number | null; pay_currency: string } {
+  const pay_type: PayType = input.pay_type ?? "unspecified";
+  if (pay_type === "unspecified") {
+    return { pay_type, pay_min: null, pay_max: null, pay_currency: (input.pay_currency || "usd").toLowerCase() };
+  }
+  let min = cleanCents(input.pay_min);
+  let max = cleanCents(input.pay_max);
+  if (min != null && max != null && max < min) [min, max] = [max, min];
+  return { pay_type, pay_min: min, pay_max: max, pay_currency: (input.pay_currency || "usd").toLowerCase() };
 }
 function toCandidate(r: CandidateRow): Candidate {
   return {
@@ -153,6 +184,12 @@ export interface JobInput {
   employment_type?: EmploymentType;
   description_md?: string;
   screening_questions?: ScreeningQuestion[];
+  pay_type?: PayType;
+  /** Integer cents (salary = annual, hourly = per-hour). */
+  pay_min?: number | null;
+  pay_max?: number | null;
+  pay_currency?: string;
+  compliance_md?: string;
 }
 
 export async function createJob(
@@ -164,6 +201,10 @@ export async function createJob(
   const id = uid();
   const now = new Date();
   const slug = await uniqueJobSlug(title);
+  const pay = cleanPay(input);
+  // Pre-fill the compliance block from the workspace default when not provided.
+  const compliance =
+    input.compliance_md !== undefined ? input.compliance_md : (await getWorkspaceCompliance(workspaceId)) ?? "";
   await db.insert(jobPosts).values({
     id,
     workspace_id: workspaceId,
@@ -171,6 +212,11 @@ export async function createJob(
     location: (input.location ?? "").slice(0, 120),
     employment_type: input.employment_type ?? "full_time",
     description_md: (input.description_md ?? "").slice(0, 12000),
+    pay_type: pay.pay_type,
+    pay_min: pay.pay_min,
+    pay_max: pay.pay_max,
+    pay_currency: pay.pay_currency,
+    compliance_md: compliance.slice(0, 8000),
     status: "draft",
     slug,
     screening_questions: (input.screening_questions ?? []).slice(0, 8),
@@ -195,7 +241,34 @@ export async function updateJob(
   if (patch.employment_type !== undefined) set.employment_type = patch.employment_type;
   if (patch.description_md !== undefined) set.description_md = patch.description_md.slice(0, 12000);
   if (patch.screening_questions !== undefined) set.screening_questions = patch.screening_questions.slice(0, 8);
+  if (patch.compliance_md !== undefined) set.compliance_md = patch.compliance_md.slice(0, 8000);
+  if (patch.pay_type !== undefined) {
+    const pay = cleanPay(patch);
+    set.pay_type = pay.pay_type;
+    set.pay_min = pay.pay_min;
+    set.pay_max = pay.pay_max;
+    set.pay_currency = pay.pay_currency;
+  }
   await db.update(jobPosts).set(set).where(and(eq(jobPosts.workspace_id, workspaceId), eq(jobPosts.id, id)));
+  return { ok: true };
+}
+
+/* ---------------------- workspace compliance default --------------------- */
+
+export async function getWorkspaceCompliance(workspaceId: string): Promise<string | null> {
+  const [ws] = await db
+    .select({ compliance_md: workspaces.compliance_md })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  return ws?.compliance_md ?? null;
+}
+
+export async function setWorkspaceCompliance(workspaceId: string, value: string): Promise<{ ok: boolean }> {
+  await db
+    .update(workspaces)
+    .set({ compliance_md: value.slice(0, 8000) })
+    .where(eq(workspaces.id, workspaceId));
   return { ok: true };
 }
 

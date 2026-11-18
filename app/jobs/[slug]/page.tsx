@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import { getPublishedJobBySlug } from "@/lib/talent";
+import { formatPay } from "@/lib/talent/format";
 import { markdownToHtml } from "@/lib/content/format";
 import type { EmploymentType } from "@/lib/types";
 
@@ -29,16 +30,23 @@ export default async function PublicJobPage({
   const applied = sp.applied === "1";
   const error = typeof sp.error === "string" ? sp.error : null;
   const bodyHtml = markdownToHtml(job.description_md || "");
+  const pay = formatPay(job);
+  const complianceHtml = job.compliance_md.trim() ? markdownToHtml(job.compliance_md) : "";
 
   return (
     <main className="min-h-screen bg-white text-slate-900">
       <div className="mx-auto max-w-2xl px-6 py-12">
         <header className="border-b border-slate-200 pb-6">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">{job.title}</h1>
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-sm text-slate-500">
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
             {job.location && <span>{job.location}</span>}
-            <span aria-hidden>·</span>
+            {job.location && <span aria-hidden>·</span>}
             <span>{EMPLOYMENT_LABEL[job.employment_type]}</span>
+            {pay && (
+              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[13px] font-medium text-slate-700">
+                {pay}
+              </span>
+            )}
           </div>
         </header>
 
@@ -56,6 +64,12 @@ export default async function PublicJobPage({
               className="prose-article mt-8 text-[15px] leading-relaxed"
               dangerouslySetInnerHTML={{ __html: bodyHtml }}
             />
+            {complianceHtml && (
+              <section
+                className="prose-article mt-10 border-t border-slate-200 pt-6 text-[13px] leading-relaxed text-slate-500"
+                dangerouslySetInnerHTML={{ __html: complianceHtml }}
+              />
+            )}
             <ApplySection slug={job.slug} questions={job.screening_questions} />
           </>
         )}

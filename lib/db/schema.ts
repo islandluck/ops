@@ -64,6 +64,7 @@ import type {
   PageContent,
   PageStatus,
   PageType,
+  PayType,
   PermissionMode,
   PostStatus,
   Priority,
@@ -108,6 +109,9 @@ export const workspaces = pgTable("workspaces", {
   /** Globally-unique slug for this workspace's public careers board at
    *  /careers/[careers_slug]. Lazily set the first time a job is published. */
   careers_slug: text("careers_slug"),
+  /** The workspace's default HR/compliance statement (markdown) — pre-fills the
+   *  compliance block on every new job posting. */
+  compliance_md: text("compliance_md"),
   created_at: createdAt,
   updated_at: updatedAt,
 });
@@ -1441,6 +1445,13 @@ export const jobPosts = pgTable(
     // Physical column is "description_html" (from migration 0070); the JS key is the
     // honest "description_md" — Drizzle maps the two.
     description_md: text("description_html").notNull().default(""),
+    // Compensation (integer cents; salary = annual, hourly = per-hour).
+    pay_type: text("pay_type").$type<PayType>().notNull().default("unspecified"),
+    pay_min: integer("pay_min"),
+    pay_max: integer("pay_max"),
+    pay_currency: text("pay_currency").notNull().default("usd"),
+    // Standard HR/compliance block (markdown); pre-filled from the workspace default.
+    compliance_md: text("compliance_md").notNull().default(""),
     status: text("status").$type<JobStatus>().notNull().default("draft"),
     slug: text("slug").notNull(),
     screening_questions: jsonb("screening_questions")

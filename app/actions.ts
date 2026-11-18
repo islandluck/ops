@@ -365,10 +365,12 @@ import {
   draftJob,
   getApplicationResumeUrl,
   getCareersSlug,
+  getWorkspaceCompliance,
   listApplications,
   listJobs,
   moveApplicationStage,
   setJobStatus,
+  setWorkspaceCompliance,
   updateJob,
   type JobInput,
 } from "@/lib/talent";
@@ -4642,6 +4644,31 @@ export async function draftJobAction(input: {
     return { ok: true, draft };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the job." };
+  }
+}
+
+/** The workspace's default HR/compliance statement (pre-fills new roles). */
+export async function getWorkspaceComplianceAction(): Promise<{ compliance: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { compliance: "" };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { compliance: "" };
+  try {
+    return { compliance: (await getWorkspaceCompliance(ws)) ?? "" };
+  } catch {
+    return { compliance: "" };
+  }
+}
+
+export async function setWorkspaceComplianceAction(value: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await setWorkspaceCompliance(ws, value);
+  } catch {
+    return { ok: false as const };
   }
 }
 

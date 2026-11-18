@@ -843,6 +843,8 @@ export interface Order {
 
 export type JobStatus = "draft" | "open" | "closed";
 export type EmploymentType = "full_time" | "part_time" | "contract" | "internship" | "temporary";
+/** How compensation is shown: an annual salary range, an hourly rate, or hidden. */
+export type PayType = "salary" | "hourly" | "unspecified";
 /** The hiring pipeline stages, in order. "rejected" is terminal (off to the side). */
 export type ApplicationStage = "applied" | "screening" | "interview" | "offer" | "hired" | "rejected";
 export type CandidateSource = "applied" | "scouted" | "referral" | "manual";
@@ -863,6 +865,15 @@ export interface JobPost {
   employment_type: EmploymentType;
   /** Markdown source; rendered to safe HTML via markdownToHtml on the public page. */
   description_md: string;
+  /** Compensation. Amounts are integer cents; salary = annual, hourly = per-hour.
+   *  pay_max null (or ≤ min) renders as a single value rather than a range. */
+  pay_type: PayType;
+  pay_min: number | null;
+  pay_max: number | null;
+  pay_currency: string;
+  /** Standard HR/compliance block (EEO, at-will…), markdown; empty = omitted.
+   *  Pre-filled from the workspace default when a role is created. */
+  compliance_md: string;
   status: JobStatus;
   slug: string;
   screening_questions: ScreeningQuestion[];

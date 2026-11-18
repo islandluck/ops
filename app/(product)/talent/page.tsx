@@ -26,13 +26,16 @@ import {
   draftJobAction,
   getCareersLinkAction,
   getResumeUrlAction,
+  getWorkspaceComplianceAction,
   listApplicationsAction,
   listJobsAction,
   moveApplicationStageAction,
   setJobStatusAction,
+  setWorkspaceComplianceAction,
   updateJobAction,
 } from "@/app/actions";
-import type { Application, ApplicationStage, EmploymentType, JobPost, ScreeningQuestion } from "@/lib/types";
+import type { Application, ApplicationStage, EmploymentType, JobPost, PayType, ScreeningQuestion } from "@/lib/types";
+import { STANDARD_COMPLIANCE, defaultPayType, formatPay } from "@/lib/talent/format";
 
 const EMPLOYMENT: { value: EmploymentType; label: string }[] = [
   { value: "full_time", label: "Full-time" },
@@ -63,6 +66,23 @@ function jobUrl(slug: string): string {
   return `${origin}/jobs/${slug}`;
 }
 
+const PAY_TYPES: { value: PayType; label: string }[] = [
+  { value: "salary", label: "Salary range" },
+  { value: "hourly", label: "Hourly rate" },
+  { value: "unspecified", label: "Don't show pay" },
+];
+
+/** Cents → a dollars string for the editor input (hourly keeps cents). */
+function centsToInput(cents: number | null, payType: PayType): string {
+  if (cents == null) return "";
+  return payType === "hourly" ? (cents / 100).toFixed(2) : String(Math.round(cents / 100));
+}
+/** A dollars string from the editor → integer cents (null when empty/invalid). */
+function inputToCents(s: string): number | null {
+  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null;
+}
+
 /* ------------------------------ job dialog ------------------------------- */
 
 function emptyQuestion(): ScreeningQuestion {
@@ -72,11 +92,13 @@ function emptyQuestion(): ScreeningQuestion {
 function JobDialog({
   open,
   job,
+  complianceDefault,
   onClose,
   onSaved,
 }: {
   open: boolean;
   job: JobPost | null;
+  complianceDefault: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -86,6 +108,12 @@ function JobDialog({
   const [description, setDescription] = useState("");
   const [questions, setQuestions] = useState<ScreeningQuestion[]>([]);
   const [notes, setNotes] = useState("");
+  const [payType, setPayType] = useState<PayType>("salary");
+  const [payTouched, setPayTouched] = useState(false);
+  const [payMin, setPayMin] = useState("");
+  const [payMax, setPayMax] = useState("");
+  const [compliance, setCompliance] = useState("");
+  const [saveComplianceDefault, setSaveComplianceDefault] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,12 +122,31 @@ function JobDialog({
     if (!open) return;
     setError(null);
     setNotes("");
+    setSaveComplianceDefault(false);
+    setPayTouched(false);
     setTitle(job?.title ?? "");
     setLocation(job?.location ?? "");
-    setEmployment(job?.employment_type ?? "full_time");
+    const emp = job?.employment_type ?? "full_time";
+    setEmployment(emp);
     setDescription(job?.description_md ?? "");
     setQuestions(job?.screening_questions ?? []);
-  }, [open, job]);
+    const pt = job?.pay_type ?? defaultPayType(emp);
+    setPayType(pt);
+    setPayMin(job ? centsToInput(job.pay_min, pt) : "");
+    setPayMax(job ? centsToInput(job.pay_max, pt) : "");
+    setCompliance(job ? job.compliance_md : complianceDefault);
+  }, [open, job, complianceDefault]);
+
+  // New roles: follow the employment type's natural pay model until the user picks one.
+  function changeEmployment(emp: EmploymentType) {
+    setEmployment(emp);
+    if (!job && !payTouched) setPayType(defaultPayType(emp));
+  }
+
+  const payPreview =
+    payType === "unspecified"
+      ? null
+      : formatPay({ pay_type: payType, pay_min: inputToCents(payMin), pay_max: inputToCents(payMax), pay_currency: "usd" });
 
   async function draft() {
     if (!title.trim()) {
@@ -134,7 +181,13 @@ function JobDialog({
       employment_type: employment,
       description_md: description,
       screening_questions: questions.filter((q) => q.prompt.trim()),
+      pay_type: payType,
+      pay_min: payType === "unspecified" ? null : inputToCents(payMin),
+      pay_max: payType === "unspecified" ? null : inputToCents(payMax),
+      pay_currency: "usd",
+      compliance_md: compliance,
     };
+    if (saveComplianceDefault) await setWorkspaceComplianceAction(compliance);
     const r = job ? await updateJobAction(job.id, payload) : await createJobAction(payload);
     setSaving(false);
     if ("ok" in r && r.ok) {
@@ -157,7 +210,7 @@ function JobDialog({
             <Label>Type</Label>
             <select
               value={employment}
-              onChange={(e) => setEmployment(e.target.value as EmploymentType)}
+              onChange={(e) => changeEmployment(e.target.value as EmploymentType)}
               className="h-9 rounded-lg border border-border bg-card px-2 text-sm"
             >
               {EMPLOYMENT.map((e) => (
@@ -171,6 +224,54 @@ function JobDialog({
         <div>
           <Label>Location</Label>
           <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Remote · Boston, MA" />
+        </div>
+
+        <div>
+          <Label>Compensation</Label>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <select
+              value={payType}
+              onChange={(e) => {
+                setPayTouched(true);
+                setPayType(e.target.value as PayType);
+              }}
+              className="h-9 rounded-lg border border-border bg-card px-2 text-sm"
+            >
+              {PAY_TYPES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            {payType !== "unspecified" && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-muted-foreground">$</span>
+                <Input
+                  value={payMin}
+                  onChange={(e) => setPayMin(e.target.value)}
+                  inputMode="decimal"
+                  placeholder={payType === "hourly" ? "45.00" : "90000"}
+                  className="w-24 text-sm"
+                />
+                <span className="text-xs text-muted-foreground">to $</span>
+                <Input
+                  value={payMax}
+                  onChange={(e) => setPayMax(e.target.value)}
+                  inputMode="decimal"
+                  placeholder={payType === "hourly" ? "60.00" : "120000"}
+                  className="w-24 text-sm"
+                />
+                <span className="text-xs text-muted-foreground">{payType === "hourly" ? "/hr" : "/yr"}</span>
+              </div>
+            )}
+          </div>
+          {payType !== "unspecified" && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {payPreview
+                ? `Candidates see: ${payPreview}`
+                : "Enter a minimum; leave the max blank for a single figure."}
+            </p>
+          )}
         </div>
 
         <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-2.5 dark:border-violet-500/30 dark:bg-violet-500/10">
@@ -245,6 +346,46 @@ function JobDialog({
               </div>
             ))}
           </div>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <Label>Compliance &amp; legal</Label>
+            <button
+              type="button"
+              onClick={() =>
+                setCompliance((c) =>
+                  c.includes("Equal opportunity")
+                    ? c
+                    : c.trim()
+                      ? `${c.trim()}\n\n${STANDARD_COMPLIANCE}`
+                      : STANDARD_COMPLIANCE,
+                )
+              }
+              className="text-[12px] font-medium text-primary hover:underline"
+            >
+              Insert standard statement
+            </button>
+          </div>
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            Shown at the end of the posting (EEO, at-will, etc.). Markdown — review it for your jurisdiction.
+          </p>
+          <Textarea
+            rows={6}
+            value={compliance}
+            onChange={(e) => setCompliance(e.target.value)}
+            placeholder="## Equal opportunity employer…"
+            className="font-mono text-[12.5px]"
+          />
+          <label className="mt-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={saveComplianceDefault}
+              onChange={(e) => setSaveComplianceDefault(e.target.checked)}
+              className="h-3.5 w-3.5 accent-primary"
+            />
+            Save as my default for new roles
+          </label>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -430,7 +571,7 @@ function JobCard({
         <button className="min-w-0 text-left" onClick={onOpenPipeline}>
           <div className="truncate text-sm font-semibold hover:underline">{job.title}</div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">
-            {[job.location, EMPLOYMENT_LABEL[job.employment_type]].filter(Boolean).join(" · ")}
+            {[job.location, EMPLOYMENT_LABEL[job.employment_type], formatPay(job)].filter(Boolean).join(" · ")}
           </div>
         </button>
         <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", status.cls)}>
@@ -493,12 +634,18 @@ export default function TalentPage() {
   const [dialog, setDialog] = useState<{ open: boolean; job: JobPost | null }>({ open: false, job: null });
   const [pipeline, setPipeline] = useState<JobPost | null>(null);
   const [careersSlug, setCareersSlug] = useState<string | null>(null);
+  const [complianceDefault, setComplianceDefault] = useState("");
   const [copiedBoard, setCopiedBoard] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [js, link] = await Promise.all([listJobsAction(), getCareersLinkAction()]);
+    const [js, link, comp] = await Promise.all([
+      listJobsAction(),
+      getCareersLinkAction(),
+      getWorkspaceComplianceAction(),
+    ]);
     setJobs(js);
     setCareersSlug(link.slug);
+    setComplianceDefault(comp.compliance);
     // Keep the open pipeline job fresh.
     setPipeline((cur) => (cur ? js.find((j) => j.id === cur.id) ?? null : null));
   }, []);
@@ -584,6 +731,7 @@ export default function TalentPage() {
       <JobDialog
         open={dialog.open}
         job={dialog.job}
+        complianceDefault={complianceDefault}
         onClose={() => setDialog({ open: false, job: null })}
         onSaved={refresh}
       />

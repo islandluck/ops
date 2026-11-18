@@ -498,6 +498,13 @@
       "when": 1795042357267,
       "tag": "0070_cooing_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1795044438145,
+      "tag": "0071_stormy_retro_girl",
+      "breakpoints": true
     }
   ]
 }
