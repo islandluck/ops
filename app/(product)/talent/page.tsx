@@ -1,0 +1,592 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Briefcase,
+  Check,
+  ChevronLeft,
+  Copy,
+  ExternalLink,
+  FileText,
+  Loader2,
+  Plus,
+  Sparkles,
+  Trash2,
+  Users,
+} from "lucide-react";
+import { PageHeader, PageBody } from "@/components/app/page-header";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
+import { Input, Label, Textarea } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+import {
+  createJobAction,
+  deleteJobAction,
+  draftJobAction,
+  getCareersLinkAction,
+  getResumeUrlAction,
+  listApplicationsAction,
+  listJobsAction,
+  moveApplicationStageAction,
+  setJobStatusAction,
+  updateJobAction,
+} from "@/app/actions";
+import type { Application, ApplicationStage, EmploymentType, JobPost, ScreeningQuestion } from "@/lib/types";
+
+const EMPLOYMENT: { value: EmploymentType; label: string }[] = [
+  { value: "full_time", label: "Full-time" },
+  { value: "part_time", label: "Part-time" },
+  { value: "contract", label: "Contract" },
+  { value: "internship", label: "Internship" },
+  { value: "temporary", label: "Temporary" },
+];
+const EMPLOYMENT_LABEL = Object.fromEntries(EMPLOYMENT.map((e) => [e.value, e.label])) as Record<EmploymentType, string>;
+
+const STAGES: { key: ApplicationStage; label: string; tint: string }[] = [
+  { key: "applied", label: "Applied", tint: "text-slate-500" },
+  { key: "screening", label: "Screening", tint: "text-sky-600 dark:text-sky-400" },
+  { key: "interview", label: "Interview", tint: "text-violet-600 dark:text-violet-400" },
+  { key: "offer", label: "Offer", tint: "text-amber-600 dark:text-amber-400" },
+  { key: "hired", label: "Hired", tint: "text-emerald-600 dark:text-emerald-400" },
+  { key: "rejected", label: "Rejected", tint: "text-muted-foreground" },
+];
+
+const STATUS_META: Record<JobPost["status"], { label: string; cls: string }> = {
+  draft: { label: "Draft", cls: "border-border bg-muted/50 text-muted-foreground" },
+  open: { label: "Open", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
+  closed: { label: "Closed", cls: "border-border bg-muted/50 text-muted-foreground" },
+};
+
+function jobUrl(slug: string): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return `${origin}/jobs/${slug}`;
+}
+
+/* ------------------------------ job dialog ------------------------------- */
+
+function emptyQuestion(): ScreeningQuestion {
+  return { id: `q${Math.random().toString(36).slice(2, 7)}`, prompt: "", required: false };
+}
+
+function JobDialog({
+  open,
+  job,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  job: JobPost | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [location, setLocation] = useState("");
+  const [employment, setEmployment] = useState<EmploymentType>("full_time");
+  const [description, setDescription] = useState("");
+  const [questions, setQuestions] = useState<ScreeningQuestion[]>([]);
+  const [notes, setNotes] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    setNotes("");
+    setTitle(job?.title ?? "");
+    setLocation(job?.location ?? "");
+    setEmployment(job?.employment_type ?? "full_time");
+    setDescription(job?.description_md ?? "");
+    setQuestions(job?.screening_questions ?? []);
+  }, [open, job]);
+
+  async function draft() {
+    if (!title.trim()) {
+      setError("Add a role title first, then draft with AI.");
+      return;
+    }
+    setDrafting(true);
+    setError(null);
+    const r = await draftJobAction({ title, location, employmentType: employment, notes });
+    setDrafting(false);
+    if (r.ok) {
+      setDescription(r.draft.description_md);
+      setQuestions(r.draft.screening_questions);
+      if (!location.trim()) setLocation(r.draft.location);
+      setEmployment(r.draft.employment_type);
+      if (!title.trim()) setTitle(r.draft.title);
+    } else {
+      setError(r.error);
+    }
+  }
+
+  async function save() {
+    if (!title.trim()) {
+      setError("Give the role a title.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const payload = {
+      title,
+      location,
+      employment_type: employment,
+      description_md: description,
+      screening_questions: questions.filter((q) => q.prompt.trim()),
+    };
+    const r = job ? await updateJobAction(job.id, payload) : await createJobAction(payload);
+    setSaving(false);
+    if ("ok" in r && r.ok) {
+      onSaved();
+      onClose();
+    } else {
+      setError("error" in r && r.error ? r.error : "Couldn't save the job.");
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={job ? "Edit role" : "New role"} className="max-w-2xl">
+      <div className="flex max-h-[72vh] flex-col gap-3 overflow-y-auto pr-1">
+        <div className="grid grid-cols-[1fr_auto] gap-3">
+          <div>
+            <Label>Role title *</Label>
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Senior Process Engineer" />
+          </div>
+          <div>
+            <Label>Type</Label>
+            <select
+              value={employment}
+              onChange={(e) => setEmployment(e.target.value as EmploymentType)}
+              className="h-9 rounded-lg border border-border bg-card px-2 text-sm"
+            >
+              {EMPLOYMENT.map((e) => (
+                <option key={e.value} value={e.value}>
+                  {e.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div>
+          <Label>Location</Label>
+          <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Remote · Boston, MA" />
+        </div>
+
+        <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-2.5 dark:border-violet-500/30 dark:bg-violet-500/10">
+          <Label>Draft with AI</Label>
+          <p className="mb-1.5 text-[11px] text-muted-foreground">
+            Optional notes on the role (must-haves, responsibilities) — the AI drafts the description + screening
+            questions from your business brief.
+          </p>
+          <div className="flex gap-2">
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 5+ yrs reactor design, PhD preferred" />
+            <Button size="sm" variant="secondary" onClick={draft} disabled={drafting || !title.trim()}>
+              {drafting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Draft
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <Label>Description (markdown)</Label>
+          <Textarea
+            rows={12}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="## About the role…"
+            className="font-mono text-[12.5px]"
+          />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <Label>Screening questions</Label>
+            <button
+              type="button"
+              onClick={() => setQuestions((q) => [...q, emptyQuestion()])}
+              className="text-[12px] font-medium text-primary hover:underline"
+            >
+              + Add question
+            </button>
+          </div>
+          <div className="mt-1 flex flex-col gap-2">
+            {questions.length === 0 && (
+              <p className="text-[11px] text-muted-foreground">None — applicants just submit a résumé + note.</p>
+            )}
+            {questions.map((q, i) => (
+              <div key={q.id} className="flex items-center gap-2">
+                <Input
+                  value={q.prompt}
+                  onChange={(e) =>
+                    setQuestions((qs) => qs.map((x, idx) => (idx === i ? { ...x, prompt: e.target.value } : x)))
+                  }
+                  placeholder="What draws you to this role?"
+                  className="text-sm"
+                />
+                <label className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={q.required}
+                    onChange={(e) =>
+                      setQuestions((qs) => qs.map((x, idx) => (idx === i ? { ...x, required: e.target.checked } : x)))
+                    }
+                    className="h-3.5 w-3.5 accent-primary"
+                  />
+                  Required
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setQuestions((qs) => qs.filter((_, idx) => idx !== i))}
+                  className="shrink-0 text-muted-foreground transition hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2 border-t border-border pt-3">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving}>
+            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+            {job ? "Save" : "Create role"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/* ------------------------------ pipeline --------------------------------- */
+
+function ResumeButton({ applicationId }: { applicationId: string }) {
+  const [loading, setLoading] = useState(false);
+  async function open() {
+    setLoading(true);
+    const w = window.open("", "_blank");
+    const { url } = await getResumeUrlAction(applicationId);
+    setLoading(false);
+    if (url) {
+      if (w) w.location.href = url;
+      else window.open(url, "_blank");
+    } else {
+      if (w) w.close();
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={open}
+      className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+    >
+      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileText className="h-3 w-3" />}
+      Résumé
+    </button>
+  );
+}
+
+function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
+  const [apps, setApps] = useState<Application[] | null>(null);
+
+  const refresh = useCallback(async () => {
+    setApps(await listApplicationsAction(job.id));
+  }, [job.id]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function move(appId: string, stage: ApplicationStage) {
+    setApps((cur) => (cur ? cur.map((a) => (a.id === appId ? { ...a, stage } : a)) : cur));
+    await moveApplicationStageAction(appId, stage);
+  }
+
+  const byStage = useMemo(() => {
+    const map: Record<ApplicationStage, Application[]> = {
+      applied: [],
+      screening: [],
+      interview: [],
+      offer: [],
+      hired: [],
+      rejected: [],
+    };
+    for (const a of apps ?? []) map[a.stage].push(a);
+    return map;
+  }, [apps]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          <ChevronLeft className="h-4 w-4" /> All roles
+        </Button>
+        <div className="min-w-0">
+          <h2 className="truncate text-base font-semibold">{job.title}</h2>
+          <p className="text-[11px] text-muted-foreground">
+            {apps ? `${apps.length} applicant${apps.length === 1 ? "" : "s"}` : "Loading…"}
+          </p>
+        </div>
+      </div>
+
+      {apps === null ? (
+        <div className="flex justify-center py-16 text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin" />
+        </div>
+      ) : apps.length === 0 ? (
+        <Card className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
+          <Users className="h-8 w-8 opacity-40" />
+          <p className="text-sm">No applicants yet.</p>
+          <p className="text-xs">
+            {job.status === "open"
+              ? "Share the public link to start collecting applications."
+              : "Publish this role to open applications."}
+          </p>
+        </Card>
+      ) : (
+        <div className="flex gap-3 overflow-x-auto pb-2">
+          {STAGES.map((st) => (
+            <div key={st.key} className="flex w-64 shrink-0 flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <span className={cn("text-[12px] font-semibold", st.tint)}>{st.label}</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">{byStage[st.key].length}</span>
+              </div>
+              <div className="flex flex-col gap-2">
+                {byStage[st.key].map((a) => (
+                  <Card key={a.id} className="p-2.5">
+                    <div className="truncate text-sm font-medium">{a.candidate_name || "—"}</div>
+                    <div className="truncate text-[11px] text-muted-foreground">{a.candidate_email}</div>
+                    {a.cover_note && <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{a.cover_note}</p>}
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      {a.resume_path ? <ResumeButton applicationId={a.id} /> : <span className="text-[11px] text-muted-foreground">No résumé</span>}
+                      <select
+                        value={a.stage}
+                        onChange={(e) => move(a.id, e.target.value as ApplicationStage)}
+                        className="rounded-md border border-border bg-card px-1.5 py-1 text-[11px]"
+                      >
+                        {STAGES.map((s) => (
+                          <option key={s.key} value={s.key}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------- job card -------------------------------- */
+
+function JobCard({
+  job,
+  onEdit,
+  onOpenPipeline,
+  onRefresh,
+}: {
+  job: JobPost;
+  onEdit: () => void;
+  onOpenPipeline: () => void;
+  onRefresh: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const status = STATUS_META[job.status];
+
+  async function setStatus(status: "draft" | "open" | "closed") {
+    setBusy(true);
+    await setJobStatusAction(job.id, status);
+    setBusy(false);
+    onRefresh();
+  }
+  async function remove() {
+    if (!window.confirm(`Delete "${job.title}" and its applicants? This can't be undone.`)) return;
+    setBusy(true);
+    await deleteJobAction(job.id);
+    onRefresh();
+  }
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(jobUrl(job.slug));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <Card className="flex flex-col gap-2 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <button className="min-w-0 text-left" onClick={onOpenPipeline}>
+          <div className="truncate text-sm font-semibold hover:underline">{job.title}</div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            {[job.location, EMPLOYMENT_LABEL[job.employment_type]].filter(Boolean).join(" · ")}
+          </div>
+        </button>
+        <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", status.cls)}>
+          {status.label}
+        </span>
+      </div>
+
+      <button onClick={onOpenPipeline} className="flex items-center gap-3 text-[12px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          <Users className="h-3.5 w-3.5" /> {job.applicant_count ?? 0} applicant{job.applicant_count === 1 ? "" : "s"}
+        </span>
+        {(job.active_count ?? 0) > 0 && <span className="text-sky-600 dark:text-sky-400">{job.active_count} active</span>}
+      </button>
+
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onOpenPipeline}>
+          <Users className="h-3.5 w-3.5" /> Pipeline
+        </Button>
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onEdit} disabled={busy}>
+          Edit
+        </Button>
+        {job.status === "open" ? (
+          <>
+            <Button size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={copyLink}>
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied" : "Copy link"}
+            </Button>
+            <a href={jobUrl(job.slug)} target="_blank" rel="noreferrer" className="inline-flex">
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs">
+                <ExternalLink className="h-3.5 w-3.5" /> View
+              </Button>
+            </a>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setStatus("closed")} disabled={busy}>
+              Close
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" className="h-7 px-2 text-xs" onClick={() => setStatus("open")} disabled={busy}>
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Publish
+          </Button>
+        )}
+        <button
+          type="button"
+          onClick={remove}
+          className="ml-auto text-muted-foreground transition hover:text-destructive"
+          title="Delete role"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+/* --------------------------------- page ---------------------------------- */
+
+export default function TalentPage() {
+  const [jobs, setJobs] = useState<JobPost[] | null>(null);
+  const [dialog, setDialog] = useState<{ open: boolean; job: JobPost | null }>({ open: false, job: null });
+  const [pipeline, setPipeline] = useState<JobPost | null>(null);
+  const [careersSlug, setCareersSlug] = useState<string | null>(null);
+  const [copiedBoard, setCopiedBoard] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const [js, link] = await Promise.all([listJobsAction(), getCareersLinkAction()]);
+    setJobs(js);
+    setCareersSlug(link.slug);
+    // Keep the open pipeline job fresh.
+    setPipeline((cur) => (cur ? js.find((j) => j.id === cur.id) ?? null : null));
+  }, []);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function copyBoard() {
+    if (!careersSlug) return;
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/careers/${careersSlug}`);
+      setCopiedBoard(true);
+      setTimeout(() => setCopiedBoard(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Talent"
+        description="Run your own job board — post roles, collect applicants, and move them through your hiring pipeline."
+        actions={
+          <Button size="sm" onClick={() => setDialog({ open: true, job: null })}>
+            <Plus className="h-4 w-4" /> New role
+          </Button>
+        }
+      />
+      <PageBody className="space-y-5">
+        {careersSlug && !pipeline && (
+          <Card className="flex flex-wrap items-center justify-between gap-2 border-dashed p-3">
+            <div className="min-w-0 text-sm">
+              <span className="font-medium">Your careers page: </span>
+              <span className="break-all text-muted-foreground">{`${typeof window !== "undefined" ? window.location.origin : ""}/careers/${careersSlug}`}</span>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button size="sm" variant="outline" onClick={copyBoard}>
+                {copiedBoard ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copiedBoard ? "Copied" : "Copy link"}
+              </Button>
+              <a href={`/careers/${careersSlug}`} target="_blank" rel="noreferrer" className="inline-flex">
+                <Button size="sm" variant="ghost">
+                  <ExternalLink className="h-4 w-4" /> View
+                </Button>
+              </a>
+            </div>
+          </Card>
+        )}
+
+        {pipeline ? (
+          <PipelineBoard job={pipeline} onBack={() => setPipeline(null)} />
+        ) : jobs === null ? (
+          <div className="flex justify-center py-20 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : jobs.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
+            <Briefcase className="h-10 w-10 opacity-40" />
+            <p className="max-w-sm text-sm">
+              No roles yet. Post your first job — the AI can draft the description from your business brief — then share
+              the public link.
+            </p>
+            <Button size="sm" onClick={() => setDialog({ open: true, job: null })}>
+              <Plus className="h-4 w-4" /> New role
+            </Button>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {jobs.map((job) => (
+              <JobCard
+                key={job.id}
+                job={job}
+                onEdit={() => setDialog({ open: true, job })}
+                onOpenPipeline={() => setPipeline(job)}
+                onRefresh={refresh}
+              />
+            ))}
+          </div>
+        )}
+      </PageBody>
+
+      <JobDialog
+        open={dialog.open}
+        job={dialog.job}
+        onClose={() => setDialog({ open: false, job: null })}
+        onSaved={refresh}
+      />
+    </>
+  );
+}

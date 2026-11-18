@@ -839,6 +839,76 @@ export interface Order {
   created_at: string;
 }
 
+/* ----------------------------- talent / hiring --------------------------- */
+
+export type JobStatus = "draft" | "open" | "closed";
+export type EmploymentType = "full_time" | "part_time" | "contract" | "internship" | "temporary";
+/** The hiring pipeline stages, in order. "rejected" is terminal (off to the side). */
+export type ApplicationStage = "applied" | "screening" | "interview" | "offer" | "hired" | "rejected";
+export type CandidateSource = "applied" | "scouted" | "referral" | "manual";
+
+/** A screening question shown on the application form. */
+export interface ScreeningQuestion {
+  id: string;
+  prompt: string;
+  required: boolean;
+}
+
+/** A job opening the owner posts; hosted publicly at /jobs/[slug] when open. */
+export interface JobPost {
+  id: string;
+  workspace_id: string;
+  title: string;
+  location: string;
+  employment_type: EmploymentType;
+  /** Markdown source; rendered to safe HTML via markdownToHtml on the public page. */
+  description_md: string;
+  status: JobStatus;
+  slug: string;
+  screening_questions: ScreeningQuestion[];
+  created_at: string;
+  updated_at: string;
+  /** Rollup from list queries: total applicants + how many are still in play. */
+  applicant_count?: number;
+  active_count?: number;
+}
+
+/** A person in the talent pool — applied or sourced. Deduped per workspace by email. */
+export interface Candidate {
+  id: string;
+  workspace_id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  /** Private-bucket storage path; viewed through a signed URL, never public. */
+  resume_path: string | null;
+  links: string[];
+  source: CandidateSource;
+  created_at: string;
+}
+
+/** A candidate's application to one job — the per-job pipeline row (stage + AI eval). */
+export interface Application {
+  id: string;
+  workspace_id: string;
+  job_id: string;
+  candidate_id: string;
+  stage: ApplicationStage;
+  cover_note: string;
+  answers: { question: string; answer: string }[];
+  /** Phase 2 AI screening (null until scored). */
+  ai_score: number | null;
+  ai_summary: string;
+  created_at: string;
+  updated_at: string;
+  // Denormalized candidate fields for the pipeline UI:
+  candidate_name?: string;
+  candidate_email?: string;
+  candidate_phone?: string | null;
+  resume_path?: string | null;
+  job_title?: string;
+}
+
 /* --------------------------- content engine ------------------------------ */
 
 export type PostStatus = "draft" | "distributed";

@@ -359,6 +359,21 @@ import {
   setPageStatus,
   updatePage,
 } from "@/lib/pages";
+import {
+  createJob,
+  deleteJob,
+  draftJob,
+  getApplicationResumeUrl,
+  getCareersSlug,
+  listApplications,
+  listJobs,
+  moveApplicationStage,
+  setJobStatus,
+  updateJob,
+  type JobInput,
+} from "@/lib/talent";
+import type { Application, ApplicationStage, EmploymentType, JobPost } from "@/lib/types";
+import type { JobDraft } from "@/lib/ai/job";
 import type {
   AppState,
   BoardSession,
@@ -4545,5 +4560,137 @@ export async function removeOutboundAttachmentAction(draftId: string, attachment
     return await removeOutboundAttachment(ws, draftId, attachmentId, scopeUserId);
   } catch {
     return { ok: false as const };
+  }
+}
+
+/* --------------------------------- talent -------------------------------- */
+
+export async function listJobsAction(): Promise<JobPost[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listJobs(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createJobAction(input: JobInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createJob(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the job." };
+  }
+}
+
+export async function updateJobAction(id: string, patch: Partial<JobInput>) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await updateJob(ws, id, patch);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the job." };
+  }
+}
+
+export async function setJobStatusAction(id: string, status: "draft" | "open" | "closed") {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await setJobStatus(ws, id, status);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't update the job." };
+  }
+}
+
+export async function deleteJobAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteJob(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** AI-draft a job description from the company brief. */
+export async function draftJobAction(input: {
+  title: string;
+  location?: string;
+  employmentType?: EmploymentType;
+  notes?: string;
+}): Promise<{ ok: true; draft: JobDraft } | { ok: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if (!input.title.trim()) return { ok: false, error: "Give the role a title first." };
+  try {
+    const draft = await draftJob(ws, input);
+    return { ok: true, draft };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the job." };
+  }
+}
+
+/** The public careers-board link for this workspace (null until a job is opened). */
+export async function getCareersLinkAction(): Promise<{ slug: string | null }> {
+  const user = await getCurrentUser();
+  if (!user) return { slug: null };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { slug: null };
+  try {
+    return { slug: await getCareersSlug(ws) };
+  } catch {
+    return { slug: null };
+  }
+}
+
+export async function listApplicationsAction(jobId: string): Promise<Application[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listApplications(ws, jobId);
+  } catch {
+    return [];
+  }
+}
+
+export async function moveApplicationStageAction(id: string, stage: ApplicationStage) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await moveApplicationStage(ws, id, stage);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** A short-lived signed URL to view a candidate's résumé. */
+export async function getResumeUrlAction(applicationId: string): Promise<{ url: string | null }> {
+  const user = await getCurrentUser();
+  if (!user) return { url: null };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { url: null };
+  try {
+    return { url: await getApplicationResumeUrl(ws, applicationId) };
+  } catch {
+    return { url: null };
   }
 }

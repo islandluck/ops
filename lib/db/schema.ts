@@ -37,6 +37,9 @@ import type {
   DeepDiveSourceStatus,
   DeepDiveStatus,
   DeepDiveUsage,
+  ApplicationStage,
+  CandidateSource,
+  EmploymentType,
   EventType,
   ExecAction,
   ExecBriefContent,
@@ -44,6 +47,7 @@ import type {
   ExecutionStatus,
   ExecutionStep,
   GoalHorizon,
+  JobStatus,
   GoalMetric,
   GoalStatus,
   InvestorUpdateContent,
@@ -67,6 +71,7 @@ import type {
   ProjectStatus,
   RecipientCandidate,
   RiskLevel,
+  ScreeningQuestion,
   SourceDistillation,
   TaskStatus,
 } from "@/lib/types";
@@ -100,6 +105,9 @@ export const workspaces = pgTable("workspaces", {
   subscription_status: text("subscription_status").notNull().default("none"),
   subscription_period_end: timestamp("subscription_period_end", { withTimezone: true }),
   trial_ends_at: timestamp("trial_ends_at", { withTimezone: true }),
+  /** Globally-unique slug for this workspace's public careers board at
+   *  /careers/[careers_slug]. Lazily set the first time a job is published. */
+  careers_slug: text("careers_slug"),
   created_at: createdAt,
   updated_at: updatedAt,
 });
@@ -1414,6 +1422,89 @@ export const orders = pgTable("orders", {
   customer_email: text("customer_email"),
   created_at: createdAt,
 }, (t) => [index("orders_ws_created_idx").on(t.workspace_id, t.created_at)]);
+
+/* ------------------------------ talent / hiring -------------------------- */
+
+/** A job opening. Hosted publicly at /jobs/[slug] while status = "open"; the
+ *  owner's applicant pipeline hangs off it. */
+export const jobPosts = pgTable(
+  "job_posts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    location: text("location").notNull().default(""),
+    employment_type: text("employment_type").$type<EmploymentType>().notNull().default("full_time"),
+    // Stores MARKDOWN (rendered to safe HTML via markdownToHtml on the public page).
+    // Physical column is "description_html" (from migration 0070); the JS key is the
+    // honest "description_md" — Drizzle maps the two.
+    description_md: text("description_html").notNull().default(""),
+    status: text("status").$type<JobStatus>().notNull().default("draft"),
+    slug: text("slug").notNull(),
+    screening_questions: jsonb("screening_questions")
+      .$type<ScreeningQuestion[]>()
+      .notNull()
+      .default([]),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    uniqueIndex("job_posts_slug_uniq").on(t.slug),
+    index("job_posts_ws_created_idx").on(t.workspace_id, t.created_at),
+  ],
+);
+
+/** A person in the talent pool — applied through a public form or sourced by the
+ *  owner. One row per (workspace, email); their résumé lives in a private bucket. */
+export const candidates = pgTable(
+  "candidates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    email: text("email").notNull().default(""),
+    phone: text("phone"),
+    /** Private-bucket storage path (viewed via a short-lived signed URL). */
+    resume_path: text("resume_path"),
+    links: text("links").array().notNull().default([]),
+    source: text("source").$type<CandidateSource>().notNull().default("applied"),
+    created_at: createdAt,
+  },
+  (t) => [uniqueIndex("candidates_ws_email_uniq").on(t.workspace_id, t.email)],
+);
+
+/** A candidate's application to one job — the per-job pipeline row (stage + AI eval). */
+export const applications = pgTable(
+  "applications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    job_id: uuid("job_id")
+      .notNull()
+      .references(() => jobPosts.id, { onDelete: "cascade" }),
+    candidate_id: uuid("candidate_id")
+      .notNull()
+      .references(() => candidates.id, { onDelete: "cascade" }),
+    stage: text("stage").$type<ApplicationStage>().notNull().default("applied"),
+    cover_note: text("cover_note").notNull().default(""),
+    answers: jsonb("answers").$type<{ question: string; answer: string }[]>().notNull().default([]),
+    /** Phase 2 AI screening (null until scored). */
+    ai_score: integer("ai_score"),
+    ai_summary: text("ai_summary").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("applications_ws_job_idx").on(t.workspace_id, t.job_id),
+    uniqueIndex("applications_job_candidate_uniq").on(t.job_id, t.candidate_id),
+  ],
+);
 
 /* ---------------------------- executive office --------------------------- */
 
