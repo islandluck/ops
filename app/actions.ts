@@ -382,6 +382,23 @@ import {
 } from "@/lib/talent";
 import type { Application, ApplicationStage, EmploymentType, JobPost, ScoutLead } from "@/lib/types";
 import type { JobDraft } from "@/lib/ai/job";
+import {
+  createCampaign,
+  createItem,
+  deleteCampaign,
+  deleteItem,
+  listCampaigns,
+  listItems,
+  planAndCreateCampaign,
+  publishItemNow,
+  scheduleItem,
+  setItemPosted,
+  updateCampaign,
+  updateItem,
+  type CampaignInput,
+  type ItemInput,
+} from "@/lib/marketing";
+import type { MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -4816,5 +4833,165 @@ export async function screenJobApplicantsAction(jobId: string): Promise<{ screen
     return await screenJobApplicants(ws, jobId, { onlyUnscored: true });
   } catch {
     return { screened: 0 };
+  }
+}
+
+/* -------------------------------- marketing ------------------------------ */
+
+export async function listCampaignsAction(): Promise<MarketingCampaign[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listCampaigns(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createCampaignAction(input: CampaignInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createCampaign(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the campaign." };
+  }
+}
+
+/** AI-plan a campaign (objective + weeks + channels) → campaign + drafted items. */
+export async function planCampaignAction(input: {
+  name: string;
+  objective: string;
+  weeks: number;
+  channels: MarketingChannel[];
+  startISO?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await planAndCreateCampaign(ws, input);
+    return r.ok ? { ok: true as const, campaignId: r.campaign.id, items: r.items } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't plan the campaign." };
+  }
+}
+
+export async function updateCampaignAction(id: string, patch: Partial<CampaignInput>) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateCampaign(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteCampaignAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteCampaign(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function listMarketingItemsAction(campaignId?: string): Promise<MarketingItem[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listItems(ws, campaignId ? { campaignId } : {});
+  } catch {
+    return [];
+  }
+}
+
+export async function createMarketingItemAction(input: ItemInput) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await createItem(ws, input);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the item." };
+  }
+}
+
+export async function updateMarketingItemAction(
+  id: string,
+  patch: { title?: string; body_md?: string; image_url?: string | null; campaign_id?: string | null },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateItem(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteMarketingItemAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteItem(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** Schedule an item (X → social task, blog → draft page + publish_at, linkedin → reminder). */
+export async function scheduleMarketingItemAction(id: string, whenISO: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await scheduleItem(ws, id, whenISO, { name: displayName(user) });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't schedule the item." };
+  }
+}
+
+/** Publish an item now (X posts, blog goes live, linkedin marked posted). */
+export async function publishMarketingItemAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await publishItemNow(ws, id, { name: displayName(user), email: user.email ?? "" });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't publish the item." };
+  }
+}
+
+/** Mark a manual (LinkedIn) item posted / not posted. */
+export async function setMarketingItemPostedAction(id: string, posted: boolean) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await setItemPosted(ws, id, posted);
+  } catch {
+    return { ok: false as const };
   }
 }

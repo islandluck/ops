@@ -31,6 +31,7 @@ export const PAGES: PageDef[] = [
   { key: "/notes", label: "Notes", group: "Command", member: "default" },
   // Create
   { key: "/projects", label: "Projects", group: "Create", member: "default" },
+  { key: "/marketing", label: "Marketing", group: "Create", member: "grantable" },
   { key: "/content", label: "Content", group: "Create", member: "grantable" },
   { key: "/social", label: "Social", group: "Create", member: "grantable" },
   { key: "/ads", label: "Ads Manager", group: "Create", member: "grantable" },

@@ -26,6 +26,7 @@ import {
   Newspaper,
   NotebookPen,
   Plug,
+  Rocket,
   ScrollText,
   Settings,
   ShieldAlert,
@@ -66,6 +67,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
     title: "Create",
     items: [
       { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/marketing", label: "Marketing", icon: Rocket },
       { href: "/content", label: "Content", icon: Newspaper },
       { href: "/social", label: "Social", icon: Megaphone },
       { href: "/ads", label: "Ads Manager", icon: MonitorPlay },

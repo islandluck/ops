@@ -938,6 +938,57 @@ export interface Application {
   job_title?: string;
 }
 
+/* ------------------------------- marketing ------------------------------- */
+
+/** A marketing distribution channel. X = auto-publish; linkedin = draft/preview/
+ *  copy (manual, no API push); blog = scheduled to the hosted Pages site. */
+export type MarketingChannel = "x" | "linkedin" | "blog";
+export type CampaignStatus = "draft" | "active" | "done" | "archived";
+/** idea = planned, no content yet; drafted = content ready; scheduled = has a
+ *  time (X/blog materialized to a task/page, linkedin = a reminder); published =
+ *  live (X posted / blog live / linkedin marked posted). */
+export type MarketingItemStatus = "idea" | "drafted" | "scheduled" | "published";
+
+/** A marketing campaign — an objective + window that owns a set of content items. */
+export interface MarketingCampaign {
+  id: string;
+  workspace_id: string;
+  name: string;
+  objective: string;
+  status: CampaignStatus;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string;
+  updated_at: string;
+  /** Rollups from list queries. */
+  item_count?: number;
+  scheduled_count?: number;
+  published_count?: number;
+}
+
+/** One piece of marketing content on the calendar — belongs to a campaign or
+ *  stands alone. Materializes into the existing rails on schedule/publish. */
+export interface MarketingItem {
+  id: string;
+  workspace_id: string;
+  campaign_id: string | null;
+  campaign_name?: string | null;
+  channel: MarketingChannel;
+  title: string;
+  body_md: string;
+  image_url: string | null;
+  status: MarketingItemStatus;
+  scheduled_at: string | null;
+  /** When materialized into a real task/page (X/blog), what it points to. */
+  ref_type: "task" | "page" | null;
+  ref_id: string | null;
+  /** Public URL once live (tweet URL / blog URL). */
+  ref_url: string | null;
+  posted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /* --------------------------- content engine ------------------------------ */
 
 export type PostStatus = "draft" | "distributed";

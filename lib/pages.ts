@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lte } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { orders, pages, products } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
@@ -220,6 +220,25 @@ export async function getPublishedPageBySlug(slug: string): Promise<Page | null>
     .where(and(eq(pages.slug, slug), eq(pages.status, "published")))
     .limit(1);
   return r ? toPage(r) : null;
+}
+
+/** Publish any draft pages whose `publish_at` is due (scheduled blog releases).
+ *  Called by the publish cron. Returns how many went live. */
+export async function publishDueBlogPages(limit = 25): Promise<number> {
+  const now = new Date();
+  // tenant-scope-exempt: cron sweep across all workspaces; claims draft pages
+  // whose publish_at is due (no per-request workspace context).
+  const due = await db
+    .select({ id: pages.id })
+    .from(pages)
+    .where(and(eq(pages.status, "draft"), isNotNull(pages.publish_at), lte(pages.publish_at, now)))
+    .limit(limit);
+  let n = 0;
+  for (const p of due) {
+    await db.update(pages).set({ status: "published", updated_at: new Date() }).where(eq(pages.id, p.id));
+    n++;
+  }
+  return n;
 }
 
 export async function setPageStatus(

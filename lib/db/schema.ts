@@ -26,9 +26,12 @@ import type {
   BoardRecommendation,
   Category,
   BriefKind,
+  CampaignStatus,
   CommandCenterDoc,
   ChannelKind,
   ChannelStatus,
+  MarketingChannel,
+  MarketingItemStatus,
   CompanyContextPack,
   CreatedByType,
   DecisionType,
@@ -1317,6 +1320,9 @@ export const pages = pgTable(
       .default({ headline: "", subheadline: "", cta_label: "Buy now", sections: [] }),
     created_by_type: text("created_by_type").$type<"agent" | "human">().notNull().default("human"),
     agent_id: uuid("agent_id"),
+    /** When set (+ status "draft"), the publish cron flips the page to published
+     *  at this instant — scheduled blog releases. */
+    publish_at: timestamp("publish_at", { withTimezone: true }),
     created_at: createdAt,
     updated_at: updatedAt,
   },
@@ -1518,6 +1524,59 @@ export const applications = pgTable(
   (t) => [
     index("applications_ws_job_idx").on(t.workspace_id, t.job_id),
     uniqueIndex("applications_job_candidate_uniq").on(t.job_id, t.candidate_id),
+  ],
+);
+
+/* ------------------------------- marketing ------------------------------- */
+
+/** A marketing campaign — an objective + window owning a set of content items. */
+export const marketingCampaigns = pgTable(
+  "marketing_campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    objective: text("objective").notNull().default(""),
+    status: text("status").$type<CampaignStatus>().notNull().default("draft"),
+    starts_at: timestamp("starts_at", { withTimezone: true }),
+    ends_at: timestamp("ends_at", { withTimezone: true }),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("marketing_campaigns_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** One piece of marketing content on the content calendar — belongs to a
+ *  campaign or stands alone. On schedule/publish it materializes into the
+ *  existing rails (an X task / a hosted blog page); LinkedIn stays manual
+ *  (draft → preview → copy). */
+export const marketingItems = pgTable(
+  "marketing_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    campaign_id: uuid("campaign_id").references(() => marketingCampaigns.id, { onDelete: "set null" }),
+    channel: text("channel").$type<MarketingChannel>().notNull(),
+    title: text("title").notNull().default(""),
+    body_md: text("body_md").notNull().default(""),
+    image_url: text("image_url"),
+    status: text("status").$type<MarketingItemStatus>().notNull().default("drafted"),
+    scheduled_at: timestamp("scheduled_at", { withTimezone: true }),
+    /** When materialized into a real task/page (X/blog): what it points to. */
+    ref_type: text("ref_type").$type<"task" | "page">(),
+    ref_id: uuid("ref_id"),
+    ref_url: text("ref_url"),
+    posted_at: timestamp("posted_at", { withTimezone: true }),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("marketing_items_ws_sched_idx").on(t.workspace_id, t.scheduled_at),
+    index("marketing_items_ws_campaign_idx").on(t.workspace_id, t.campaign_id),
   ],
 );
 
