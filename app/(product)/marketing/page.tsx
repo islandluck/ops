@@ -724,18 +724,18 @@ function CampaignTable({
 
   return (
     <Card className="overflow-x-auto p-0">
-      <table className="w-full min-w-[640px] border-collapse text-sm">
+      <table className="w-full min-w-[760px] table-fixed border-collapse text-sm">
         <thead>
           <tr className="border-b border-border text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             <th className="px-3 py-2">Campaign</th>
-            <th className="px-3 py-2">Launch date</th>
-            <th className="px-3 py-2">Status</th>
+            <th className="w-28 px-3 py-2">Launch date</th>
+            <th className="w-24 px-3 py-2">Status</th>
             {CHANNELS.map((c) => (
-              <th key={c.key} className="px-2 py-2 text-center">
+              <th key={c.key} className="w-16 px-2 py-2 text-center">
                 {c.label}
               </th>
             ))}
-            <th className="px-2 py-2" />
+            <th className="w-10 px-2 py-2" />
           </tr>
         </thead>
         <tbody>
@@ -744,7 +744,7 @@ function CampaignTable({
             return (
               <tr key={c.id} className="group border-b border-border/60 last:border-0 hover:bg-accent/50">
                 <td className="px-3 py-2.5">
-                  <button onClick={() => onOpen(c)} className="min-w-0 text-left">
+                  <button onClick={() => onOpen(c)} className="block w-full min-w-0 text-left">
                     <div className="truncate font-medium hover:underline">{c.name}</div>
                     {c.objective && <div className="truncate text-[11px] text-muted-foreground">{c.objective}</div>}
                   </button>
