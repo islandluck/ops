@@ -8,7 +8,7 @@ import { createHostedPost } from "@/lib/pages";
 import { getPlanningContext, getXStyleProfile } from "@/lib/db/queries";
 import { markdownToHtml } from "@/lib/content/format";
 import { postSingleTweetNow, scheduleSingleTweet } from "@/lib/agents/social-bulk";
-import { draftPost, planCampaign } from "@/lib/ai/marketing";
+import { draftPost, suggestAngles } from "@/lib/ai/marketing";
 import { growthBoostTweet } from "@/lib/ai/style";
 import { growthBoostLongform } from "@/lib/ai/content";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -16,6 +16,7 @@ import { fitToX } from "@/lib/social/x-post";
 import type {
   CampaignProgress,
   CampaignStatus,
+  MarketingAngle,
   MarketingChannel,
   MarketingCampaign,
   MarketingItem,
@@ -191,58 +192,65 @@ export async function deleteCampaign(workspaceId: string, id: string): Promise<{
   return { ok: true };
 }
 
-/** AI-plan a campaign: draft a multi-week arc of content across channels and
- *  create the campaign + its items (each at a PROPOSED time, status "drafted" —
- *  the owner reviews, edits, and schedules each). Metered. */
+/** Create a campaign and draft ONE targeted post per selected channel. Metered. */
 export async function planAndCreateCampaign(
   workspaceId: string,
-  input: { name: string; objective: string; weeks: number; channels: MarketingChannel[]; startISO?: string },
+  input: { name: string; objective: string; channels: MarketingChannel[]; startISO?: string },
 ): Promise<{ ok: true; campaign: MarketingCampaign; items: number } | { ok: false; error: string }> {
   if (!input.name.trim()) return { ok: false, error: "Give the campaign a name." };
-  if (!input.objective.trim()) return { ok: false, error: "Describe the objective." };
-  const { brief } = await getPlanningContext(workspaceId);
-  const styleProfile = await getXStyleProfile(workspaceId);
-
-  let planned;
-  try {
-    planned = await runWithUsage(workspaceId, "marketing-plan", () =>
-      planCampaign({ objective: input.objective, weeks: input.weeks, channels: input.channels, brief, styleProfile }),
-    );
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Couldn't plan the campaign." };
-  }
-
-  const start = input.startISO ? new Date(input.startISO) : new Date();
-  if (Number.isNaN(start.getTime())) return { ok: false, error: "Pick a valid start date." };
+  if (!input.objective.trim()) return { ok: false, error: "Describe the campaign." };
+  const start = input.startISO ? new Date(input.startISO) : null;
   const created = await createCampaign(workspaceId, {
     name: input.name,
     objective: input.objective,
     status: "active",
-    starts_at: start.toISOString(),
-    ends_at: new Date(start.getTime() + input.weeks * 7 * 86_400_000).toISOString(),
+    starts_at: start ? start.toISOString() : null,
   });
   if (!created.ok) return created;
+  const gen = await generateCampaignPosts(workspaceId, created.campaign.id, input.channels);
+  return { ok: true, campaign: created.campaign, items: gen.ok ? gen.created : 0 };
+}
 
-  const now = new Date();
-  const rows = planned.map((p) => {
-    const when = new Date(start.getTime() + p.day_offset * 86_400_000);
-    when.setHours(10, 0, 0, 0); // proposed 10am local slot
-    return {
-      id: uid(),
-      workspace_id: workspaceId,
-      campaign_id: created.campaign.id,
-      channel: p.channel,
-      title: p.title.slice(0, 200),
-      body_md: p.body_md.slice(0, 12000),
-      image_url: null,
-      status: "drafted" as const,
-      scheduled_at: when,
-      created_at: now,
-      updated_at: now,
-    };
-  });
-  if (rows.length) await db.insert(marketingItems).values(rows);
-  return { ok: true, campaign: created.campaign, items: rows.length };
+/** Suggest a few angles for ONE post on a channel (the guided-generation step). */
+export async function suggestPostAngles(
+  workspaceId: string,
+  campaignId: string,
+  channel: MarketingChannel,
+): Promise<{ ok: true; angles: MarketingAngle[] } | { ok: false; error: string }> {
+  const campaign = await getCampaign(workspaceId, campaignId);
+  if (!campaign) return { ok: false, error: "Campaign not found." };
+  const { brief } = await getPlanningContext(workspaceId);
+  const styleProfile = await getXStyleProfile(workspaceId);
+  try {
+    const angles = await runWithUsage(workspaceId, "marketing-angles", () =>
+      suggestAngles({ channel, campaignName: campaign.name, objective: campaign.objective, brief, styleProfile }),
+    );
+    return { ok: true, angles };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't suggest angles." };
+  }
+}
+
+/** Draft ONE post for a channel (optionally steered by a direction) WITHOUT
+ *  saving it — for the guided preview. The caller saves via createItem. */
+export async function draftCampaignPost(
+  workspaceId: string,
+  campaignId: string,
+  channel: MarketingChannel,
+  direction?: string,
+): Promise<{ ok: true; title: string; body_md: string } | { ok: false; error: string }> {
+  const campaign = await getCampaign(workspaceId, campaignId);
+  if (!campaign) return { ok: false, error: "Campaign not found." };
+  const { brief } = await getPlanningContext(workspaceId);
+  const styleProfile = await getXStyleProfile(workspaceId);
+  try {
+    const post = await runWithUsage(workspaceId, "marketing-draft", () =>
+      draftPost({ channel, campaignName: campaign.name, objective: campaign.objective, direction, brief, styleProfile }),
+    );
+    return { ok: true, title: post.title, body_md: post.body_md };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the post." };
+  }
 }
 
 /** Generate one post per requested channel for an existing campaign (metered). */

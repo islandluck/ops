@@ -951,6 +951,14 @@ export type CampaignProgress = "not_started" | "drafting" | "scheduled" | "publi
  *  live (X posted / blog live / linkedin marked posted). */
 export type MarketingItemStatus = "idea" | "drafted" | "scheduled" | "published";
 
+/** One suggested angle/direction for a post, shown before drafting so the owner
+ *  can steer the AI (or write their own direction). */
+export interface MarketingAngle {
+  label: string;
+  approach: string;
+  hook: string;
+}
+
 /** A marketing campaign — an objective + window that owns a set of content items. */
 export interface MarketingCampaign {
   id: string;

@@ -387,6 +387,7 @@ import {
   createItem,
   deleteCampaign,
   deleteItem,
+  draftCampaignPost,
   generateCampaignPosts,
   growthBoostMarketingItem,
   listCampaigns,
@@ -395,13 +396,14 @@ import {
   publishItemNow,
   scheduleItem,
   setItemPosted,
+  suggestPostAngles,
   updateCampaign,
   updateItem,
   type CampaignInput,
   type GrowthBoostResult,
   type ItemInput,
 } from "@/lib/marketing";
-import type { MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
+import type { MarketingAngle, MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -4865,11 +4867,10 @@ export async function createCampaignAction(input: CampaignInput) {
   }
 }
 
-/** AI-plan a campaign (objective + weeks + channels) → campaign + drafted items. */
+/** Create a campaign + draft one targeted post per selected channel. */
 export async function planCampaignAction(input: {
   name: string;
   objective: string;
-  weeks: number;
   channels: MarketingChannel[];
   startISO?: string;
 }) {
@@ -4882,6 +4883,42 @@ export async function planCampaignAction(input: {
     return r.ok ? { ok: true as const, campaignId: r.campaign.id, items: r.items } : { ok: false as const, error: r.error };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't plan the campaign." };
+  }
+}
+
+/** Guided generation step 1 — suggest angles for one channel's post. */
+export async function suggestPostAnglesAction(
+  campaignId: string,
+  channel: MarketingChannel,
+): Promise<{ ok: boolean; angles?: MarketingAngle[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await suggestPostAngles(ws, campaignId, channel);
+    return r.ok ? { ok: true, angles: r.angles } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't suggest angles." };
+  }
+}
+
+/** Guided generation step 2 — draft one post for a channel + optional direction
+ *  (preview only; the client saves it via createMarketingItemAction). */
+export async function draftCampaignPostAction(
+  campaignId: string,
+  channel: MarketingChannel,
+  direction?: string,
+): Promise<{ ok: boolean; title?: string; body_md?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await draftCampaignPost(ws, campaignId, channel, direction);
+    return r.ok ? { ok: true, title: r.title, body_md: r.body_md } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the post." };
   }
 }
 

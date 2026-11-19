@@ -1,7 +1,7 @@
 import "server-only";
 
 import { getAnthropic } from "@/lib/ai/client";
-import type { MarketingChannel } from "@/lib/types";
+import type { MarketingAngle, MarketingChannel } from "@/lib/types";
 
 /**
  * Marketing campaign planner — turns an objective into a multi-week plan of
@@ -130,11 +130,14 @@ export async function planCampaign(input: PlanInput): Promise<PlannedItem[]> {
     .slice(0, 12);
 }
 
-/** Draft ONE post for a single channel, tied to a campaign (name + objective). */
+/** Draft ONE post for a single channel, tied to a campaign (name + objective),
+ *  optionally steered by a chosen angle/direction. */
 export async function draftPost(input: {
   channel: MarketingChannel;
   campaignName: string;
   objective: string;
+  /** The chosen angle's approach, or the owner's free-text direction. */
+  direction?: string;
   brief: { company_name: string; business_description: string; core_offer: string; ideal_customer_profile: string };
   styleProfile?: string | null;
 }): Promise<{ title: string; body_md: string }> {
@@ -144,14 +147,17 @@ export async function draftPost(input: {
   const b = input.brief;
 
   const system = [
-    `You are a senior marketing copywriter for ${b.company_name || "the company"}.`,
+    `You are a sharp in-house marketer for ${b.company_name || "the company"} — you write posts that sound like a real founder, not a press release.`,
     b.business_description ? `What they do: ${b.business_description}` : "",
     b.core_offer ? `Core offer: ${b.core_offer}` : "",
     b.ideal_customer_profile ? `Audience: ${b.ideal_customer_profile}` : "",
     input.styleProfile ? `Voice/style to match: ${input.styleProfile}` : "",
     "",
     `Write ONE ${input.channel} post for the campaign below, in the company's voice. ${CHANNEL_GUIDE[input.channel] ?? ""}`,
-    "Write the ACTUAL draft content (ready to edit + post), not a description. Never invent facts, numbers, customers, or claims not implied by the brief. No hype or clickbait.",
+    input.direction ? `TAKE THIS ANGLE: ${input.direction}` : "",
+    "Be SPECIFIC to this exact announcement — use the real facts, names, numbers, and details from the description. One clear idea, concretely told.",
+    "BANNED (never use): 'excited/thrilled to announce', 'proud to', 'game-changer', 'revolutionize', 'cutting-edge', 'unlock', 'leverage', 'synergy', 'in today's fast-paced world', 'we are pleased to', and other generic marketing filler. If it could describe any company, rewrite it.",
+    "Write the ACTUAL draft content (ready to edit + post), not a description. Never invent facts, numbers, customers, or claims not implied by the brief.",
     "",
     "Respond with ONLY this JSON (no fences):",
     '{"title": string, "body_md": string}',
@@ -167,7 +173,7 @@ export async function draftPost(input: {
     messages: [
       {
         role: "user",
-        content: `Campaign: ${input.campaignName}\nObjective: ${input.objective}\n\nWrite the ${input.channel} post now.`,
+        content: `Campaign: ${input.campaignName}\nDescription: ${input.objective}\n\nWrite the ${input.channel} post now.`,
       },
     ],
   });
@@ -181,4 +187,54 @@ export async function draftPost(input: {
     title: str(obj.title).trim().slice(0, 200) || input.campaignName,
     body_md: str(obj.body_md).trim().slice(0, 12000),
   };
+}
+
+/** Propose a few distinct angles for ONE post on a channel, so the owner can
+ *  steer before drafting (or write their own direction). Returns [] on failure. */
+export async function suggestAngles(input: {
+  channel: MarketingChannel;
+  campaignName: string;
+  objective: string;
+  brief: { company_name: string; business_description: string; core_offer: string; ideal_customer_profile: string };
+  styleProfile?: string | null;
+}): Promise<MarketingAngle[]> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = getAnthropic();
+  const b = input.brief;
+
+  const system = [
+    `You are a sharp marketer for ${b.company_name || "the company"} helping choose how to frame ONE ${input.channel} post.`,
+    b.business_description ? `What they do: ${b.business_description}` : "",
+    b.ideal_customer_profile ? `Audience: ${b.ideal_customer_profile}` : "",
+    "",
+    `Propose 3-4 genuinely DIFFERENT angles for this one ${input.channel} post about the campaign below — different leads, emotions, or audiences (e.g. the hard number, the mission, the customer benefit, the behind-the-scenes, a bold claim). Each specific to THIS announcement, not generic.`,
+    "For each angle: a short label (2-4 words), a one-sentence approach (how it frames the post), and an example opening hook (the literal first line, in the company's voice — no clichés like 'excited to announce').",
+    "Never invent facts, numbers, or claims not implied by the description.",
+    "",
+    "Respond with ONLY this JSON (no fences):",
+    '{"angles": [{"label": string, "approach": string, "hook": string}]}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const msg = await client.messages.create({
+    model: MODEL,
+    max_tokens: 1200,
+    system,
+    messages: [{ role: "user", content: `Campaign: ${input.campaignName}\nDescription: ${input.objective}\n\nSuggest the angles now.` }],
+  });
+  const text = msg.content.map((bl) => (bl.type === "text" ? bl.text : "")).join("").trim();
+  const obj = parseJsonObject(text);
+  if (!obj) return [];
+  const str = (v: unknown): string => (typeof v === "string" ? v : "");
+  const raw = Array.isArray(obj.angles) ? (obj.angles as Record<string, unknown>[]) : [];
+  return raw
+    .map((a) => ({
+      label: str(a.label).trim().slice(0, 60),
+      approach: str(a.approach).trim().slice(0, 300),
+      hook: str(a.hook).trim().slice(0, 300),
+    }))
+    .filter((a) => a.approach.length > 0 || a.hook.length > 0)
+    .slice(0, 4);
 }

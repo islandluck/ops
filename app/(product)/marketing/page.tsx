@@ -28,6 +28,7 @@ import {
   createMarketingItemAction,
   deleteCampaignAction,
   deleteMarketingItemAction,
+  draftCampaignPostAction,
   generateCampaignPostsAction,
   growthBoostMarketingItemAction,
   listCampaignsAction,
@@ -36,11 +37,13 @@ import {
   publishMarketingItemAction,
   scheduleMarketingItemAction,
   setMarketingItemPostedAction,
+  suggestPostAnglesAction,
   updateCampaignAction,
   updateMarketingItemAction,
 } from "@/app/actions";
 import type {
   CampaignProgress,
+  MarketingAngle,
   MarketingCampaign,
   MarketingChannel,
   MarketingItem,
@@ -440,7 +443,6 @@ function ItemDialog({
 function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (id?: string) => void }) {
   const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
-  const [weeks, setWeeks] = useState(2);
   const [channels, setChannels] = useState<MarketingChannel[]>(["x", "linkedin", "blog"]);
   const [busy, setBusy] = useState<"plan" | "empty" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -449,7 +451,6 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
     if (!open) return;
     setName("");
     setObjective("");
-    setWeeks(2);
     setChannels(["x", "linkedin", "blog"]);
     setError(null);
   }, [open]);
@@ -464,7 +465,7 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
     }
     setBusy("plan");
     setError(null);
-    const r = await planCampaignAction({ name, objective, weeks, channels });
+    const r = await planCampaignAction({ name, objective, channels });
     setBusy(null);
     if (r.ok) {
       onCreated(r.campaignId);
@@ -501,42 +502,29 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
             placeholder="What's this campaign about? Who's it for, what's the message, any key details?"
           />
         </div>
-        <div className="flex flex-wrap items-end gap-4">
-          <div>
-            <Label>Length</Label>
-            <select
-              value={weeks}
-              onChange={(e) => setWeeks(Number(e.target.value))}
-              className="mt-1 h-9 rounded-lg border border-border bg-card px-2 text-sm"
-            >
-              {[1, 2, 3, 4, 6, 8].map((w) => (
-                <option key={w} value={w}>
-                  {w} week{w === 1 ? "" : "s"}
-                </option>
-              ))}
-            </select>
+        <div>
+          <Label>Channels</Label>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {CHANNELS.map((c) => {
+              const on = channels.includes(c.key);
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => toggle(c.key)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs transition",
+                    on ? "border-primary bg-primary/12 text-primary" : "border-border text-muted-foreground hover:border-foreground",
+                  )}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
           </div>
-          <div>
-            <Label>Channels</Label>
-            <div className="mt-1 flex flex-wrap gap-1.5">
-              {CHANNELS.map((c) => {
-                const on = channels.includes(c.key);
-                return (
-                  <button
-                    key={c.key}
-                    type="button"
-                    onClick={() => toggle(c.key)}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-xs transition",
-                      on ? "border-primary bg-primary/12 text-primary" : "border-border text-muted-foreground hover:border-foreground",
-                    )}
-                  >
-                    {c.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Drafts one targeted post per channel. Open the campaign to refine each with the guided generator.
+          </p>
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
@@ -546,7 +534,7 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
           </Button>
           <Button onClick={plan} disabled={busy !== null}>
             {busy === "plan" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            Plan with AI
+            Draft posts
           </Button>
         </div>
       </div>
@@ -555,6 +543,154 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
 }
 
 /* --------------------------- campaign detail ----------------------------- */
+
+function GuidedGenerate({
+  campaignId,
+  channel,
+  onClose,
+  onCreated,
+}: {
+  campaignId: string;
+  channel: MarketingChannel;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [step, setStep] = useState<"angles" | "draft">("angles");
+  const [angles, setAngles] = useState<MarketingAngle[] | null>(null);
+  const [custom, setCustom] = useState("");
+  const [direction, setDirection] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ title: string; body_md: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadAngles = useCallback(async () => {
+    setAngles(null);
+    setError(null);
+    const r = await suggestPostAnglesAction(campaignId, channel);
+    if (r.ok) setAngles(r.angles ?? []);
+    else {
+      setAngles([]);
+      setError(r.error ?? "Couldn't suggest angles.");
+    }
+  }, [campaignId, channel]);
+  useEffect(() => {
+    loadAngles();
+  }, [loadAngles]);
+
+  async function generate(dir: string | null) {
+    setDirection(dir);
+    setBusy(true);
+    setError(null);
+    setStep("draft");
+    const r = await draftCampaignPostAction(campaignId, channel, dir ?? undefined);
+    setBusy(false);
+    if (r.ok) setDraft({ title: r.title ?? "", body_md: r.body_md ?? "" });
+    else setError(r.error ?? "Couldn't draft the post.");
+  }
+  async function useDraft() {
+    if (!draft) return;
+    setBusy(true);
+    await createMarketingItemAction({ campaign_id: campaignId, channel, title: draft.title, body_md: draft.body_md });
+    setBusy(false);
+    onCreated();
+    onClose();
+  }
+
+  const isLong = channel === "blog" || channel === "newsletter";
+
+  return (
+    <Dialog open onClose={onClose} title={`New ${CHANNEL_LABEL[channel]} post`} className="max-w-2xl">
+      <div className="flex max-h-[76vh] flex-col gap-3 overflow-y-auto pr-1">
+        {step === "angles" ? (
+          <>
+            <p className="text-[12px] text-muted-foreground">Pick an angle, or describe your own direction — then I&apos;ll draft it.</p>
+            {angles === null ? (
+              <div className="flex items-center gap-2 py-6 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" /> Thinking of angles…
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {angles.map((a, i) => (
+                  <button
+                    key={i}
+                    onClick={() => generate(`${a.label}: ${a.approach}`)}
+                    disabled={busy}
+                    className="rounded-lg border border-border p-3 text-left transition hover:border-primary hover:bg-accent/40 disabled:opacity-50"
+                  >
+                    <div className="text-sm font-semibold">{a.label}</div>
+                    {a.approach && <div className="mt-0.5 text-[12px] text-muted-foreground">{a.approach}</div>}
+                    {a.hook && <div className="mt-1 text-[12px] italic text-foreground/80">&ldquo;{a.hook}&rdquo;</div>}
+                  </button>
+                ))}
+                <button onClick={loadAngles} disabled={busy} className="self-start text-[12px] font-medium text-primary hover:underline disabled:opacity-50">
+                  More angles
+                </button>
+              </div>
+            )}
+            <div>
+              <Label>Or your own direction</Label>
+              <Textarea
+                rows={2}
+                value={custom}
+                onChange={(e) => setCustom(e.target.value)}
+                placeholder="e.g. Lead with the $325k and what it unlocks; keep it humble"
+              />
+              <div className="mt-2 flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => generate(null)} disabled={busy}>
+                  Just draft it
+                </Button>
+                <Button size="sm" onClick={() => generate(custom.trim() || null)} disabled={busy || !custom.trim()}>
+                  <Sparkles className="h-4 w-4" /> Draft this
+                </Button>
+              </div>
+            </div>
+            {error && <p className="text-sm text-red-600">{error}</p>}
+          </>
+        ) : (
+          <>
+            {busy && !draft ? (
+              <div className="flex items-center gap-2 py-8 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" /> Drafting…
+              </div>
+            ) : (
+              <>
+                {draft && isLong && (
+                  <div>
+                    <Label>Title</Label>
+                    <Input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+                  </div>
+                )}
+                <div>
+                  <Label>Draft</Label>
+                  <Textarea
+                    rows={channel === "blog" ? 12 : 7}
+                    value={draft?.body_md ?? ""}
+                    onChange={(e) => draft && setDraft({ ...draft, body_md: e.target.value })}
+                    className={cn(channel === "blog" && "font-mono text-[12.5px]")}
+                  />
+                </div>
+                {error && <p className="text-sm text-red-600">{error}</p>}
+                <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+                  <Button variant="ghost" size="sm" onClick={() => setStep("angles")} disabled={busy}>
+                    <ChevronLeft className="h-4 w-4" /> Try another angle
+                  </Button>
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={() => generate(direction)} disabled={busy}>
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Regenerate
+                    </Button>
+                    <Button size="sm" onClick={useDraft} disabled={busy || !draft?.body_md.trim()}>
+                      <Check className="h-4 w-4" /> Use this
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </Dialog>
+  );
+}
 
 function CampaignDetail({
   campaign,
@@ -572,6 +708,7 @@ function CampaignDetail({
   const [launch, setLaunch] = useState(toDateInput(campaign.starts_at));
   const [items, setItems] = useState<MarketingItem[] | null>(null);
   const [openItem, setOpenItem] = useState<MarketingItem | null>(null);
+  const [guided, setGuided] = useState<MarketingChannel | null>(null);
   const [genBusy, setGenBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -594,13 +731,6 @@ function CampaignDetail({
       objective,
       starts_at: launch ? new Date(launch).toISOString() : null,
     });
-    onChanged();
-  }
-  async function generate(channel: MarketingChannel) {
-    setGenBusy(channel);
-    await generateCampaignPostsAction(campaign.id, [channel]);
-    setGenBusy(null);
-    refresh();
     onChanged();
   }
   async function generateAll() {
@@ -659,8 +789,8 @@ function CampaignDetail({
                 </span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Button size="sm" variant="secondary" className="h-7 px-2 text-xs" onClick={() => generate(c.key)} disabled={genBusy !== null}>
-                  {genBusy === c.key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                <Button size="sm" variant="secondary" className="h-7 px-2 text-xs" onClick={() => setGuided(c.key)} disabled={genBusy !== null}>
+                  <Sparkles className="h-3.5 w-3.5" />
                   Generate
                 </Button>
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => addEmpty(c.key)}>
@@ -684,6 +814,17 @@ function CampaignDetail({
       })}
 
       <ItemDialog item={openItem} company={company} onClose={() => setOpenItem(null)} onChanged={refresh} />
+      {guided && (
+        <GuidedGenerate
+          campaignId={campaign.id}
+          channel={guided}
+          onClose={() => setGuided(null)}
+          onCreated={() => {
+            refresh();
+            onChanged();
+          }}
+        />
+      )}
     </div>
   );
 }
