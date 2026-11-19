@@ -387,6 +387,8 @@ import {
   createItem,
   deleteCampaign,
   deleteItem,
+  generateCampaignPosts,
+  growthBoostMarketingItem,
   listCampaigns,
   listItems,
   planAndCreateCampaign,
@@ -396,6 +398,7 @@ import {
   updateCampaign,
   updateItem,
   type CampaignInput,
+  type GrowthBoostResult,
   type ItemInput,
 } from "@/lib/marketing";
 import type { MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
@@ -4993,5 +4996,34 @@ export async function setMarketingItemPostedAction(id: string, posted: boolean) 
     return await setItemPosted(ws, id, posted);
   } catch {
     return { ok: false as const };
+  }
+}
+
+/** Generate one post per requested channel for a campaign. */
+export async function generateCampaignPostsAction(campaignId: string, channels: MarketingChannel[]) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await generateCampaignPosts(ws, campaignId, channels);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't generate posts." };
+  }
+}
+
+/** Run the Growth Marketer on a marketing item (same boost as tweets). */
+export async function growthBoostMarketingItemAction(
+  id: string,
+): Promise<{ ok: boolean; result?: GrowthBoostResult; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await growthBoostMarketingItem(ws, id);
+    return r.ok ? { ok: true, result: r.result } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't run the growth marketer." };
   }
 }

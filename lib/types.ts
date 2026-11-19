@@ -940,10 +940,12 @@ export interface Application {
 
 /* ------------------------------- marketing ------------------------------- */
 
-/** A marketing distribution channel. X = auto-publish; linkedin = draft/preview/
- *  copy (manual, no API push); blog = scheduled to the hosted Pages site. */
-export type MarketingChannel = "x" | "linkedin" | "blog";
+/** A marketing distribution channel. X = auto-publish; linkedin + newsletter =
+ *  draft/preview/copy (manual, no API push); blog = scheduled to hosted Pages. */
+export type MarketingChannel = "x" | "linkedin" | "blog" | "newsletter";
 export type CampaignStatus = "draft" | "active" | "done" | "archived";
+/** Table at-a-glance progress, derived from a campaign's posts. */
+export type CampaignProgress = "not_started" | "drafting" | "scheduled" | "published";
 /** idea = planned, no content yet; drafted = content ready; scheduled = has a
  *  time (X/blog materialized to a task/page, linkedin = a reminder); published =
  *  live (X posted / blog live / linkedin marked posted). */
@@ -964,6 +966,10 @@ export interface MarketingCampaign {
   item_count?: number;
   scheduled_count?: number;
   published_count?: number;
+  /** Derived at-a-glance status for the table. */
+  progress?: CampaignProgress;
+  /** Post counts per channel (for the table's channel columns). */
+  posts_by_channel?: Record<MarketingChannel, number>;
 }
 
 /** One piece of marketing content on the calendar — belongs to a campaign or

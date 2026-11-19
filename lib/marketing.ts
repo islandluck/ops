@@ -8,10 +8,18 @@ import { createHostedPost } from "@/lib/pages";
 import { getPlanningContext, getXStyleProfile } from "@/lib/db/queries";
 import { markdownToHtml } from "@/lib/content/format";
 import { postSingleTweetNow, scheduleSingleTweet } from "@/lib/agents/social-bulk";
-import { planCampaign } from "@/lib/ai/marketing";
+import { draftPost, planCampaign } from "@/lib/ai/marketing";
+import { growthBoostTweet } from "@/lib/ai/style";
+import { growthBoostLongform } from "@/lib/ai/content";
 import { runWithUsage } from "@/lib/ai/usage";
 import { fitToX } from "@/lib/social/x-post";
-import type { CampaignStatus, MarketingChannel, MarketingCampaign, MarketingItem } from "@/lib/types";
+import type {
+  CampaignProgress,
+  CampaignStatus,
+  MarketingChannel,
+  MarketingCampaign,
+  MarketingItem,
+} from "@/lib/types";
 
 /**
  * Marketing engine — campaigns + a cross-channel content calendar. A campaign
@@ -74,24 +82,54 @@ export async function listCampaigns(workspaceId: string): Promise<MarketingCampa
   if (!rows.length) return [];
   const ids = rows.map((r) => r.id);
   const items = await db
-    .select({ campaign_id: marketingItems.campaign_id, status: marketingItems.status })
+    .select({ campaign_id: marketingItems.campaign_id, status: marketingItems.status, channel: marketingItems.channel })
     .from(marketingItems)
     .where(and(eq(marketingItems.workspace_id, workspaceId), inArray(marketingItems.campaign_id, ids)));
-  const total = new Map<string, number>();
-  const scheduled = new Map<string, number>();
-  const published = new Map<string, number>();
+
+  const emptyChannels = (): Record<MarketingChannel, number> => ({ x: 0, linkedin: 0, blog: 0, newsletter: 0 });
+  type Agg = { total: number; scheduled: number; published: number; byChannel: Record<MarketingChannel, number> };
+  const agg = new Map<string, Agg>();
   for (const it of items) {
     if (!it.campaign_id) continue;
-    total.set(it.campaign_id, (total.get(it.campaign_id) ?? 0) + 1);
-    if (it.status === "scheduled") scheduled.set(it.campaign_id, (scheduled.get(it.campaign_id) ?? 0) + 1);
-    if (it.status === "published") published.set(it.campaign_id, (published.get(it.campaign_id) ?? 0) + 1);
+    let a = agg.get(it.campaign_id);
+    if (!a) {
+      a = { total: 0, scheduled: 0, published: 0, byChannel: emptyChannels() };
+      agg.set(it.campaign_id, a);
+    }
+    a.total++;
+    a.byChannel[it.channel] = (a.byChannel[it.channel] ?? 0) + 1;
+    if (it.status === "scheduled") a.scheduled++;
+    if (it.status === "published") a.published++;
   }
-  return rows.map((r) => ({
-    ...toCampaign(r),
-    item_count: total.get(r.id) ?? 0,
-    scheduled_count: scheduled.get(r.id) ?? 0,
-    published_count: published.get(r.id) ?? 0,
-  }));
+
+  function progressOf(r: CampaignRow, a: Agg | undefined): CampaignProgress {
+    if (r.status === "done") return "published";
+    if (!a || a.total === 0) return "not_started";
+    if (a.published === a.total) return "published";
+    if (a.scheduled > 0) return "scheduled";
+    return "drafting";
+  }
+
+  return rows.map((r) => {
+    const a = agg.get(r.id);
+    return {
+      ...toCampaign(r),
+      item_count: a?.total ?? 0,
+      scheduled_count: a?.scheduled ?? 0,
+      published_count: a?.published ?? 0,
+      progress: progressOf(r, a),
+      posts_by_channel: a?.byChannel ?? emptyChannels(),
+    };
+  });
+}
+
+export async function getCampaign(workspaceId: string, id: string): Promise<MarketingCampaign | null> {
+  const [r] = await db
+    .select()
+    .from(marketingCampaigns)
+    .where(and(eq(marketingCampaigns.workspace_id, workspaceId), eq(marketingCampaigns.id, id)))
+    .limit(1);
+  return r ? toCampaign(r) : null;
 }
 
 export interface CampaignInput {
@@ -207,6 +245,33 @@ export async function planAndCreateCampaign(
   return { ok: true, campaign: created.campaign, items: rows.length };
 }
 
+/** Generate one post per requested channel for an existing campaign (metered). */
+export async function generateCampaignPosts(
+  workspaceId: string,
+  campaignId: string,
+  channels: MarketingChannel[],
+): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
+  const campaign = await getCampaign(workspaceId, campaignId);
+  if (!campaign) return { ok: false, error: "Campaign not found." };
+  const chans = channels.filter((c): c is MarketingChannel => ["x", "linkedin", "blog", "newsletter"].includes(c));
+  if (!chans.length) return { ok: false, error: "Pick at least one channel." };
+  const { brief } = await getPlanningContext(workspaceId);
+  const styleProfile = await getXStyleProfile(workspaceId);
+  let created = 0;
+  for (const channel of chans) {
+    try {
+      const post = await runWithUsage(workspaceId, "marketing-draft", () =>
+        draftPost({ channel, campaignName: campaign.name, objective: campaign.objective, brief, styleProfile }),
+      );
+      await createItem(workspaceId, { campaign_id: campaignId, channel, title: post.title, body_md: post.body_md });
+      created++;
+    } catch {
+      /* skip a channel that fails; keep going */
+    }
+  }
+  return created > 0 ? { ok: true, created } : { ok: false, error: "Couldn't generate posts — try again." };
+}
+
 /* --------------------------------- items --------------------------------- */
 
 export async function listItems(
@@ -276,6 +341,39 @@ export async function updateItem(
 export async function deleteItem(workspaceId: string, id: string): Promise<{ ok: boolean }> {
   await db.delete(marketingItems).where(and(eq(marketingItems.workspace_id, workspaceId), eq(marketingItems.id, id)));
   return { ok: true };
+}
+
+/** Growth-Marketer boost for a marketing item — the same pass used on tweets.
+ *  X → sharper option takes; other channels → a longform viral rewrite. */
+export interface GrowthBoostResult {
+  kind: "options" | "rewrite";
+  options?: { text: string; note: string }[];
+  body_md?: string;
+  changes?: string[];
+}
+export async function growthBoostMarketingItem(
+  workspaceId: string,
+  id: string,
+): Promise<{ ok: true; result: GrowthBoostResult } | { ok: false; error: string }> {
+  const item = await getItemRow(workspaceId, id);
+  if (!item) return { ok: false, error: "Item not found." };
+  if (!item.body_md.trim()) return { ok: false, error: "Write the post first." };
+  const { brief } = await getPlanningContext(workspaceId);
+  const styleProfile = await getXStyleProfile(workspaceId);
+  try {
+    if (item.channel === "x") {
+      const options = await runWithUsage(workspaceId, "marketing-boost", () =>
+        growthBoostTweet(item.body_md, { company: brief.company_name, styleProfile }),
+      );
+      return { ok: true, result: { kind: "options", options: options.map((o) => ({ text: o.boosted, note: o.note })) } };
+    }
+    const boosted = await runWithUsage(workspaceId, "marketing-boost", () =>
+      growthBoostLongform({ title: item.title, dek: "", body_md: item.body_md }, { brief, styleProfile }),
+    );
+    return { ok: true, result: { kind: "rewrite", body_md: boosted.body_md, changes: boosted.changes } };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't run the growth marketer." };
+  }
 }
 
 async function getItemRow(workspaceId: string, id: string): Promise<ItemRow | null> {
