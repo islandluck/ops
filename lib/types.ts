@@ -898,6 +898,12 @@ export interface Candidate {
   created_at: string;
 }
 
+/** Structured AI-screening detail (strengths/concerns), stored on the application. */
+export interface ApplicationEval {
+  strengths: string[];
+  concerns: string[];
+}
+
 /** A candidate's application to one job — the per-job pipeline row (stage + AI eval). */
 export interface Application {
   id: string;
@@ -907,9 +913,12 @@ export interface Application {
   stage: ApplicationStage;
   cover_note: string;
   answers: { question: string; answer: string }[];
-  /** Phase 2 AI screening (null until scored). */
+  /** AI screening (null until scored): 0-100 fit score + one-line summary + a
+   *  recommend-for-interview flag + structured strengths/concerns. */
   ai_score: number | null;
   ai_summary: string;
+  ai_recommend: boolean | null;
+  ai_eval: ApplicationEval;
   created_at: string;
   updated_at: string;
   // Denormalized candidate fields for the pipeline UI:

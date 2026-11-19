@@ -6,10 +6,13 @@ import { db } from "@/lib/db";
 import { applications, candidates, jobPosts, workspaces } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { draftJobDescription, type JobDraft } from "@/lib/ai/job";
+import { screenCandidate, type ScreenResult } from "@/lib/ai/screen";
 import { runWithUsage } from "@/lib/ai/usage";
-import { resumeSignedUrl, uploadResumeBytes } from "@/lib/talent/storage";
+import { extractDocText } from "@/lib/deepdive/extract";
+import { downloadResumeBytes, resumeSignedUrl, uploadResumeBytes } from "@/lib/talent/storage";
 import type {
   Application,
+  ApplicationEval,
   ApplicationStage,
   Candidate,
   EmploymentType,
@@ -134,6 +137,8 @@ function toApplication(r: ApplicationRow, c?: CandidateRow | null, jobTitle?: st
     answers: (r.answers ?? []) as { question: string; answer: string }[],
     ai_score: r.ai_score,
     ai_summary: r.ai_summary,
+    ai_recommend: r.ai_recommend,
+    ai_eval: (r.ai_eval ?? { strengths: [], concerns: [] }) as ApplicationEval,
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
     candidate_name: c?.name,
@@ -538,4 +543,92 @@ export async function getApplicationResumeUrl(
     .limit(1);
   if (!row?.resume_path) return null;
   return resumeSignedUrl(row.resume_path);
+}
+
+/* ------------------------------ AI screening ----------------------------- */
+
+/**
+ * Screen one application against its job — an AI fit score (0-100) + summary +
+ * strengths/concerns + a recommend-for-interview flag, from the JD, the
+ * candidate's cover note + screening answers, and their résumé text (read from
+ * the private bucket). Advisory only: it NEVER changes the stage.
+ */
+export async function screenApplication(
+  workspaceId: string,
+  applicationId: string,
+): Promise<{ ok: true; result: ScreenResult } | { ok: false; error: string }> {
+  const [row] = await db
+    .select({ a: applications, c: candidates, j: jobPosts })
+    .from(applications)
+    .leftJoin(candidates, eq(applications.candidate_id, candidates.id))
+    .leftJoin(jobPosts, eq(applications.job_id, jobPosts.id))
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)))
+    .limit(1);
+  if (!row || !row.j) return { ok: false, error: "Application not found." };
+
+  let resumeText = "";
+  if (row.c?.resume_path) {
+    const dl = await downloadResumeBytes(row.c.resume_path);
+    if (dl) {
+      try {
+        resumeText = await extractDocText(row.c.resume_path, dl.mime, dl.bytes);
+      } catch {
+        resumeText = "";
+      }
+    }
+  }
+
+  const { brief } = await getPlanningContext(workspaceId);
+  let result: ScreenResult;
+  try {
+    result = await runWithUsage(workspaceId, "talent-screen", () =>
+      screenCandidate({
+        job: {
+          title: row.j!.title,
+          description_md: row.j!.description_md,
+          screening_questions: (row.j!.screening_questions ?? []) as { prompt: string }[],
+        },
+        application: {
+          cover_note: row.a.cover_note,
+          answers: (row.a.answers ?? []) as { question: string; answer: string }[],
+        },
+        resumeText,
+        brief,
+      }),
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Screening failed." };
+  }
+
+  await db
+    .update(applications)
+    .set({
+      ai_score: result.score,
+      ai_summary: result.summary,
+      ai_recommend: result.recommend,
+      ai_eval: { strengths: result.strengths, concerns: result.concerns } as ApplicationEval,
+      updated_at: new Date(),
+    })
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)));
+  return { ok: true, result };
+}
+
+/** Screen every application (or only the unscored ones) for a job. Bounded per run. */
+export async function screenJobApplicants(
+  workspaceId: string,
+  jobId: string,
+  opts: { onlyUnscored?: boolean } = {},
+): Promise<{ screened: number }> {
+  const rows = await db
+    .select({ id: applications.id, ai_score: applications.ai_score })
+    .from(applications)
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.job_id, jobId)))
+    .orderBy(desc(applications.created_at));
+  const targets = rows.filter((r) => (opts.onlyUnscored ? r.ai_score == null : true)).slice(0, 30);
+  let screened = 0;
+  for (const t of targets) {
+    const r = await screenApplication(workspaceId, t.id);
+    if (r.ok) screened++;
+  }
+  return { screened };
 }

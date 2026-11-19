@@ -37,6 +37,7 @@ import type {
   DeepDiveSourceStatus,
   DeepDiveStatus,
   DeepDiveUsage,
+  ApplicationEval,
   ApplicationStage,
   CandidateSource,
   EmploymentType,
@@ -1505,9 +1506,12 @@ export const applications = pgTable(
     stage: text("stage").$type<ApplicationStage>().notNull().default("applied"),
     cover_note: text("cover_note").notNull().default(""),
     answers: jsonb("answers").$type<{ question: string; answer: string }[]>().notNull().default([]),
-    /** Phase 2 AI screening (null until scored). */
+    /** AI screening (null until scored): 0-100 fit score, one-line summary, a
+     *  recommend-for-interview flag, and structured strengths/concerns. */
     ai_score: integer("ai_score"),
     ai_summary: text("ai_summary").notNull().default(""),
+    ai_recommend: boolean("ai_recommend"),
+    ai_eval: jsonb("ai_eval").$type<ApplicationEval>().notNull().default({ strengths: [], concerns: [] }),
     created_at: createdAt,
     updated_at: updatedAt,
   },

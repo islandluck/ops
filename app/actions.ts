@@ -369,6 +369,8 @@ import {
   listApplications,
   listJobs,
   moveApplicationStage,
+  screenApplication,
+  screenJobApplicants,
   setJobStatus,
   setWorkspaceCompliance,
   updateJob,
@@ -4719,5 +4721,32 @@ export async function getResumeUrlAction(applicationId: string): Promise<{ url: 
     return { url: await getApplicationResumeUrl(ws, applicationId) };
   } catch {
     return { url: null };
+  }
+}
+
+/** AI-screen one application (fit score + strengths/concerns + recommend). */
+export async function screenApplicationAction(applicationId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await screenApplication(ws, applicationId);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Screening failed." };
+  }
+}
+
+/** AI-screen all not-yet-scored applications for a job. */
+export async function screenJobApplicantsAction(jobId: string): Promise<{ screened: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { screened: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { screened: 0 };
+  try {
+    return await screenJobApplicants(ws, jobId, { onlyUnscored: true });
+  } catch {
+    return { screened: 0 };
   }
 }

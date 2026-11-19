@@ -50,6 +50,18 @@ export async function uploadResumeBytes(
   return { path };
 }
 
+/** Download a résumé's bytes (server-side, e.g. for AI screening text extraction). */
+export async function downloadResumeBytes(path: string): Promise<{ bytes: Buffer; mime: string } | null> {
+  try {
+    const supa = serviceClient();
+    const { data, error } = await supa.storage.from(RESUME_BUCKET).download(path);
+    if (error || !data) return null;
+    return { bytes: Buffer.from(await data.arrayBuffer()), mime: data.type || "application/octet-stream" };
+  } catch {
+    return null;
+  }
+}
+
 /** A short-lived signed URL the owner can open to view a résumé (default 10 min). */
 export async function resumeSignedUrl(path: string, expiresIn = 600): Promise<string | null> {
   try {

@@ -11,6 +11,7 @@ import {
   Loader2,
   Plus,
   Sparkles,
+  Star,
   Trash2,
   Users,
 } from "lucide-react";
@@ -30,6 +31,8 @@ import {
   listApplicationsAction,
   listJobsAction,
   moveApplicationStageAction,
+  screenApplicationAction,
+  screenJobApplicantsAction,
   setJobStatusAction,
   setWorkspaceComplianceAction,
   updateJobAction,
@@ -54,6 +57,13 @@ const STAGES: { key: ApplicationStage; label: string; tint: string }[] = [
   { key: "hired", label: "Hired", tint: "text-emerald-600 dark:text-emerald-400" },
   { key: "rejected", label: "Rejected", tint: "text-muted-foreground" },
 ];
+
+/** Color band for an AI fit score chip. */
+function scoreTone(score: number): string {
+  if (score >= 85) return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+  if (score >= 60) return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400";
+  return "border-border bg-muted/60 text-muted-foreground";
+}
 
 const STATUS_META: Record<JobPost["status"], { label: string; cls: string }> = {
   draft: { label: "Draft", cls: "border-border bg-muted/50 text-muted-foreground" },
@@ -431,8 +441,137 @@ function ResumeButton({ applicationId }: { applicationId: string }) {
   );
 }
 
+function ApplicationDialog({
+  app,
+  onClose,
+  onMove,
+  onRescreen,
+}: {
+  app: Application | null;
+  onClose: () => void;
+  onMove: (id: string, stage: ApplicationStage) => void;
+  onRescreen: (id: string) => Promise<void>;
+}) {
+  const [rescreening, setRescreening] = useState(false);
+  if (!app) return null;
+  const scored = app.ai_score != null;
+
+  async function rescreen() {
+    setRescreening(true);
+    await onRescreen(app!.id);
+    setRescreening(false);
+  }
+
+  return (
+    <Dialog open={!!app} onClose={onClose} title={app.candidate_name || "Applicant"} className="max-w-xl">
+      <div className="flex max-h-[72vh] flex-col gap-3 overflow-y-auto pr-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
+          {app.candidate_email && <span>{app.candidate_email}</span>}
+          {app.candidate_phone && <span>· {app.candidate_phone}</span>}
+          {app.resume_path && (
+            <span>
+              · <ResumeButton applicationId={app.id} />
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] text-muted-foreground">Stage</span>
+          <select
+            value={app.stage}
+            onChange={(e) => onMove(app.id, e.target.value as ApplicationStage)}
+            className="rounded-md border border-border bg-card px-2 py-1 text-[12px]"
+          >
+            {STAGES.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">AI screening</span>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={rescreen} disabled={rescreening}>
+              {rescreening ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {scored ? "Re-screen" : "Screen now"}
+            </Button>
+          </div>
+          {scored ? (
+            <div className="mt-2 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-sm font-semibold tabular-nums",
+                    scoreTone(app.ai_score ?? 0),
+                  )}
+                >
+                  {app.ai_score}/100
+                </span>
+                {app.ai_recommend && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                    <Star className="h-3 w-3" /> Recommend interview
+                  </span>
+                )}
+              </div>
+              {app.ai_summary && <p className="text-[13px] leading-relaxed">{app.ai_summary}</p>}
+              {app.ai_eval.strengths.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">Strengths</p>
+                  <ul className="mt-0.5 list-disc pl-4 text-[12px] text-muted-foreground">
+                    {app.ai_eval.strengths.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {app.ai_eval.concerns.length > 0 && (
+                <div>
+                  <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">Concerns</p>
+                  <ul className="mt-0.5 list-disc pl-4 text-[12px] text-muted-foreground">
+                    {app.ai_eval.concerns.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="mt-2 text-[12px] text-muted-foreground">
+              Not screened yet — score this candidate against the role.
+            </p>
+          )}
+        </div>
+
+        {app.cover_note && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Why they&apos;re a fit</p>
+            <p className="mt-1 whitespace-pre-wrap text-[13px] leading-relaxed">{app.cover_note}</p>
+          </div>
+        )}
+
+        {app.answers.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Screening answers</p>
+            {app.answers.map((qa, i) => (
+              <div key={i} className="rounded-lg border border-border bg-muted/20 p-2">
+                <p className="text-[12px] font-medium">{qa.question}</p>
+                <p className="mt-0.5 whitespace-pre-wrap text-[12px] text-muted-foreground">{qa.answer}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
   const [apps, setApps] = useState<Application[] | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [screening, setScreening] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setApps(await listApplicationsAction(job.id));
@@ -446,6 +585,22 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
     await moveApplicationStageAction(appId, stage);
   }
 
+  async function rescreen(appId: string) {
+    await screenApplicationAction(appId);
+    await refresh();
+  }
+
+  async function screenAll() {
+    setScreening(true);
+    setNote(null);
+    const r = await screenJobApplicantsAction(job.id);
+    setScreening(false);
+    await refresh();
+    setNote(
+      r.screened > 0 ? `Screened ${r.screened} new applicant${r.screened === 1 ? "" : "s"}.` : "Everyone is already screened.",
+    );
+  }
+
   const byStage = useMemo(() => {
     const map: Record<ApplicationStage, Application[]> = {
       applied: [],
@@ -456,8 +611,13 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
       rejected: [],
     };
     for (const a of apps ?? []) map[a.stage].push(a);
+    // Rank within each column: recommended first, then by score (unscored last).
+    const rank = (a: Application) => (a.ai_recommend ? 1_000_000 : 0) + (a.ai_score ?? -1);
+    for (const k of Object.keys(map) as ApplicationStage[]) map[k].sort((x, y) => rank(y) - rank(x));
     return map;
   }, [apps]);
+
+  const openApp = apps?.find((a) => a.id === openId) ?? null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -465,12 +625,19 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ChevronLeft className="h-4 w-4" /> All roles
         </Button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h2 className="truncate text-base font-semibold">{job.title}</h2>
           <p className="text-[11px] text-muted-foreground">
             {apps ? `${apps.length} applicant${apps.length === 1 ? "" : "s"}` : "Loading…"}
+            {note && <span className="ml-1 text-emerald-600 dark:text-emerald-400">· {note}</span>}
           </p>
         </div>
+        {apps && apps.length > 0 && (
+          <Button size="sm" variant="secondary" onClick={screenAll} disabled={screening}>
+            {screening ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Screen applicants
+          </Button>
+        )}
       </div>
 
       {apps === null ? (
@@ -498,11 +665,41 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
               <div className="flex flex-col gap-2">
                 {byStage[st.key].map((a) => (
                   <Card key={a.id} className="p-2.5">
-                    <div className="truncate text-sm font-medium">{a.candidate_name || "—"}</div>
-                    <div className="truncate text-[11px] text-muted-foreground">{a.candidate_email}</div>
-                    {a.cover_note && <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{a.cover_note}</p>}
+                    <button type="button" className="block w-full text-left" onClick={() => setOpenId(a.id)}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{a.candidate_name || "—"}</div>
+                          <div className="truncate text-[11px] text-muted-foreground">{a.candidate_email}</div>
+                        </div>
+                        {a.ai_score != null && (
+                          <span
+                            className={cn(
+                              "shrink-0 rounded-full border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums",
+                              scoreTone(a.ai_score),
+                            )}
+                            title="AI fit score"
+                          >
+                            {a.ai_score}
+                          </span>
+                        )}
+                      </div>
+                      {a.ai_recommend && (
+                        <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+                          <Star className="h-2.5 w-2.5" /> Interview
+                        </span>
+                      )}
+                      {a.ai_summary ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{a.ai_summary}</p>
+                      ) : a.cover_note ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{a.cover_note}</p>
+                      ) : null}
+                    </button>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      {a.resume_path ? <ResumeButton applicationId={a.id} /> : <span className="text-[11px] text-muted-foreground">No résumé</span>}
+                      {a.resume_path ? (
+                        <ResumeButton applicationId={a.id} />
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">No résumé</span>
+                      )}
                       <select
                         value={a.stage}
                         onChange={(e) => move(a.id, e.target.value as ApplicationStage)}
@@ -522,6 +719,8 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
           ))}
         </div>
       )}
+
+      <ApplicationDialog app={openApp} onClose={() => setOpenId(null)} onMove={move} onRescreen={rescreen} />
     </div>
   );
 }
