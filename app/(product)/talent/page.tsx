@@ -941,7 +941,21 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
           </p>
         </Card>
       ) : (
-        <div className="flex gap-3 overflow-x-auto pb-2">
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { label: "Applicants", value: apps.length },
+              { label: "AI-recommended", value: apps.filter((a) => a.ai_recommend).length },
+              { label: "Interviewing", value: byStage.interview.length + byStage.offer.length },
+              { label: "Hired", value: byStage.hired.length },
+            ].map((t) => (
+              <Card key={t.label} className="p-2.5">
+                <div className="text-lg font-semibold tabular-nums">{t.value}</div>
+                <div className="text-[11px] text-muted-foreground">{t.label}</div>
+              </Card>
+            ))}
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2">
           {STAGES.map((st) => (
             <div key={st.key} className="flex w-64 shrink-0 flex-col gap-2">
               <div className="flex items-center justify-between px-1">
@@ -1003,6 +1017,7 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
               </div>
             </div>
           ))}
+          </div>
         </div>
       )}
 
