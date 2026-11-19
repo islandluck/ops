@@ -364,7 +364,9 @@ import {
   deleteJob,
   draftCandidateEmail,
   draftJob,
+  draftScoutOutreach,
   getApplicationResumeUrl,
+  scoutForJob,
   getCareersSlug,
   getWorkspaceCompliance,
   listApplications,
@@ -378,7 +380,7 @@ import {
   updateJob,
   type JobInput,
 } from "@/lib/talent";
-import type { Application, ApplicationStage, EmploymentType, JobPost } from "@/lib/types";
+import type { Application, ApplicationStage, EmploymentType, JobPost, ScoutLead } from "@/lib/types";
 import type { JobDraft } from "@/lib/ai/job";
 import type {
   AppState,
@@ -4737,6 +4739,42 @@ export async function screenApplicationAction(applicationId: string) {
     return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Screening failed." };
+  }
+}
+
+/** Scout candidate leads for a job via live web research. */
+export async function scoutForJobAction(
+  jobId: string,
+  keywords?: string,
+): Promise<{ ok: boolean; leads: ScoutLead[]; configured: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, leads: [], configured: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, leads: [], configured: false, error: "No workspace." };
+  try {
+    const r = await scoutForJob(ws, jobId, keywords);
+    return r.ok
+      ? { ok: true, leads: r.leads, configured: r.configured }
+      : { ok: false, leads: [], configured: false, error: r.error };
+  } catch (e) {
+    return { ok: false, leads: [], configured: false, error: e instanceof Error ? e.message : "Scouting failed." };
+  }
+}
+
+/** Draft a recruiting-outreach message for a sourced lead (to copy/send). */
+export async function draftScoutOutreachAction(
+  jobId: string,
+  lead: { name: string; headline: string },
+): Promise<{ ok: boolean; message?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await draftScoutOutreach(ws, jobId, lead, displayName(user));
+    return r.ok ? { ok: true, message: r.message } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft outreach." };
   }
 }
 

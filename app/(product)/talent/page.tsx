@@ -12,6 +12,7 @@ import {
   Loader2,
   Mail,
   Plus,
+  Search,
   Sparkles,
   Star,
   Trash2,
@@ -33,15 +34,25 @@ import {
   getWorkspaceComplianceAction,
   listApplicationsAction,
   listJobsAction,
+  draftScoutOutreachAction,
   moveApplicationStageAction,
   scheduleInterviewAction,
+  scoutForJobAction,
   screenApplicationAction,
   screenJobApplicantsAction,
   setJobStatusAction,
   setWorkspaceComplianceAction,
   updateJobAction,
 } from "@/app/actions";
-import type { Application, ApplicationStage, EmploymentType, JobPost, PayType, ScreeningQuestion } from "@/lib/types";
+import type {
+  Application,
+  ApplicationStage,
+  EmploymentType,
+  JobPost,
+  PayType,
+  ScoutLead,
+  ScreeningQuestion,
+} from "@/lib/types";
 import { STANDARD_COMPLIANCE, defaultPayType, formatPay } from "@/lib/talent/format";
 
 const EMPLOYMENT: { value: EmploymentType; label: string }[] = [
@@ -701,9 +712,147 @@ function ApplicationDialog({
   );
 }
 
+function ScoutDialog({ job, open, onClose }: { job: JobPost; open: boolean; onClose: () => void }) {
+  const [keywords, setKeywords] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [leads, setLeads] = useState<ScoutLead[] | null>(null);
+  const [configured, setConfigured] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [outreach, setOutreach] = useState<Record<number, string>>({});
+  const [busyLead, setBusyLead] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setKeywords("");
+    setLeads(null);
+    setError(null);
+    setOutreach({});
+    setConfigured(true);
+  }, [open]);
+
+  async function find() {
+    setLoading(true);
+    setError(null);
+    setLeads(null);
+    const r = await scoutForJobAction(job.id, keywords);
+    setLoading(false);
+    setConfigured(r.configured);
+    if (r.ok) setLeads(r.leads);
+    else setError(r.error ?? "Couldn't scout right now.");
+  }
+
+  async function outreachFor(i: number, lead: ScoutLead) {
+    setBusyLead(i);
+    const r = await draftScoutOutreachAction(job.id, { name: lead.name, headline: lead.headline });
+    setBusyLead(null);
+    if (r.ok && r.message) setOutreach((o) => ({ ...o, [i]: r.message! }));
+  }
+
+  async function copy(i: number) {
+    try {
+      await navigator.clipboard.writeText(outreach[i]);
+      setCopied(i);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title={`Scout candidates — ${job.title}`} className="max-w-2xl">
+      <div className="flex max-h-[72vh] flex-col gap-3 overflow-y-auto pr-1">
+        <p className="text-[12px] text-muted-foreground">
+          Searches the web for people who could fit this role and distills real leads. Review them, open their profile,
+          and reach out with a drafted message — nothing is sent automatically.
+        </p>
+        <div className="flex gap-2">
+          <Input
+            value={keywords}
+            onChange={(e) => setKeywords(e.target.value)}
+            placeholder="Optional keywords (skills, location, companies)"
+            className="text-sm"
+          />
+          <Button onClick={find} disabled={loading}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            Find candidates
+          </Button>
+        </div>
+
+        {!configured && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            Web research isn&apos;t set up yet — add a TAVILY_API_KEY to enable scouting.
+          </div>
+        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        {loading ? (
+          <div className="flex flex-col items-center gap-2 py-8 text-muted-foreground">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <p className="text-sm">Searching the web and vetting leads…</p>
+          </div>
+        ) : leads && leads.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">No strong leads found — try different keywords.</p>
+        ) : leads ? (
+          <div className="flex flex-col gap-2">
+            {leads.map((lead, i) => (
+              <div key={i} className="rounded-lg border border-border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">{lead.name}</div>
+                    {lead.headline && <div className="text-[12px] text-muted-foreground">{lead.headline}</div>}
+                  </div>
+                  {lead.url && (
+                    <a
+                      href={lead.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-primary hover:underline"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" /> Profile
+                    </a>
+                  )}
+                </div>
+                {lead.why_fit && <p className="mt-1 text-[12px] text-muted-foreground">{lead.why_fit}</p>}
+                <div className="mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => outreachFor(i, lead)}
+                    disabled={busyLead === i}
+                  >
+                    {busyLead === i ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                    Draft outreach
+                  </Button>
+                </div>
+                {outreach[i] && (
+                  <div className="mt-2">
+                    <Textarea
+                      rows={5}
+                      value={outreach[i]}
+                      onChange={(e) => setOutreach((o) => ({ ...o, [i]: e.target.value }))}
+                      className="text-[12.5px]"
+                    />
+                    <Button size="sm" variant="ghost" className="mt-1 h-7 px-2 text-xs" onClick={() => copy(i)}>
+                      {copied === i ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      {copied === i ? "Copied" : "Copy"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
 function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
   const [apps, setApps] = useState<Application[] | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [scoutOpen, setScoutOpen] = useState(false);
   const [screening, setScreening] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -766,6 +915,9 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
             {note && <span className="ml-1 text-emerald-600 dark:text-emerald-400">· {note}</span>}
           </p>
         </div>
+        <Button size="sm" variant="outline" onClick={() => setScoutOpen(true)}>
+          <Search className="h-4 w-4" /> Scout
+        </Button>
         {apps && apps.length > 0 && (
           <Button size="sm" variant="secondary" onClick={screenAll} disabled={screening}>
             {screening ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -855,6 +1007,7 @@ function PipelineBoard({ job, onBack }: { job: JobPost; onBack: () => void }) {
       )}
 
       <ApplicationDialog app={openApp} onClose={() => setOpenId(null)} onMove={move} onRescreen={rescreen} />
+      <ScoutDialog job={job} open={scoutOpen} onClose={() => setScoutOpen(false)} />
     </div>
   );
 }

@@ -904,6 +904,15 @@ export interface ApplicationEval {
   concerns: string[];
 }
 
+/** A sourced candidate lead from the Scout (live web research) — a suggestion the
+ *  owner reviews and reaches out to; not persisted. */
+export interface ScoutLead {
+  name: string;
+  headline: string;
+  why_fit: string;
+  url: string;
+}
+
 /** A candidate's application to one job — the per-job pipeline row (stage + AI eval). */
 export interface Application {
   id: string;

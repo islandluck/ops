@@ -8,6 +8,8 @@ import { getPlanningContext } from "@/lib/db/queries";
 import { draftJobDescription, type JobDraft } from "@/lib/ai/job";
 import { draftHiringEmail, type HiringEmailKind } from "@/lib/ai/hire-email";
 import { screenCandidate, type ScreenResult } from "@/lib/ai/screen";
+import { draftOutreach, scoutCandidates } from "@/lib/ai/scout";
+import { tavilyConfigured, tavilySearch } from "@/lib/integrations/tavily";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { runWithUsage } from "@/lib/ai/usage";
 import { extractDocText } from "@/lib/deepdive/extract";
@@ -24,6 +26,7 @@ import type {
   JobPost,
   JobStatus,
   PayType,
+  ScoutLead,
   ScreeningQuestion,
 } from "@/lib/types";
 
@@ -533,6 +536,55 @@ export async function moveApplicationStage(
     .set({ stage, updated_at: new Date() })
     .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)));
   return { ok: true };
+}
+
+/* -------------------------------- scout ---------------------------------- */
+
+/**
+ * Source candidate leads for a role via live web research (Tavily) distilled by
+ * the AI into real named people found in the results. Suggestions only — nothing
+ * is persisted; the owner reviews and reaches out.
+ */
+export async function scoutForJob(
+  workspaceId: string,
+  jobId: string,
+  keywords?: string,
+): Promise<{ ok: true; leads: ScoutLead[]; configured: boolean } | { ok: false; error: string }> {
+  const job = await getJob(workspaceId, jobId);
+  if (!job) return { ok: false, error: "Job not found." };
+  if (!tavilyConfigured()) return { ok: true, leads: [], configured: false };
+  const { brief } = await getPlanningContext(workspaceId);
+  const query = [job.title, job.location, keywords, "candidate OR profile OR LinkedIn"].filter(Boolean).join(" ");
+  const results = await tavilySearch(query, { maxResults: 10, searchDepth: "advanced" });
+  if (!results.length) return { ok: true, leads: [], configured: true };
+  try {
+    const leads = await runWithUsage(workspaceId, "talent-scout", () =>
+      scoutCandidates({ job: { title: job.title, description_md: job.description_md }, brief, results }),
+    );
+    return { ok: true, leads, configured: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Scouting failed." };
+  }
+}
+
+/** Draft a warm recruiting-outreach message for a sourced lead (to copy/send). */
+export async function draftScoutOutreach(
+  workspaceId: string,
+  jobId: string,
+  lead: { name: string; headline: string },
+  senderName: string,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const job = await getJob(workspaceId, jobId);
+  if (!job) return { ok: false, error: "Job not found." };
+  const { brief } = await getPlanningContext(workspaceId);
+  try {
+    const r = await runWithUsage(workspaceId, "talent-outreach", () =>
+      draftOutreach({ job: { title: job.title }, lead, brief, senderName }),
+    );
+    return { ok: true, message: r.message };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft outreach." };
+  }
 }
 
 /** A short-lived signed URL to view an application's candidate résumé. */
