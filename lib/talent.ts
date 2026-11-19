@@ -6,9 +6,14 @@ import { db } from "@/lib/db";
 import { applications, candidates, jobPosts, workspaces } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { draftJobDescription, type JobDraft } from "@/lib/ai/job";
+import { draftHiringEmail, type HiringEmailKind } from "@/lib/ai/hire-email";
 import { screenCandidate, type ScreenResult } from "@/lib/ai/screen";
+import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { runWithUsage } from "@/lib/ai/usage";
 import { extractDocText } from "@/lib/deepdive/extract";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { createZoomMeeting } from "@/lib/integrations/zoom";
+import { createCalendarEvent } from "@/lib/integrations/google";
 import { downloadResumeBytes, resumeSignedUrl, uploadResumeBytes } from "@/lib/talent/storage";
 import type {
   Application,
@@ -611,6 +616,116 @@ export async function screenApplication(
     })
     .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)));
   return { ok: true, result };
+}
+
+/**
+ * Draft a candidate-facing email (rejection or interview invite) and stage it in
+ * the Email Manager for the owner to review and send. Never auto-sends; never
+ * changes the application's stage.
+ */
+export async function draftCandidateEmail(
+  workspaceId: string,
+  applicationId: string,
+  kind: HiringEmailKind,
+  senderName: string,
+  scopeUserId: string | null,
+): Promise<{ ok: true; draftId: string } | { ok: false; error: string }> {
+  const [row] = await db
+    .select({ a: applications, c: candidates, j: jobPosts })
+    .from(applications)
+    .leftJoin(candidates, eq(applications.candidate_id, candidates.id))
+    .leftJoin(jobPosts, eq(applications.job_id, jobPosts.id))
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)))
+    .limit(1);
+  if (!row || !row.j || !row.c) return { ok: false, error: "Application not found." };
+  if (!row.c.email) return { ok: false, error: "No email on file for this candidate." };
+
+  const { brief } = await getPlanningContext(workspaceId);
+  let draft: { subject: string; body: string };
+  try {
+    draft = await runWithUsage(workspaceId, "talent-email", () =>
+      draftHiringEmail({ kind, job: { title: row.j!.title }, candidateName: row.c!.name, senderName, brief }),
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the email." };
+  }
+
+  const staged = await stageOutboundDraft(
+    workspaceId,
+    {
+      to: row.c.email,
+      subject: draft.subject,
+      body: draft.body,
+      recipientName: row.c.name,
+      intent: `${kind === "rejection" ? "Rejection" : "Interview invite"} — ${row.j.title}`,
+    },
+    scopeUserId,
+  );
+  return { ok: true, draftId: staged.draft.id };
+}
+
+/**
+ * Schedule an interview: create a Google Calendar event that invites the
+ * candidate (Google emails them the invite), plus a Zoom meeting when Zoom is
+ * connected, and move the application to the interview stage. Requires Google
+ * Calendar connected (HTTPS OAuth — connect from the deployed app, not localhost).
+ */
+export async function scheduleInterview(
+  workspaceId: string,
+  applicationId: string,
+  input: { whenISO: string; durationMin?: number },
+): Promise<{ ok: true; joinUrl: string | null } | { ok: false; error: string }> {
+  const when = new Date(input.whenISO);
+  if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time." };
+  if (when.getTime() < Date.now() - 60_000) return { ok: false, error: "Pick a time in the future." };
+  const dur = Math.min(Math.max(input.durationMin ?? 30, 15), 180);
+
+  const [row] = await db
+    .select({ a: applications, c: candidates, j: jobPosts })
+    .from(applications)
+    .leftJoin(candidates, eq(applications.candidate_id, candidates.id))
+    .leftJoin(jobPosts, eq(applications.job_id, jobPosts.id))
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)))
+    .limit(1);
+  if (!row || !row.j || !row.c) return { ok: false, error: "Application not found." };
+  if (!row.c.email) return { ok: false, error: "No email on file for this candidate." };
+
+  const calToken = await getValidAccessToken(workspaceId, "Google Calendar");
+  if (!calToken) return { ok: false, error: "Connect Google Calendar in Integrations to schedule interviews." };
+
+  const topic = `Interview: ${row.c.name} — ${row.j.title}`;
+  let joinUrl: string | null = null;
+  const zoomToken = await getValidAccessToken(workspaceId, "Zoom");
+  if (zoomToken) {
+    try {
+      const m = await createZoomMeeting(zoomToken, { topic, startTime: when.toISOString(), durationMin: dur });
+      joinUrl = m.join_url || null;
+    } catch {
+      joinUrl = null;
+    }
+  }
+
+  const startISO = when.toISOString();
+  const endISO = new Date(when.getTime() + dur * 60_000).toISOString();
+  try {
+    await createCalendarEvent(calToken, {
+      summary: topic,
+      description: `Interview for the ${row.j.title} role.${joinUrl ? `\n\nJoin: ${joinUrl}` : ""}`,
+      startISO,
+      endISO,
+      attendees: [row.c.email],
+      location: joinUrl ?? undefined,
+      sendUpdates: "all",
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't create the calendar event." };
+  }
+
+  await db
+    .update(applications)
+    .set({ stage: "interview", updated_at: new Date() })
+    .where(and(eq(applications.workspace_id, workspaceId), eq(applications.id, applicationId)));
+  return { ok: true, joinUrl };
 }
 
 /** Screen every application (or only the unscored ones) for a job. Bounded per run. */

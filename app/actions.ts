@@ -362,6 +362,7 @@ import {
 import {
   createJob,
   deleteJob,
+  draftCandidateEmail,
   draftJob,
   getApplicationResumeUrl,
   getCareersSlug,
@@ -369,6 +370,7 @@ import {
   listApplications,
   listJobs,
   moveApplicationStage,
+  scheduleInterview,
   screenApplication,
   screenJobApplicants,
   setJobStatus,
@@ -4735,6 +4737,34 @@ export async function screenApplicationAction(applicationId: string) {
     return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Screening failed." };
+  }
+}
+
+/** Schedule an interview (Google Calendar invite to the candidate + optional Zoom). */
+export async function scheduleInterviewAction(applicationId: string, whenISO: string, durationMin?: number) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await scheduleInterview(ws, applicationId, { whenISO, durationMin });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't schedule the interview." };
+  }
+}
+
+/** Draft a rejection or interview-invite email for a candidate → Email Manager. */
+export async function draftCandidateEmailAction(applicationId: string, kind: "rejection" | "interview") {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await draftCandidateEmail(ws, applicationId, kind, displayName(user), scopeUserId);
+    return r.ok ? { ok: true as const, draftId: r.draftId } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the email." };
   }
 }
 

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Briefcase,
+  CalendarClock,
   Check,
   ChevronLeft,
   Copy,
   ExternalLink,
   FileText,
   Loader2,
+  Mail,
   Plus,
   Sparkles,
   Star,
@@ -24,6 +26,7 @@ import { cn } from "@/lib/cn";
 import {
   createJobAction,
   deleteJobAction,
+  draftCandidateEmailAction,
   draftJobAction,
   getCareersLinkAction,
   getResumeUrlAction,
@@ -31,6 +34,7 @@ import {
   listApplicationsAction,
   listJobsAction,
   moveApplicationStageAction,
+  scheduleInterviewAction,
   screenApplicationAction,
   screenJobApplicantsAction,
   setJobStatusAction,
@@ -453,13 +457,52 @@ function ApplicationDialog({
   onRescreen: (id: string) => Promise<void>;
 }) {
   const [rescreening, setRescreening] = useState(false);
+  const [emailBusy, setEmailBusy] = useState<"rejection" | "interview" | null>(null);
+  const [emailMsg, setEmailMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [when, setWhen] = useState("");
+  const [duration, setDuration] = useState(30);
+  const [scheduling, setScheduling] = useState(false);
+  const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
   if (!app) return null;
   const scored = app.ai_score != null;
+
+  async function schedule() {
+    if (!when) {
+      setSchedMsg({ ok: false, text: "Pick a date and time." });
+      return;
+    }
+    setScheduling(true);
+    setSchedMsg(null);
+    const r = await scheduleInterviewAction(app!.id, new Date(when).toISOString(), duration);
+    setScheduling(false);
+    if (r.ok) {
+      onMove(app!.id, "interview");
+      setSchedMsg({
+        ok: true,
+        text: r.joinUrl ? "Scheduled — calendar invite sent, Zoom link added." : "Scheduled — calendar invite sent to the candidate.",
+      });
+    } else {
+      setSchedMsg({ ok: false, text: r.error ?? "Couldn't schedule." });
+    }
+  }
 
   async function rescreen() {
     setRescreening(true);
     await onRescreen(app!.id);
     setRescreening(false);
+  }
+
+  async function draftEmail(kind: "rejection" | "interview") {
+    setEmailBusy(kind);
+    setEmailMsg(null);
+    const r = await draftCandidateEmailAction(app!.id, kind);
+    setEmailBusy(null);
+    setEmailMsg(
+      r.ok
+        ? { ok: true, text: "Drafted in the Email Manager — review and send it there." }
+        : { ok: false, text: r.error ?? "Couldn't draft the email." },
+    );
   }
 
   return (
@@ -542,6 +585,97 @@ function ApplicationDialog({
               Not screened yet — score this candidate against the role.
             </p>
           )}
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email candidate</span>
+            <div className="flex gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => draftEmail("interview")}
+                disabled={emailBusy !== null || !app.candidate_email}
+              >
+                {emailBusy === "interview" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                Interview invite
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => draftEmail("rejection")}
+                disabled={emailBusy !== null || !app.candidate_email}
+              >
+                {emailBusy === "rejection" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                Rejection
+              </Button>
+            </div>
+          </div>
+          {emailMsg && (
+            <p
+              className={cn(
+                "mt-2 text-[12px]",
+                emailMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
+              )}
+            >
+              {emailMsg.text}
+              {emailMsg.ok && (
+                <a href="/email" className="ml-1 font-medium underline">
+                  Open Email Manager
+                </a>
+              )}
+            </p>
+          )}
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            AI drafts it in your voice and stages it in the Email Manager — nothing sends until you review and send it.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Interview</span>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => setShowSchedule((v) => !v)}>
+              <CalendarClock className="h-3.5 w-3.5" /> Schedule
+            </Button>
+          </div>
+          {showSchedule && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="datetime-local"
+                value={when}
+                onChange={(e) => setWhen(e.target.value)}
+                className="rounded-md border border-border bg-card px-2 py-1 text-[12px]"
+              />
+              <select
+                value={duration}
+                onChange={(e) => setDuration(Number(e.target.value))}
+                className="rounded-md border border-border bg-card px-2 py-1 text-[12px]"
+              >
+                <option value={30}>30 min</option>
+                <option value={45}>45 min</option>
+                <option value={60}>60 min</option>
+              </select>
+              <Button size="sm" onClick={schedule} disabled={scheduling}>
+                {scheduling ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
+                Schedule
+              </Button>
+            </div>
+          )}
+          {schedMsg && (
+            <p
+              className={cn(
+                "mt-2 text-[12px]",
+                schedMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400",
+              )}
+            >
+              {schedMsg.text}
+            </p>
+          )}
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Sends a Google Calendar invite to the candidate (+ a Zoom link if Zoom is connected) and moves them to Interview.
+          </p>
         </div>
 
         {app.cover_note && (
