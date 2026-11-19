@@ -43,8 +43,24 @@ export interface PlanInput {
   styleProfile?: string | null;
 }
 
-function stripFences(s: string): string {
-  return s.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+/** Parse a JSON object from a model response, tolerating ``` fences and any
+ *  surrounding prose by also trying the outermost {...} slice. Returns null on
+ *  failure rather than throwing. */
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const candidates = [cleaned];
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.push(cleaned.slice(first, last + 1));
+  for (const c of candidates) {
+    try {
+      const o = JSON.parse(c);
+      if (o && typeof o === "object") return o as Record<string, unknown>;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
 }
 
 export async function planCampaign(input: PlanInput): Promise<PlannedItem[]> {
@@ -69,10 +85,11 @@ export async function planCampaign(input: PlanInput): Promise<PlannedItem[]> {
     ...channels.map((c) => `- ${CHANNEL_GUIDE[c]}`),
     "",
     "Write the ACTUAL draft content for each item (not a description of it), in the company's voice — ready for the owner to tweak and schedule. Vary the angles across the campaign (hooks, proof, use-cases, CTAs) so it reads as a planned arc, not repetition.",
+    "Keep each draft TIGHT (the owner expands later): tweets ≤270 chars; LinkedIn ~80-150 words; newsletter ~120-180 words; blog ~250-400 words. Escape newlines inside JSON strings as \\n.",
     "HARD RULES: never invent facts, numbers, stats, customers, or claims not implied by the brief. No hype/clickbait. Keep it honest and specific.",
-    `Produce 6-12 items total. day_offset is an integer number of days from the campaign start (0 to ${weeks * 7 - 1}), spread sensibly.`,
+    `Produce 6-10 items total. day_offset is an integer number of days from the campaign start (0 to ${weeks * 7 - 1}), spread sensibly.`,
     "",
-    "Respond with ONLY this JSON (no fences):",
+    "Respond with ONLY this JSON (no prose, no code fences):",
     '{"items": [{"channel": "x"|"linkedin"|"blog"|"newsletter", "title": string, "body_md": string, "day_offset": number}]}',
   ]
     .filter(Boolean)
@@ -80,17 +97,20 @@ export async function planCampaign(input: PlanInput): Promise<PlannedItem[]> {
 
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 4000,
+    max_tokens: 8000,
     system,
     messages: [{ role: "user", content: `Objective: ${objective}\n\nPlan the campaign now.` }],
   });
   const text = msg.content.map((bl) => (bl.type === "text" ? bl.text : "")).join("").trim();
 
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(stripFences(text)) as Record<string, unknown>;
-  } catch {
-    throw new Error("The plan came back malformed — try again.");
+  const obj = parseJsonObject(text);
+  if (!obj) {
+    const truncated = msg.stop_reason === "max_tokens";
+    throw new Error(
+      truncated
+        ? "The plan ran long and got cut off — try fewer channels or a shorter length."
+        : "The plan came back malformed — try again.",
+    );
   }
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
   const raw = Array.isArray(obj.items) ? (obj.items as Record<string, unknown>[]) : [];
@@ -142,7 +162,7 @@ export async function draftPost(input: {
 
   const msg = await client.messages.create({
     model: MODEL,
-    max_tokens: 1500,
+    max_tokens: 3000,
     system,
     messages: [
       {
@@ -152,10 +172,8 @@ export async function draftPost(input: {
     ],
   });
   const text = msg.content.map((bl) => (bl.type === "text" ? bl.text : "")).join("").trim();
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(stripFences(text)) as Record<string, unknown>;
-  } catch {
+  const obj = parseJsonObject(text);
+  if (!obj) {
     throw new Error("The draft came back malformed — try again.");
   }
   const str = (v: unknown): string => (typeof v === "string" ? v : "");
