@@ -42,6 +42,7 @@ import { createOutreachCampaign, draftAllOutreach, sourceContacts } from "@/lib/
 import {
   createContact as crmCreateContact,
   createDeal as crmCreateDeal,
+  draftFollowupsForColdDeals as crmDraftFollowupsForColdDeals,
   findOrCreateCompany as crmFindOrCreateCompany,
   listCompanies as crmListCompanies,
   listContacts as crmListContacts,
@@ -746,6 +747,31 @@ function buildTools(workspaceId: string): ExecTool[] {
       },
     },
     {
+      definition: {
+        name: "crm_follow_up",
+        description:
+          "Draft follow-up emails for CRM deals that are going cold (no activity in 14+ days). Drafts a contextual nudge for each into the Email Manager to review + send — never auto-sends. Use when the founder says 'follow up on stale deals' or 'chase the cold ones'.",
+        input_schema: {
+          type: "object",
+          properties: { count: { type: "number", description: "How many cold deals to draft follow-ups for (default 5)" } },
+          required: [],
+        },
+      },
+      run: async (input) => {
+        try {
+          const max = typeof input.count === "number" ? Math.max(1, Math.min(input.count, 10)) : 5;
+          const r = await crmDraftFollowupsForColdDeals(workspaceId, "", null, max);
+          if (!r.total) return { summary: "No deals are going cold — the pipeline's warm.", href: "/crm" };
+          return {
+            summary: `Drafted ${r.drafted} follow-up${r.drafted === 1 ? "" : "s"} for cold deals in the Email Manager — review and send them there (${r.total} going cold total).`,
+            href: "/crm",
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't draft follow-ups." };
+        }
+      },
+    },
+    {
       silent: true,
       definition: {
         name: "crm_lookup",
@@ -767,6 +793,16 @@ function buildTools(workspaceId: string): ExecTool[] {
             crmListContacts(workspaceId),
             crmListDeals(workspaceId),
           ]);
+          if (/\b(pipeline|cold|stale|open deals?|forecast|closing)\b/i.test(q)) {
+            const open = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+            const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
+            const cutoff = Date.now() - 14 * 86400000;
+            const cold = open.filter((d) => new Date(d.last_activity_at ?? d.created_at).getTime() < cutoff);
+            return {
+              summary: `Pipeline: ${open.length} open deal(s) worth $${val.toLocaleString()}${cold.length ? `, ${cold.length} going cold` : ""}.`,
+              href: "/crm",
+            };
+          }
           const company = companies.find((c) => c.name.toLowerCase().includes(ql));
           const deal = deals.find((d) => d.title.toLowerCase().includes(ql));
           const contact = contacts.find((c) => c.name.toLowerCase().includes(ql));

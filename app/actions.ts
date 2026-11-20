@@ -454,6 +454,9 @@ import {
   deleteCompany as crmDeleteCompany,
   deleteContact as crmDeleteContact,
   deleteDeal as crmDeleteDeal,
+  draftDealFollowup as crmDraftDealFollowup,
+  enrichCompanyInfo as crmEnrichCompanyInfo,
+  findContactEmailForCrm as crmFindContactEmail,
   getCompany as crmGetCompany,
   getContact as crmGetContact,
   getDeal as crmGetDeal,
@@ -5927,5 +5930,49 @@ export async function crmStaleDealsAction(): Promise<CrmDeal[]> {
     return await crmStaleDeals(ws, 14);
   } catch {
     return [];
+  }
+}
+
+/** Draft a contextual follow-up for a deal → Email Manager (never auto-sends). */
+export async function crmDraftFollowupAction(dealId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await crmDraftDealFollowup(ws, dealId, displayName(user), scopeUserId);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the follow-up." };
+  }
+}
+
+/** Enrich a company from the live web (fills empty fields). */
+export async function crmEnrichCompanyAction(companyId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await crmEnrichCompanyInfo(ws, companyId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Enrichment failed." };
+  }
+}
+
+/** Find a CRM contact's email via Hunter (name + company domain). */
+export async function crmFindContactEmailAction(
+  contactId: string,
+): Promise<{ ok: boolean; email?: string | null; score?: number | null; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await crmFindContactEmail(ws, contactId);
+    return r.ok ? { ok: true, email: r.email, score: r.score } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't search for an email." };
   }
 }

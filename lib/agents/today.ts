@@ -185,6 +185,27 @@ export async function getTodayData(
     });
   }
 
+  // CRM — deals going cold need a nudge (owner plane). Best-effort, dynamic import.
+  try {
+    const { crmNeedsAttention } = await import("@/lib/crm");
+    const attn = await crmNeedsAttention(workspaceId);
+    if (attn.staleDeals > 0) {
+      const top = attn.topStale[0];
+      needsYou.push({
+        id: "crm-cold-deals",
+        kind: "deadline",
+        title: `${attn.staleDeals} deal${attn.staleDeals === 1 ? "" : "s"} going cold`,
+        detail: top
+          ? `e.g. ${top.title}${top.company ? ` (${top.company})` : ""} — quiet ${top.days}d. Draft a follow-up.`
+          : "Draft follow-ups from the CRM.",
+        href: "/crm",
+        tone: "attention",
+      });
+    }
+  } catch {
+    /* CRM surface is additive — never break Today */
+  }
+
   const rank: Record<TodayItem["tone"], number> = { urgent: 0, attention: 1, normal: 2, positive: 3 };
   needsYou.sort((a, b) => rank[a.tone] - rank[b.tone]);
 

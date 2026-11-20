@@ -9,6 +9,8 @@ import {
   Loader2,
   Mail,
   Plus,
+  Search,
+  Sparkles,
   StickyNote,
   Trash2,
   Users,
@@ -26,6 +28,9 @@ import {
   crmDeleteCompanyAction,
   crmDeleteContactAction,
   crmDeleteDealAction,
+  crmDraftFollowupAction,
+  crmEnrichCompanyAction,
+  crmFindContactEmailAction,
   crmListActivitiesAction,
   crmListCompaniesAction,
   crmListContactsAction,
@@ -69,6 +74,20 @@ function ago(iso: string | null | undefined): string {
   if (days === 1) return "1d ago";
   if (days < 30) return `${days}d ago`;
   return `${Math.floor(days / 30)}mo ago`;
+}
+
+/** Heuristic priority for a cold deal — blends value with how long it's been quiet. */
+function dealPriority(d: CrmDeal): number {
+  const v = Math.min(1, (d.amount ?? 0) / 50000);
+  const days = Math.floor((Date.now() - new Date(d.last_activity_at ?? d.created_at).getTime()) / 86400000);
+  const s = Math.min(1, days / 30);
+  return v * 0.6 + s * 0.4;
+}
+function priorityTag(d: CrmDeal): { label: string; cls: string } {
+  const p = dealPriority(d);
+  if (p >= 0.55) return { label: "High", cls: "border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400" };
+  if (p >= 0.3) return { label: "Med", cls: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400" };
+  return { label: "Low", cls: "border-border bg-muted/50 text-muted-foreground" };
 }
 
 function RelBadge({ type }: { type: CrmRelationshipType }) {
@@ -200,7 +219,8 @@ function DealDialog({
   const [closeDate, setCloseDate] = useState("");
   const [probability, setProbability] = useState("");
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!deal) return;
@@ -212,13 +232,14 @@ function DealDialog({
     setCloseDate(deal.close_date ? deal.close_date.slice(0, 10) : "");
     setProbability(deal.probability != null ? String(deal.probability) : "");
     setNote(deal.note);
+    setMsg(null);
   }, [deal]);
 
   const companyContacts = useMemo(() => contacts.filter((c) => c.company_id === companyId), [contacts, companyId]);
   if (!deal) return null;
 
   async function save() {
-    setBusy(true);
+    setBusy("save");
     await crmUpdateDealAction(deal!.id, {
       title,
       company_id: companyId || undefined,
@@ -229,8 +250,15 @@ function DealDialog({
       probability: probability.trim() ? Number(probability) : null,
       note,
     });
-    setBusy(false);
+    setBusy(null);
     onChanged();
+  }
+  async function followUp() {
+    setBusy("followup");
+    setMsg(null);
+    const r = await crmDraftFollowupAction(deal!.id);
+    setBusy(null);
+    setMsg(r.ok ? { ok: true, text: "Follow-up drafted in the Email Manager." } : { ok: false, text: r.error ?? "Couldn't draft the follow-up." });
   }
   async function remove() {
     if (!window.confirm(`Delete deal "${deal!.title}"?`)) return;
@@ -299,14 +327,30 @@ function DealDialog({
           </div>
         </div>
 
+        {msg && (
+          <p className={cn("text-[12.5px]", msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600")}>
+            {msg.text}
+            {msg.ok && (
+              <a href="/email" className="ml-1 font-medium underline">
+                Open Email Manager
+              </a>
+            )}
+          </p>
+        )}
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           <button type="button" onClick={remove} className="text-muted-foreground transition hover:text-destructive" title="Delete deal">
             <Trash2 className="h-4 w-4" />
           </button>
-          <Button size="sm" onClick={save} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Save
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={followUp} disabled={busy !== null} title="Draft a follow-up email into the Email Manager">
+              {busy === "followup" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+              Draft follow-up
+            </Button>
+            <Button size="sm" onClick={save} disabled={busy !== null}>
+              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save
+            </Button>
+          </div>
         </div>
       </div>
     </Dialog>
@@ -333,7 +377,8 @@ function CrmContactDialog({
   const [phone, setPhone] = useState("");
   const [linkedin, setLinkedin] = useState("");
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!contact) return;
@@ -344,12 +389,13 @@ function CrmContactDialog({
     setPhone(contact.phone);
     setLinkedin(contact.linkedin_url ?? "");
     setNote(contact.note);
+    setMsg(null);
   }, [contact]);
 
   if (!contact) return null;
 
   async function save() {
-    setBusy(true);
+    setBusy("save");
     await crmUpdateContactAction(contact!.id, {
       name,
       title,
@@ -359,8 +405,26 @@ function CrmContactDialog({
       linkedin_url: linkedin,
       note,
     });
-    setBusy(false);
+    setBusy(null);
     onChanged();
+  }
+  async function findEmail() {
+    setBusy("find");
+    setMsg(null);
+    await crmUpdateContactAction(contact!.id, { name, company_id: companyId || null });
+    const r = await crmFindContactEmailAction(contact!.id);
+    setBusy(null);
+    if (!r.ok) {
+      setMsg({ ok: false, text: r.error ?? "Couldn't search for an email." });
+      return;
+    }
+    if (r.email) {
+      setEmail(r.email);
+      setMsg({ ok: true, text: `Found ${r.email}${r.score != null ? ` (${r.score}% confidence)` : ""}.` });
+      onChanged();
+    } else {
+      setMsg({ ok: false, text: `No confident email found${r.score != null ? ` (best ${r.score}%)` : ""}.` });
+    }
   }
   async function remove() {
     if (!window.confirm(`Remove ${contact!.name}?`)) return;
@@ -390,6 +454,17 @@ function CrmContactDialog({
           <div>
             <Label>Email</Label>
             <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" className="w-full" />
+            {!email.trim() && name.trim() && companyId && (
+              <button
+                type="button"
+                onClick={findEmail}
+                disabled={busy !== null}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary transition hover:underline disabled:opacity-50"
+              >
+                {busy === "find" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                Find email
+              </button>
+            )}
           </div>
           <div>
             <Label>Phone</Label>
@@ -418,12 +493,15 @@ function CrmContactDialog({
           </div>
         </div>
 
+        {msg && (
+          <p className={cn("text-[12.5px]", msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600")}>{msg.text}</p>
+        )}
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           <button type="button" onClick={remove} className="text-muted-foreground transition hover:text-destructive" title="Remove contact">
             <Trash2 className="h-4 w-4" />
           </button>
-          <Button size="sm" onClick={save} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          <Button size="sm" onClick={save} disabled={busy !== null}>
+            {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Save
           </Button>
         </div>
@@ -456,7 +534,8 @@ function CompanyDialog({
   const [website, setWebsite] = useState("");
   const [industry, setIndustry] = useState("");
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     if (!company) return;
@@ -465,6 +544,7 @@ function CompanyDialog({
     setWebsite(company.website ?? "");
     setIndustry(company.industry);
     setNote(company.note);
+    setMsg(null);
   }, [company]);
 
   const companyContacts = useMemo(() => contacts.filter((c) => c.company_id === company?.id), [contacts, company]);
@@ -472,10 +552,20 @@ function CompanyDialog({
   if (!company) return null;
 
   async function save() {
-    setBusy(true);
+    setBusy("save");
     await crmUpdateCompanyAction(company!.id, { name, relationship_type: type, website, industry, note });
-    setBusy(false);
+    setBusy(null);
     onChanged();
+  }
+  async function enrich() {
+    setBusy("enrich");
+    setMsg(null);
+    const r = await crmEnrichCompanyAction(company!.id);
+    setBusy(null);
+    if (r.ok) {
+      setMsg({ ok: true, text: "Enriched from the web — refreshed the empty fields." });
+      onChanged();
+    } else setMsg({ ok: false, text: ("error" in r && r.error) || "Couldn't enrich." });
   }
   async function remove() {
     if (!window.confirm(`Delete ${company!.name} and its contacts + deals?`)) return;
@@ -566,14 +656,23 @@ function CompanyDialog({
           </div>
         </div>
 
+        {msg && (
+          <p className={cn("text-[12.5px]", msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600")}>{msg.text}</p>
+        )}
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           <button type="button" onClick={remove} className="text-muted-foreground transition hover:text-destructive" title="Delete company">
             <Trash2 className="h-4 w-4" />
           </button>
-          <Button size="sm" onClick={save} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Save
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={enrich} disabled={busy !== null} title="Fill empty fields from the web">
+              {busy === "enrich" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Enrich
+            </Button>
+            <Button size="sm" onClick={save} disabled={busy !== null}>
+              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Save
+            </Button>
+          </div>
         </div>
       </div>
     </Dialog>
@@ -774,15 +873,22 @@ function PipelineTab({
             <Flame className="h-4 w-4" /> Going cold — {stale.length} deal{stale.length === 1 ? "" : "s"} untouched 14d+
           </div>
           <div className="mt-2 flex flex-wrap gap-2">
-            {stale.slice(0, 6).map((d) => (
-              <button
-                key={d.id}
-                onClick={() => setOpenDeal(d)}
-                className="rounded-md border border-border bg-card px-2 py-1 text-[12px] hover:bg-accent/50"
-              >
-                {d.title} <span className="text-muted-foreground">· {d.company_name} · {money(d.amount)}</span>
-              </button>
-            ))}
+            {[...stale]
+              .sort((a, b) => dealPriority(b) - dealPriority(a))
+              .slice(0, 6)
+              .map((d) => {
+                const pt = priorityTag(d);
+                return (
+                  <button
+                    key={d.id}
+                    onClick={() => setOpenDeal(d)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-[12px] hover:bg-accent/50"
+                  >
+                    <span className={cn("rounded-full border px-1.5 py-0.5 text-[10px] font-semibold", pt.cls)}>{pt.label}</span>
+                    {d.title} <span className="text-muted-foreground">· {d.company_name} · {money(d.amount)}</span>
+                  </button>
+                );
+              })}
           </div>
         </Card>
       )}

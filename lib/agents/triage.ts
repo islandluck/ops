@@ -164,6 +164,17 @@ async function _triageAndStore(
       })
       .onConflictDoNothing();
 
+    // (1b) Mirror a reply from a KNOWN CRM contact onto their timeline (owner plane,
+    // best-effort). Only known contacts log — automated senders never create records.
+    if (!scopeUserId) {
+      try {
+        const { logInboundEmailToCrm } = await import("@/lib/crm");
+        await logInboundEmailToCrm(workspaceId, { email: e.from.email, name: e.from.name, subject: e.subject, occurredAt: now });
+      } catch (err) {
+        console.warn(`[crm] inbound auto-log failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     // (2) Non-email work the email implies → a board task, routed to the right team.
     if (t.task_title.trim()) {
       actionTasks += 1;

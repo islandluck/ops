@@ -4,6 +4,11 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { crmActivities, crmCompanies, crmContacts, crmDeals, outreachContacts } from "@/lib/db/schema";
+import { getPlanningContext } from "@/lib/db/queries";
+import { stageOutboundDraft } from "@/lib/agents/outbound";
+import { draftFollowupEmail, enrichCompany } from "@/lib/ai/crm";
+import { domainFromWebsite, findEmail, hunterConfigured, HUNTER_MIN_SCORE } from "@/lib/integrations/hunter";
+import { runWithUsage } from "@/lib/ai/usage";
 import type {
   CrmActivity,
   CrmActivitySource,
@@ -757,5 +762,193 @@ export async function getCrmKpis(workspaceId: string): Promise<{
     staleDeals: stale.length,
     newContacts7d: contacts.filter((c) => new Date(c.created_at).getTime() >= weekAgo).length,
     uncontacted: contacts.filter((c) => !c.last_touch_at).length,
+  };
+}
+
+/* ----------------------------- Phase 2: hooks ---------------------------- */
+
+const NOREPLY_RE = /^(no-?reply|notifications?|mailer-daemon|postmaster|do-?not-?reply|bounce|automated)/i;
+
+/** Inbound email → CRM timeline. Only updates a KNOWN contact (outbound creates them),
+ *  so the inbox's automated senders never pollute the CRM. Best-effort. */
+export async function logInboundEmailToCrm(
+  workspaceId: string,
+  input: { email: string; name?: string | null; subject?: string | null; occurredAt?: Date },
+): Promise<void> {
+  const email = input.email.trim().toLowerCase();
+  if (!EMAIL_RE.test(email) || NOREPLY_RE.test(email.split("@")[0])) return;
+  const rows = await db.select().from(crmContacts).where(eq(crmContacts.workspace_id, workspaceId));
+  const hit = rows.find((r) => (r.email ?? "").trim().toLowerCase() === email);
+  if (!hit) return;
+  const when = input.occurredAt ?? new Date();
+  await logActivity(workspaceId, {
+    type: "email",
+    summary: `Email received${input.subject ? `: ${input.subject}` : ""}`,
+    source: "email_manager",
+    contact_id: hit.id,
+    company_id: hit.company_id,
+    occurred_at: when,
+  });
+  await db
+    .update(crmContacts)
+    .set({ last_touch_at: when, updated_at: new Date() })
+    .where(and(eq(crmContacts.workspace_id, workspaceId), eq(crmContacts.id, hit.id)));
+}
+
+/* -------------------------- Phase 2: intelligence ------------------------ */
+
+/** Draft a contextual follow-up for a deal → stage it in the Email Manager. Logs it. */
+export async function draftDealFollowup(
+  workspaceId: string,
+  dealId: string,
+  senderName: string,
+  scopeUserId: string | null,
+): Promise<{ ok: true; draftId: string } | { ok: false; error: string }> {
+  const deal = await getDeal(workspaceId, dealId);
+  if (!deal) return { ok: false, error: "Deal not found." };
+  let contact = deal.primary_contact_id ? await getContact(workspaceId, deal.primary_contact_id) : null;
+  if (!contact || !contact.email) {
+    const atCompany = await listContacts(workspaceId, { companyId: deal.company_id });
+    contact = atCompany.find((c) => c.email) ?? contact;
+  }
+  if (!contact || !contact.email) return { ok: false, error: "No contact with an email on this deal — add one first." };
+
+  const [activities, ctx] = await Promise.all([
+    listActivities(workspaceId, { deal_id: dealId }, 8),
+    getPlanningContext(workspaceId),
+  ]);
+  let draft;
+  try {
+    draft = await runWithUsage(workspaceId, "crm-followup", () =>
+      draftFollowupEmail({
+        company: deal.company_name ?? "",
+        personName: contact!.name,
+        title: contact!.title,
+        deal: { title: deal.title, stage: deal.stage, amount: deal.amount },
+        recentActivity: activities.map((a) => a.summary),
+        brief: ctx.brief,
+        senderName,
+      }),
+    );
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the follow-up." };
+  }
+
+  const staged = await stageOutboundDraft(
+    workspaceId,
+    { to: contact.email, subject: draft.subject, body: draft.body, recipientName: contact.name, intent: `Follow-up — ${deal.title}` },
+    scopeUserId,
+  );
+  await logActivity(workspaceId, {
+    type: "email",
+    summary: `Follow-up drafted: ${draft.subject}`,
+    source: "agent",
+    deal_id: dealId,
+    contact_id: contact.id,
+    company_id: deal.company_id,
+    link_id: staged.draft.id,
+  });
+  return { ok: true, draftId: staged.draft.id };
+}
+
+/** Draft follow-ups for the top going-cold deals (bounded). For the Executive tool. */
+export async function draftFollowupsForColdDeals(
+  workspaceId: string,
+  senderName: string,
+  scopeUserId: string | null,
+  max = 5,
+): Promise<{ drafted: number; total: number }> {
+  const stale = await staleDeals(workspaceId, 14);
+  let drafted = 0;
+  for (const d of stale.slice(0, max)) {
+    const r = await draftDealFollowup(workspaceId, d.id, senderName, scopeUserId);
+    if (r.ok) drafted++;
+  }
+  return { drafted, total: stale.length };
+}
+
+/** Enrich a company from the live web (fills empty fields, logs what was found). */
+export async function enrichCompanyInfo(
+  workspaceId: string,
+  companyId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const company = await getCompany(workspaceId, companyId);
+  if (!company) return { ok: false, error: "Company not found." };
+  let data;
+  try {
+    data = await runWithUsage(workspaceId, "crm-enrich", () => enrichCompany({ name: company.name, website: company.website }));
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Enrichment failed." };
+  }
+  if (!data) return { ok: false, error: "Couldn't find anything to enrich." };
+  // Fill only empty fields — never clobber the owner's own edits.
+  const patch: { industry?: string; size?: string; website?: string | null; domain?: string | null; note?: string } = {};
+  if (data.industry && !company.industry) patch.industry = data.industry;
+  if (data.size && !company.size) patch.size = data.size;
+  if (data.website && !company.website) patch.website = data.website;
+  if (data.domain && !company.domain) patch.domain = data.domain;
+  if (data.summary && !company.note) patch.note = data.summary;
+  if (Object.keys(patch).length) await updateCompany(workspaceId, companyId, patch);
+  await logActivity(workspaceId, {
+    type: "note",
+    summary: `Enriched from the web${data.industry ? `: ${data.industry}` : ""}`,
+    body: data.summary,
+    source: "agent",
+    company_id: companyId,
+  });
+  return { ok: true };
+}
+
+/** Find a CRM contact's real email via Hunter (name + the company's domain). */
+export async function findContactEmailForCrm(
+  workspaceId: string,
+  contactId: string,
+): Promise<{ ok: true; email: string | null; score: number | null } | { ok: false; error: string }> {
+  if (!hunterConfigured()) return { ok: false, error: "Email finder isn't set up (HUNTER_API_KEY missing)." };
+  const contact = await getContact(workspaceId, contactId);
+  if (!contact) return { ok: false, error: "Contact not found." };
+  if (!contact.name.trim()) return { ok: false, error: "Add the person's name first." };
+  let domain: string | null = null;
+  if (contact.company_id) {
+    const company = await getCompany(workspaceId, contact.company_id);
+    domain = domainFromWebsite(company?.website) ?? company?.domain ?? null;
+  }
+  if (!domain) return { ok: false, error: "Add the company's website first so I can search its domain." };
+  const r = await findEmail({ fullName: contact.name, domain });
+  if (!r.email || (r.score !== null && r.score < HUNTER_MIN_SCORE)) return { ok: true, email: null, score: r.score };
+  const meta: OutreachEmailMeta = { score: r.score, status: r.status, sources: r.sources, found_via: "finder" };
+  await db
+    .update(crmContacts)
+    .set({ email: r.email, email_meta: JSON.stringify(meta), updated_at: new Date() })
+    .where(and(eq(crmContacts.workspace_id, workspaceId), eq(crmContacts.id, contactId)));
+  await logActivity(workspaceId, {
+    type: "note",
+    summary: `Email found via Hunter${r.score != null ? ` (${r.score}%)` : ""}`,
+    source: "agent",
+    contact_id: contactId,
+    company_id: contact.company_id,
+  });
+  return { ok: true, email: r.email, score: r.score };
+}
+
+/** Compact "needs attention" summary for the Today hub. */
+export async function crmNeedsAttention(workspaceId: string): Promise<{
+  staleDeals: number;
+  staleValue: number;
+  uncontacted: number;
+  topStale: { id: string; title: string; company: string | null; amount: number | null; days: number }[];
+}> {
+  const [stale, contacts] = await Promise.all([staleDeals(workspaceId, 14), listContacts(workspaceId)]);
+  return {
+    staleDeals: stale.length,
+    staleValue: stale.reduce((n, d) => n + (d.amount ?? 0), 0),
+    uncontacted: contacts.filter((c) => !c.last_touch_at).length,
+    topStale: stale.slice(0, 5).map((d) => ({
+      id: d.id,
+      title: d.title,
+      company: d.company_name ?? null,
+      amount: d.amount,
+      days: Math.floor((Date.now() - new Date(d.last_activity_at ?? d.created_at).getTime()) / 86400000),
+    })),
   };
 }
