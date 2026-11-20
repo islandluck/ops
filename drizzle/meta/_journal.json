@@ -519,6 +519,13 @@
       "when": 1795118353369,
       "tag": "0073_complex_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1795132237825,
+      "tag": "0074_loose_wildside",
+      "breakpoints": true
     }
   ]
 }

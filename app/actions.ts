@@ -404,6 +404,20 @@ import {
   type ItemInput,
 } from "@/lib/marketing";
 import type { MarketingAngle, MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
+import {
+  addSupplier,
+  createQuoteRequest,
+  deleteQuoteRequest,
+  deleteSupplier,
+  draftAllRfqs,
+  draftRfq,
+  listQuoteRequests,
+  listSuppliers,
+  sourceSuppliers,
+  updateQuoteRequest,
+  updateSupplier,
+} from "@/lib/quotes";
+import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierStatus } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -5062,5 +5076,168 @@ export async function growthBoostMarketingItemAction(
     return r.ok ? { ok: true, result: r.result } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't run the growth marketer." };
+  }
+}
+
+/* ---------------------------- quotes / sourcing -------------------------- */
+
+export async function listQuoteRequestsAction(): Promise<QuoteRequest[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listQuoteRequests(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createQuoteRequestAction(input: { title: string; spec?: string; target_count?: number }) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await createQuoteRequest(ws, input);
+    return r.ok ? { ok: true as const, requestId: r.request.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the request." };
+  }
+}
+
+export async function updateQuoteRequestAction(
+  id: string,
+  patch: { title?: string; spec?: string; target_count?: number; status?: QuoteRequestStatus },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateQuoteRequest(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteQuoteRequestAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteQuoteRequest(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function listSuppliersAction(requestId: string): Promise<QuoteSupplier[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listSuppliers(ws, requestId);
+  } catch {
+    return [];
+  }
+}
+
+export async function addSupplierAction(
+  requestId: string,
+  input: { company: string; website?: string | null; contact_email?: string | null },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await addSupplier(ws, requestId, input);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the supplier." };
+  }
+}
+
+export async function updateSupplierAction(
+  id: string,
+  patch: {
+    company?: string;
+    website?: string | null;
+    contact_email?: string | null;
+    status?: SupplierStatus;
+    note?: string;
+    quote_price?: string;
+    quote_lead_time?: string;
+    quote_notes?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateSupplier(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteSupplierAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteSupplier(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** Research suppliers for a request (Tavily → AI distill). */
+export async function sourceSuppliersAction(
+  requestId: string,
+): Promise<{ ok: boolean; added?: number; configured?: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await sourceSuppliers(ws, requestId);
+    return r.ok ? { ok: true, added: r.added, configured: r.configured } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Sourcing failed." };
+  }
+}
+
+/** Draft an RFQ email for one supplier → Email Manager. */
+export async function draftRfqAction(supplierId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await draftRfq(ws, supplierId, displayName(user), scopeUserId);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the RFQ." };
+  }
+}
+
+/** Draft RFQs for every supplier with an email + no draft yet. */
+export async function draftAllRfqsAction(requestId: string): Promise<{ drafted: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { drafted: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { drafted: 0 };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await draftAllRfqs(ws, requestId, displayName(user), scopeUserId);
+  } catch {
+    return { drafted: 0 };
   }
 }

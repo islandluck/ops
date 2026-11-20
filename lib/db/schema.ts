@@ -69,6 +69,8 @@ import type {
   PageStatus,
   PageType,
   PayType,
+  QuoteRequestStatus,
+  SupplierStatus,
   PermissionMode,
   PostStatus,
   Priority,
@@ -1525,6 +1527,54 @@ export const applications = pgTable(
     index("applications_ws_job_idx").on(t.workspace_id, t.job_id),
     uniqueIndex("applications_job_candidate_uniq").on(t.job_id, t.candidate_id),
   ],
+);
+
+/* --------------------------- quotes / sourcing --------------------------- */
+
+/** A request to source quotes for a product/service. */
+export const quoteRequests = pgTable(
+  "quote_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    spec: text("spec").notNull().default(""),
+    target_count: integer("target_count").notNull().default(3),
+    status: text("status").$type<QuoteRequestStatus>().notNull().default("sourcing"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("quote_requests_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** A supplier approached for a quote (the per-supplier RFQ + result). */
+export const quoteSuppliers = pgTable(
+  "quote_suppliers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    request_id: uuid("request_id")
+      .notNull()
+      .references(() => quoteRequests.id, { onDelete: "cascade" }),
+    company: text("company").notNull().default(""),
+    website: text("website"),
+    contact_email: text("contact_email"),
+    source: text("source").notNull().default("research"),
+    status: text("status").$type<SupplierStatus>().notNull().default("found"),
+    /** The Email Manager outbound draft staged for this supplier. */
+    outbound_draft_id: uuid("outbound_draft_id"),
+    note: text("note").notNull().default(""),
+    quote_price: text("quote_price").notNull().default(""),
+    quote_lead_time: text("quote_lead_time").notNull().default(""),
+    quote_notes: text("quote_notes").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("quote_suppliers_ws_request_idx").on(t.workspace_id, t.request_id)],
 );
 
 /* ------------------------------- marketing ------------------------------- */

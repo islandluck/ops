@@ -938,6 +938,52 @@ export interface Application {
   job_title?: string;
 }
 
+/* --------------------------- quotes / sourcing --------------------------- */
+
+export type QuoteRequestStatus = "sourcing" | "open" | "closed";
+/** A supplier's place in the RFQ flow. */
+export type SupplierStatus = "found" | "drafted" | "sent" | "replied" | "quoted" | "declined" | "no_response";
+
+/** A request to source quotes for a product/service (the sourcing job). */
+export interface QuoteRequest {
+  id: string;
+  workspace_id: string;
+  title: string;
+  /** The spec/details the agent uses in the RFQ. */
+  spec: string;
+  /** How many quotes the user wants. */
+  target_count: number;
+  status: QuoteRequestStatus;
+  created_at: string;
+  updated_at: string;
+  /** Rollups from list queries. */
+  supplier_count?: number;
+  quoted_count?: number;
+  sent_count?: number;
+}
+
+/** One supplier being approached for a quote (the per-supplier RFQ + its result). */
+export interface QuoteSupplier {
+  id: string;
+  workspace_id: string;
+  request_id: string;
+  company: string;
+  website: string | null;
+  contact_email: string | null;
+  /** Where the email/lead came from: "research" | "role_guess" | "manual". */
+  source: string;
+  status: SupplierStatus;
+  /** The Email Manager outbound draft staged for this supplier (if any). */
+  outbound_draft_id: string | null;
+  note: string;
+  /** Quote fields (logged manually in Phase 1; auto-extracted later). */
+  quote_price: string;
+  quote_lead_time: string;
+  quote_notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /* ------------------------------- marketing ------------------------------- */
 
 /** A marketing distribution channel. X = auto-publish; linkedin + newsletter =

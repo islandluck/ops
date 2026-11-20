@@ -37,6 +37,7 @@ import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { resolveRecipientCandidates } from "@/lib/agents/recipient";
 import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
+import { createQuoteRequest, draftAllRfqs, sourceSuppliers } from "@/lib/quotes";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecImage, type ExecTool } from "@/lib/ai/executive";
@@ -474,6 +475,52 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't complete the research." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "source_quotes",
+        description:
+          "Source price quotes for a product or service the founder needs. Researches real suppliers on the live web, then drafts a request-for-quote (RFQ) email to each in the Email Manager for the founder to review + send. Use when the founder wants quotes/pricing from vendors (e.g. 'find me quotes for a 100 kW electrolyzer'). Returns a link to the Quotes page to track suppliers + collected quotes.",
+        input_schema: {
+          type: "object",
+          properties: {
+            what: {
+              type: "string",
+              description: "The product/service to get quotes for (e.g. '100 kW electrolyzer for hydrogen production')",
+            },
+            details: { type: "string", description: "Any specs, requirements, or quantities to include in the RFQ" },
+            count: { type: "number", description: "How many quotes the founder wants (default 3)" },
+          },
+          required: ["what"],
+        },
+      },
+      run: async (input) => {
+        const what = str(input.what).trim();
+        if (!what) return { summary: "Tell me what you need a quote for." };
+        const details = str(input.details).trim();
+        const count = typeof input.count === "number" ? input.count : Number(input.count) || 3;
+        try {
+          const created = await createQuoteRequest(workspaceId, { title: what, spec: details, target_count: count });
+          if (!created.ok) return { summary: `Couldn't start the quote request: ${created.error}` };
+          const reqId = created.request.id;
+          const sourced = await sourceSuppliers(workspaceId, reqId);
+          if (!sourced.ok) return { summary: `Couldn't research suppliers: ${sourced.error}`, href: `/quotes?open=${reqId}` };
+          if (!sourced.configured) {
+            return {
+              summary:
+                "I created the quote request, but live web research isn't set up (no TAVILY_API_KEY) — add suppliers manually on the Quotes page.",
+              href: `/quotes?open=${reqId}`,
+            };
+          }
+          const drafted = await draftAllRfqs(workspaceId, reqId, "", null);
+          return {
+            summary: `Sourced ${sourced.added} supplier${sourced.added === 1 ? "" : "s"} for "${what}" and drafted ${drafted.drafted} request-for-quote email${drafted.drafted === 1 ? "" : "s"} in the Email Manager — review and send them there. Track replies + quotes on the Quotes page.`,
+            href: `/quotes?open=${reqId}`,
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't source quotes." };
         }
       },
     },

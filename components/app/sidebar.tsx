@@ -13,6 +13,7 @@ import {
   Compass,
   CreditCard,
   Gavel,
+  FileSearch,
   FileText,
   FolderKanban,
   FolderOpen,
@@ -80,6 +81,7 @@ const NAV_GROUPS: { title: string; items: { href: string; label: string; icon: L
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/talent", label: "Talent", icon: Briefcase },
+      { href: "/quotes", label: "Quotes", icon: FileSearch },
       { href: "/deep-dive", label: "Deep Dive", icon: Telescope },
       { href: "/opportunities", label: "Opportunities", icon: Target },
     ],
