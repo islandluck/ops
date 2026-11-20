@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { crmActivities, crmCompanies, crmContacts, crmDeals, outreachContacts } from "@/lib/db/schema";
+import { crmActivities, crmCompanies, crmContacts, crmDeals, crmPipelines, outreachContacts } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { draftFollowupEmail, enrichCompany } from "@/lib/ai/crm";
@@ -20,7 +20,10 @@ import type {
   CrmDeal,
   CrmDealStage,
   CrmForecast,
+  CrmPipeline,
   CrmRelationshipType,
+  CrmStage,
+  CrmStageKind,
   OutreachEmailMeta,
 } from "@/lib/types";
 
@@ -35,8 +38,15 @@ const uid = () => randomUUID();
 const iso = (d: Date) => new Date(d).toISOString();
 const isoN = (d: Date | null) => (d ? iso(d) : null);
 
-/** Non-terminal pipeline stages (everything but won/lost). */
-export const OPEN_STAGES: CrmDealStage[] = ["new", "qualified", "proposal", "negotiation"];
+/** The stages a brand-new workspace's default pipeline is seeded with. */
+export const DEFAULT_STAGES: CrmStage[] = [
+  { key: "new", label: "New", kind: "open" },
+  { key: "qualified", label: "Qualified", kind: "open" },
+  { key: "proposal", label: "Proposal", kind: "open" },
+  { key: "negotiation", label: "Negotiation", kind: "open" },
+  { key: "won", label: "Won", kind: "won" },
+  { key: "lost", label: "Lost", kind: "lost" },
+];
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function parseEmailMeta(raw: string | null): OutreachEmailMeta | null {
@@ -103,6 +113,7 @@ function toDeal(r: DealRow): CrmDeal {
     amount: r.amount_cents == null ? null : r.amount_cents / 100,
     currency: r.currency,
     stage: r.stage,
+    pipeline_id: r.pipeline_id,
     close_date: isoN(r.close_date),
     probability: r.probability,
     note: r.note,
@@ -206,6 +217,150 @@ async function lastActivityByDeal(workspaceId: string, dealIds: string[]): Promi
   return m;
 }
 
+/* ------------------------------- pipelines ------------------------------- */
+
+function toPipeline(r: typeof crmPipelines.$inferSelect): CrmPipeline {
+  return {
+    id: r.id,
+    workspace_id: r.workspace_id,
+    name: r.name,
+    stages: Array.isArray(r.stages) ? r.stages : [],
+    is_default: r.is_default,
+    position: r.position,
+    created_at: iso(r.created_at),
+    updated_at: iso(r.updated_at),
+  };
+}
+
+function stageKeyFromLabel(label: string, existing: Set<string>): string {
+  const base =
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 40) || "stage";
+  let key = base;
+  let i = 2;
+  while (existing.has(key)) key = `${base}_${i++}`;
+  return key;
+}
+
+/** Clean a stage list from the UI: keep keys stable, ensure kinds, never empty. */
+function normalizeStages(stages: { key?: string; label: string; kind?: CrmStageKind }[]): CrmStage[] {
+  const keys = new Set<string>();
+  const out: CrmStage[] = [];
+  for (const s of stages) {
+    const label = (s.label ?? "").trim().slice(0, 60);
+    if (!label) continue;
+    const kind: CrmStageKind = s.kind === "won" || s.kind === "lost" ? s.kind : "open";
+    const key = s.key && !keys.has(s.key) ? s.key : stageKeyFromLabel(label, keys);
+    keys.add(key);
+    out.push({ key, label, kind });
+  }
+  return out.length ? out : DEFAULT_STAGES;
+}
+
+/** All pipelines for the workspace, seeding a "Sales" default on first use. */
+export async function ensurePipelines(workspaceId: string): Promise<CrmPipeline[]> {
+  const rows = await db
+    .select()
+    .from(crmPipelines)
+    .where(eq(crmPipelines.workspace_id, workspaceId))
+    .orderBy(crmPipelines.position);
+  if (rows.length) return rows.map(toPipeline);
+  const id = uid();
+  const now = new Date();
+  await db.insert(crmPipelines).values({
+    id,
+    workspace_id: workspaceId,
+    name: "Sales",
+    stages: DEFAULT_STAGES,
+    is_default: true,
+    position: 0,
+    created_at: now,
+    updated_at: now,
+  });
+  const [row] = await db.select().from(crmPipelines).where(eq(crmPipelines.id, id)).limit(1);
+  return [toPipeline(row)];
+}
+
+export async function listPipelines(workspaceId: string): Promise<CrmPipeline[]> {
+  return ensurePipelines(workspaceId);
+}
+
+/** Classifier over a workspace's pipelines — resolve stage kind/label/prob by (pipeline, key). */
+async function loadPipelineIndex(workspaceId: string): Promise<{
+  defaultId: string | null;
+  kindOf: (pipelineId: string | null, stageKey: string) => CrmStageKind;
+  labelOf: (pipelineId: string | null, stageKey: string) => string;
+  nameOf: (pipelineId: string | null) => string | null;
+  defaultProb: (pipelineId: string | null, stageKey: string) => number;
+}> {
+  const pipelines = await ensurePipelines(workspaceId);
+  const def = pipelines.find((p) => p.is_default) ?? pipelines[0] ?? null;
+  const byId = new Map(pipelines.map((p) => [p.id, p]));
+  const pick = (pid: string | null) => (pid && byId.get(pid)) || def;
+  return {
+    defaultId: def?.id ?? null,
+    kindOf: (pid, key) => pick(pid)?.stages.find((s) => s.key === key)?.kind ?? "open",
+    labelOf: (pid, key) => pick(pid)?.stages.find((s) => s.key === key)?.label ?? key,
+    nameOf: (pid) => pick(pid)?.name ?? null,
+    defaultProb: (pid, key) => {
+      const p = pick(pid);
+      const st = p?.stages.find((s) => s.key === key);
+      if (!st || st.kind === "lost") return 0;
+      if (st.kind === "won") return 100;
+      const open = p!.stages.filter((s) => s.kind === "open");
+      const idx = open.findIndex((s) => s.key === key);
+      return Math.round(((idx + 1) / (open.length + 1)) * 100);
+    },
+  };
+}
+
+export async function createPipeline(
+  workspaceId: string,
+  input: { name: string; stages?: { key?: string; label: string; kind?: CrmStageKind }[] },
+): Promise<{ ok: true; pipeline: CrmPipeline } | { ok: false; error: string }> {
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: "Name the pipeline." };
+  const existing = await ensurePipelines(workspaceId);
+  const id = uid();
+  const now = new Date();
+  await db.insert(crmPipelines).values({
+    id,
+    workspace_id: workspaceId,
+    name: name.slice(0, 80),
+    stages: input.stages ? normalizeStages(input.stages) : DEFAULT_STAGES,
+    is_default: false,
+    position: existing.length,
+    created_at: now,
+    updated_at: now,
+  });
+  const [row] = await db.select().from(crmPipelines).where(eq(crmPipelines.id, id)).limit(1);
+  return { ok: true, pipeline: toPipeline(row) };
+}
+
+export async function updatePipeline(
+  workspaceId: string,
+  id: string,
+  patch: { name?: string; stages?: { key?: string; label: string; kind?: CrmStageKind }[] },
+): Promise<{ ok: boolean }> {
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (patch.name !== undefined) set.name = patch.name.slice(0, 80);
+  if (patch.stages !== undefined) set.stages = normalizeStages(patch.stages);
+  await db.update(crmPipelines).set(set).where(and(eq(crmPipelines.workspace_id, workspaceId), eq(crmPipelines.id, id)));
+  return { ok: true };
+}
+
+export async function deletePipeline(workspaceId: string, id: string): Promise<{ ok: boolean; error?: string }> {
+  const pipelines = await ensurePipelines(workspaceId);
+  if (pipelines.length <= 1) return { ok: false, error: "Can't delete the only pipeline." };
+  if (pipelines.find((p) => p.id === id)?.is_default) return { ok: false, error: "Make another pipeline the default first." };
+  await db.delete(crmPipelines).where(and(eq(crmPipelines.workspace_id, workspaceId), eq(crmPipelines.id, id)));
+  return { ok: true };
+}
+
 /* ------------------------------- companies ------------------------------- */
 
 export async function listCompanies(
@@ -230,16 +385,22 @@ export async function listCompanies(
       .from(crmContacts)
       .where(and(eq(crmContacts.workspace_id, workspaceId), inArray(crmContacts.company_id, ids))),
     db
-      .select({ company_id: crmDeals.company_id, stage: crmDeals.stage, amount_cents: crmDeals.amount_cents })
+      .select({
+        company_id: crmDeals.company_id,
+        stage: crmDeals.stage,
+        pipeline_id: crmDeals.pipeline_id,
+        amount_cents: crmDeals.amount_cents,
+      })
       .from(crmDeals)
       .where(and(eq(crmDeals.workspace_id, workspaceId), inArray(crmDeals.company_id, ids))),
   ]);
+  const pidx = await loadPipelineIndex(workspaceId);
   const contactCount = new Map<string, number>();
   for (const c of contacts) if (c.company_id) contactCount.set(c.company_id, (contactCount.get(c.company_id) ?? 0) + 1);
   const openCount = new Map<string, number>();
   const openValue = new Map<string, number>();
   for (const d of deals) {
-    if (!OPEN_STAGES.includes(d.stage)) continue;
+    if (pidx.kindOf(d.pipeline_id, d.stage) !== "open") continue;
     openCount.set(d.company_id, (openCount.get(d.company_id) ?? 0) + 1);
     openValue.set(d.company_id, (openValue.get(d.company_id) ?? 0) + (d.amount_cents ?? 0) / 100);
   }
@@ -524,6 +685,7 @@ export async function listDeals(workspaceId: string): Promise<CrmDeal[]> {
       : Promise.resolve([] as { id: string; name: string }[]),
     lastActivityByDeal(workspaceId, rows.map((r) => r.id)),
   ]);
+  const idx = await loadPipelineIndex(workspaceId);
   const company = new Map(companies.map((c) => [c.id, c]));
   const contactName = new Map(contacts.map((c) => [c.id, c.name]));
   return rows.map((r) => ({
@@ -532,6 +694,9 @@ export async function listDeals(workspaceId: string): Promise<CrmDeal[]> {
     company_type: company.get(r.company_id)?.type ?? null,
     contact_name: r.primary_contact_id ? contactName.get(r.primary_contact_id) ?? null : null,
     last_activity_at: lastAct.get(r.id) ?? null,
+    stage_kind: idx.kindOf(r.pipeline_id, r.stage),
+    stage_label: idx.labelOf(r.pipeline_id, r.stage),
+    pipeline_name: idx.nameOf(r.pipeline_id),
   }));
 }
 
@@ -543,6 +708,10 @@ export async function getDeal(workspaceId: string, id: string): Promise<CrmDeal 
     .limit(1);
   if (!r) return null;
   const deal = toDeal(r);
+  const idx = await loadPipelineIndex(workspaceId);
+  deal.stage_kind = idx.kindOf(r.pipeline_id, r.stage);
+  deal.stage_label = idx.labelOf(r.pipeline_id, r.stage);
+  deal.pipeline_name = idx.nameOf(r.pipeline_id);
   const [c] = await db
     .select({ name: crmCompanies.name, type: crmCompanies.relationship_type })
     .from(crmCompanies)
@@ -569,6 +738,7 @@ export async function createDeal(
     amount?: number | null;
     currency?: string;
     stage?: CrmDealStage;
+    pipeline_id?: string | null;
     primary_contact_id?: string | null;
     close_date?: string | null;
     probability?: number | null;
@@ -579,6 +749,16 @@ export async function createDeal(
   if (!input.company_id) return { ok: false, error: "A deal needs a company." };
   const title = input.title.trim();
   if (!title) return { ok: false, error: "Give the deal a title." };
+  // Resolve the pipeline (given or default) and keep the stage valid within it.
+  const pipelines = await ensurePipelines(workspaceId);
+  const pipeline =
+    (input.pipeline_id && pipelines.find((p) => p.id === input.pipeline_id)) ||
+    pipelines.find((p) => p.is_default) ||
+    pipelines[0];
+  const stage =
+    input.stage && pipeline.stages.some((s) => s.key === input.stage)
+      ? input.stage
+      : pipeline.stages.find((s) => s.kind === "open")?.key ?? pipeline.stages[0]?.key ?? "new";
   const id = uid();
   const now = new Date();
   await db.insert(crmDeals).values({
@@ -586,10 +766,11 @@ export async function createDeal(
     workspace_id: workspaceId,
     company_id: input.company_id,
     primary_contact_id: input.primary_contact_id ?? null,
+    pipeline_id: pipeline.id,
     title: title.slice(0, 200),
     amount_cents: input.amount == null ? null : Math.round(input.amount * 100),
     currency: (input.currency ?? "USD").slice(0, 8),
-    stage: input.stage ?? "new",
+    stage,
     close_date: input.close_date ? new Date(input.close_date) : null,
     probability: input.probability ?? null,
     note: (input.note ?? "").slice(0, 4000),
@@ -617,6 +798,7 @@ export async function updateDeal(
     amount?: number | null;
     currency?: string;
     stage?: CrmDealStage;
+    pipeline_id?: string | null;
     primary_contact_id?: string | null;
     company_id?: string;
     close_date?: string | null;
@@ -636,6 +818,7 @@ export async function updateDeal(
   if (patch.amount !== undefined) set.amount_cents = patch.amount == null ? null : Math.round(patch.amount * 100);
   if (patch.currency !== undefined) set.currency = patch.currency.slice(0, 8);
   if (patch.stage !== undefined) set.stage = patch.stage;
+  if (patch.pipeline_id !== undefined) set.pipeline_id = patch.pipeline_id || null;
   if (patch.primary_contact_id !== undefined) set.primary_contact_id = patch.primary_contact_id || null;
   if (patch.company_id !== undefined) set.company_id = patch.company_id;
   if (patch.close_date !== undefined) set.close_date = patch.close_date ? new Date(patch.close_date) : null;
@@ -739,7 +922,7 @@ export async function staleDeals(workspaceId: string, days = 14): Promise<CrmDea
   const deals = await listDeals(workspaceId);
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   return deals
-    .filter((d) => OPEN_STAGES.includes(d.stage))
+    .filter((d) => d.stage_kind === "open")
     .filter((d) => new Date(d.last_activity_at ?? d.created_at).getTime() < cutoff)
     .sort((a, b) => (b.amount ?? 0) - (a.amount ?? 0));
 }
@@ -755,7 +938,7 @@ export async function getCrmKpis(workspaceId: string): Promise<{
 }> {
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const [deals, contacts] = await Promise.all([listDeals(workspaceId), listContacts(workspaceId)]);
-  const open = deals.filter((d) => OPEN_STAGES.includes(d.stage));
+  const open = deals.filter((d) => d.stage_kind === "open");
   const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
   const stale = open.filter((d) => new Date(d.last_activity_at ?? d.created_at).getTime() < cutoff);
   return {
@@ -770,56 +953,36 @@ export async function getCrmKpis(workspaceId: string): Promise<{
 
 /* ------------------------------ forecasting ------------------------------ */
 
-const STAGE_LABEL: Record<string, string> = {
-  new: "New",
-  qualified: "Qualified",
-  proposal: "Proposal",
-  negotiation: "Negotiation",
-  won: "Won",
-  lost: "Lost",
-};
-/** Default close probability by stage, used to weight a deal when none is set. */
-function stageDefaultProb(stage: string): number {
-  switch (stage) {
-    case "new":
-      return 10;
-    case "qualified":
-      return 25;
-    case "proposal":
-      return 50;
-    case "negotiation":
-      return 70;
-    case "won":
-      return 100;
-    default:
-      return 0;
-  }
-}
-function dealWeighted(d: CrmDeal): number {
-  const prob = d.probability != null ? d.probability : stageDefaultProb(d.stage);
-  return (d.amount ?? 0) * (Math.max(0, Math.min(prob, 100)) / 100);
-}
-
-/** Probability-weighted pipeline forecast with by-stage + by-close-month breakdowns. */
+/** Probability-weighted pipeline forecast with by-stage + by-close-month breakdowns.
+ *  Pipeline-aware: open/won/lost + default probabilities come from each deal's pipeline. */
 export async function getForecast(workspaceId: string): Promise<CrmForecast> {
-  const deals = await listDeals(workspaceId);
-  const open = deals.filter((d) => OPEN_STAGES.includes(d.stage));
+  const [deals, idx] = await Promise.all([listDeals(workspaceId), loadPipelineIndex(workspaceId)]);
+  const weightOf = (d: CrmDeal): number => {
+    const prob = d.probability != null ? d.probability : idx.defaultProb(d.pipeline_id, d.stage);
+    return (d.amount ?? 0) * (Math.max(0, Math.min(prob, 100)) / 100);
+  };
+  const open = deals.filter((d) => d.stage_kind === "open");
   const now = Date.now();
-  const won = deals.filter((d) => d.stage === "won");
-  const lost = deals.filter((d) => d.stage === "lost");
+  const won = deals.filter((d) => d.stage_kind === "won");
+  const lost = deals.filter((d) => d.stage_kind === "lost");
   const closed = won.length + lost.length;
   const won90 = won.filter((d) => now - new Date(d.updated_at).getTime() < 90 * 86_400_000);
 
-  const byStage = OPEN_STAGES.map((key) => {
-    const ds = open.filter((d) => d.stage === key);
-    return {
-      key,
-      label: STAGE_LABEL[key] ?? key,
-      count: ds.length,
-      value: ds.reduce((n, d) => n + (d.amount ?? 0), 0),
-      weighted: ds.reduce((n, d) => n + dealWeighted(d), 0),
-    };
-  });
+  // By stage — group open deals by resolved stage label (so it works across pipelines).
+  const stageMap = new Map<string, { count: number; value: number; weighted: number }>();
+  const stageOrder: string[] = [];
+  for (const d of open) {
+    const label = d.stage_label ?? d.stage;
+    if (!stageMap.has(label)) {
+      stageMap.set(label, { count: 0, value: 0, weighted: 0 });
+      stageOrder.push(label);
+    }
+    const s = stageMap.get(label)!;
+    s.count += 1;
+    s.value += d.amount ?? 0;
+    s.weighted += weightOf(d);
+  }
+  const byStage = stageOrder.map((label) => ({ key: label, label, ...stageMap.get(label)! }));
 
   // Bucket open deals by close month (plus overdue + unscheduled).
   const buckets = new Map<string, { label: string; count: number; value: number; weighted: number }>();
@@ -844,7 +1007,7 @@ export async function getForecast(workspaceId: string): Promise<CrmForecast> {
     const b = buckets.get(key) ?? { label, count: 0, value: 0, weighted: 0 };
     b.count += 1;
     b.value += d.amount ?? 0;
-    b.weighted += dealWeighted(d);
+    b.weighted += weightOf(d);
     buckets.set(key, b);
   }
   const byMonth = Array.from(buckets.entries())
@@ -854,7 +1017,7 @@ export async function getForecast(workspaceId: string): Promise<CrmForecast> {
   return {
     openCount: open.length,
     openValue: open.reduce((n, d) => n + (d.amount ?? 0), 0),
-    weighted: open.reduce((n, d) => n + dealWeighted(d), 0),
+    weighted: open.reduce((n, d) => n + weightOf(d), 0),
     winRate: closed ? Math.round((won.length / closed) * 100) : null,
     wonValue90d: won90.reduce((n, d) => n + (d.amount ?? 0), 0),
     byStage,

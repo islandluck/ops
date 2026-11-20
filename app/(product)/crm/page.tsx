@@ -10,6 +10,7 @@ import {
   Mail,
   Plus,
   Search,
+  Settings,
   Sparkles,
   StickyNote,
   Trash2,
@@ -25,9 +26,13 @@ import {
   crmCreateCompanyAction,
   crmCreateContactAction,
   crmCreateDealAction,
+  crmCreatePipelineAction,
   crmDeleteCompanyAction,
   crmDeleteContactAction,
   crmDeleteDealAction,
+  crmDeletePipelineAction,
+  crmListPipelinesAction,
+  crmUpdatePipelineAction,
   crmDraftFollowupAction,
   crmEnrichCompanyAction,
   crmFindContactEmailAction,
@@ -43,18 +48,39 @@ import {
   crmUpdateContactAction,
   crmUpdateDealAction,
 } from "@/app/actions";
-import type { CrmActivity, CrmCompany, CrmContact, CrmDeal, CrmDealStage, CrmForecast, CrmRelationshipType } from "@/lib/types";
+import type {
+  CrmActivity,
+  CrmCompany,
+  CrmContact,
+  CrmDeal,
+  CrmDealStage,
+  CrmForecast,
+  CrmPipeline,
+  CrmRelationshipType,
+  CrmStage,
+  CrmStageKind,
+} from "@/lib/types";
 
 /* --------------------------------- meta ---------------------------------- */
 
-const STAGES: { key: CrmDealStage; label: string; tint: string }[] = [
-  { key: "new", label: "New", tint: "text-slate-500" },
-  { key: "qualified", label: "Qualified", tint: "text-sky-600 dark:text-sky-400" },
-  { key: "proposal", label: "Proposal", tint: "text-violet-600 dark:text-violet-400" },
-  { key: "negotiation", label: "Negotiation", tint: "text-amber-600 dark:text-amber-400" },
-  { key: "won", label: "Won", tint: "text-emerald-600 dark:text-emerald-400" },
-  { key: "lost", label: "Lost", tint: "text-muted-foreground" },
+const OPEN_TINTS = [
+  "text-slate-500",
+  "text-sky-600 dark:text-sky-400",
+  "text-violet-600 dark:text-violet-400",
+  "text-amber-600 dark:text-amber-400",
+  "text-teal-600 dark:text-teal-400",
+  "text-indigo-600 dark:text-indigo-400",
 ];
+/** Column tint for a stage — won/lost fixed, open stages cycle a palette by position. */
+function stageTint(stage: CrmStage, openIndex: number): string {
+  if (stage.kind === "won") return "text-emerald-600 dark:text-emerald-400";
+  if (stage.kind === "lost") return "text-muted-foreground";
+  return OPEN_TINTS[Math.max(0, openIndex) % OPEN_TINTS.length];
+}
+/** The pipeline a deal belongs to (falling back to the default). */
+function pipelineForDeal(d: CrmDeal, pipelines: CrmPipeline[]): CrmPipeline | undefined {
+  return pipelines.find((p) => p.id === d.pipeline_id) ?? pipelines.find((p) => p.is_default) ?? pipelines[0];
+}
 const REL_TYPES: { key: CrmRelationshipType; label: string; cls: string }[] = [
   { key: "customer", label: "Customer", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" },
   { key: "prospect", label: "Prospect", cls: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400" },
@@ -204,12 +230,14 @@ function DealDialog({
   deal,
   companies,
   contacts,
+  pipelines,
   onClose,
   onChanged,
 }: {
   deal: CrmDeal | null;
   companies: CrmCompany[];
   contacts: CrmContact[];
+  pipelines: CrmPipeline[];
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -239,6 +267,7 @@ function DealDialog({
 
   const companyContacts = useMemo(() => contacts.filter((c) => c.company_id === companyId), [contacts, companyId]);
   if (!deal) return null;
+  const dealStages = pipelineForDeal(deal, pipelines)?.stages ?? [];
 
   async function save() {
     setBusy("save");
@@ -300,8 +329,8 @@ function DealDialog({
           </div>
           <div>
             <Label>Stage</Label>
-            <select value={stage} onChange={(e) => setStage(e.target.value as CrmDealStage)} className={selectCls}>
-              {STAGES.map((s) => (
+            <select value={stage} onChange={(e) => setStage(e.target.value)} className={selectCls}>
+              {dealStages.map((s) => (
                 <option key={s.key} value={s.key}>
                   {s.label}
                 </option>
@@ -687,12 +716,14 @@ function AddDialog({
   open,
   kind,
   companies,
+  pipelineId,
   onClose,
   onDone,
 }: {
   open: boolean;
   kind: "company" | "contact" | "deal";
   companies: CrmCompany[];
+  pipelineId?: string;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -720,7 +751,13 @@ function AddDialog({
     let r: { ok: boolean; error?: string };
     if (kind === "company") r = await crmCreateCompanyAction({ name: a, relationship_type: type, website: b });
     else if (kind === "contact") r = await crmCreateContactAction({ name: a, email: b, company_id: companyId || null });
-    else r = await crmCreateDealAction({ company_id: companyId, title: a, amount: amount.trim() ? Number(amount) : null });
+    else
+      r = await crmCreateDealAction({
+        company_id: companyId,
+        title: a,
+        amount: amount.trim() ? Number(amount) : null,
+        pipeline_id: pipelineId ?? null,
+      });
     setSaving(false);
     if (r.ok) {
       onDone();
@@ -799,71 +836,288 @@ function AddDialog({
   );
 }
 
+/* -------------------------- pipeline manage dialog ----------------------- */
+
+function PipelineManageDialog({
+  open,
+  pipelines,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  pipelines: CrmPipeline[];
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [selId, setSelId] = useState("");
+  const [name, setName] = useState("");
+  const [stages, setStages] = useState<CrmStage[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const p = pipelines.find((x) => x.is_default) ?? pipelines[0];
+    setSelId(p?.id ?? "");
+    setError(null);
+  }, [open, pipelines]);
+  useEffect(() => {
+    const p = pipelines.find((x) => x.id === selId);
+    if (p) {
+      setName(p.name);
+      setStages(p.stages);
+    }
+  }, [selId, pipelines]);
+
+  const selected = pipelines.find((p) => p.id === selId);
+
+  function patchStage(i: number, patch: Partial<CrmStage>) {
+    setStages((s) => s.map((st, idx) => (idx === i ? { ...st, ...patch } : st)));
+  }
+  function addStage() {
+    setStages((s) => [...s, { key: "", label: "New stage", kind: "open" }]);
+  }
+  function removeStage(i: number) {
+    setStages((s) => s.filter((_, idx) => idx !== i));
+  }
+  function moveStage(i: number, dir: number) {
+    setStages((s) => {
+      const n = [...s];
+      const j = i + dir;
+      if (j < 0 || j >= n.length) return n;
+      [n[i], n[j]] = [n[j], n[i]];
+      return n;
+    });
+  }
+
+  async function saveStages() {
+    if (!selected) return;
+    setBusy("save");
+    setError(null);
+    await crmUpdatePipelineAction(selected.id, {
+      name,
+      stages: stages.map((s) => ({ key: s.key || undefined, label: s.label, kind: s.kind })),
+    });
+    setBusy(null);
+    onChanged();
+  }
+  async function newPipeline() {
+    setBusy("new");
+    setError(null);
+    const r = await crmCreatePipelineAction({ name: "New pipeline" });
+    setBusy(null);
+    if (r.ok) {
+      onChanged();
+      if (r.pipelineId) setSelId(r.pipelineId);
+    } else setError(r.error ?? "Couldn't create the pipeline.");
+  }
+  async function deleteSel() {
+    if (!selected) return;
+    if (!window.confirm(`Delete the "${selected.name}" pipeline? Its deals fall back to the default pipeline.`)) return;
+    setBusy("del");
+    setError(null);
+    const r = await crmDeletePipelineAction(selected.id);
+    setBusy(null);
+    if (r.ok) {
+      onChanged();
+      onClose();
+    } else setError(r.error ?? "Couldn't delete.");
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Pipelines & stages" className="max-w-lg">
+      <div className="flex max-h-[80vh] flex-col gap-3 overflow-y-auto pr-1">
+        <div className="flex items-center gap-2">
+          <select value={selId} onChange={(e) => setSelId(e.target.value)} className="h-9 flex-1 rounded-lg border border-border bg-card px-2 text-sm">
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.is_default ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" variant="outline" onClick={newPipeline} disabled={busy !== null}>
+            <Plus className="h-4 w-4" /> Pipeline
+          </Button>
+        </div>
+        <div>
+          <Label>Pipeline name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="w-full" />
+        </div>
+        <div>
+          <Label>Stages</Label>
+          <div className="mt-1 flex flex-col gap-1.5">
+            {stages.map((s, i) => (
+              <div key={i} className="flex items-center gap-1.5">
+                <Input value={s.label} onChange={(e) => patchStage(i, { label: e.target.value })} className="flex-1" />
+                <select
+                  value={s.kind}
+                  onChange={(e) => patchStage(i, { kind: e.target.value as CrmStageKind })}
+                  className="h-9 rounded-lg border border-border bg-card px-1.5 text-[12px]"
+                >
+                  <option value="open">Open</option>
+                  <option value="won">Won</option>
+                  <option value="lost">Lost</option>
+                </select>
+                <button onClick={() => moveStage(i, -1)} disabled={i === 0} className="px-1 text-muted-foreground disabled:opacity-30" title="Move up">
+                  ↑
+                </button>
+                <button
+                  onClick={() => moveStage(i, 1)}
+                  disabled={i === stages.length - 1}
+                  className="px-1 text-muted-foreground disabled:opacity-30"
+                  title="Move down"
+                >
+                  ↓
+                </button>
+                <button onClick={() => removeStage(i)} className="text-muted-foreground transition hover:text-destructive" title="Remove stage">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            <button onClick={addStage} className="mt-1 inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline">
+              <Plus className="h-3.5 w-3.5" /> Add stage
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Mark a stage &quot;Won&quot; and one &quot;Lost&quot; so pipeline value, forecasting, and win rate work.</p>
+        </div>
+        {error && <p className="text-sm text-amber-600">{error}</p>}
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+          <button
+            onClick={deleteSel}
+            disabled={busy !== null || selected?.is_default}
+            className="text-muted-foreground transition hover:text-destructive disabled:opacity-40"
+            title={selected?.is_default ? "Can't delete the default pipeline" : "Delete pipeline"}
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+          <Button size="sm" onClick={saveStages} disabled={busy !== null}>
+            {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Save
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /* ------------------------------ pipeline tab ----------------------------- */
 
 function PipelineTab({
   deals,
   companies,
   contacts,
+  pipelines,
   refresh,
 }: {
   deals: CrmDeal[];
   companies: CrmCompany[];
   contacts: CrmContact[];
+  pipelines: CrmPipeline[];
   refresh: () => void;
 }) {
+  const defaultPid = pipelines.find((p) => p.is_default)?.id ?? pipelines[0]?.id ?? "";
+  const [pipelineId, setPipelineId] = useState(defaultPid);
   const [filter, setFilter] = useState<CrmRelationshipType | "all">("all");
   const [openDeal, setOpenDeal] = useState<CrmDeal | null>(null);
   const [adding, setAdding] = useState(false);
+  const [managing, setManaging] = useState(false);
   const [stale, setStale] = useState<CrmDeal[]>([]);
 
   useEffect(() => {
     crmStaleDealsAction().then(setStale);
   }, [deals]);
+  useEffect(() => {
+    if (!pipelines.some((p) => p.id === pipelineId)) setPipelineId(defaultPid);
+  }, [pipelines, pipelineId, defaultPid]);
 
-  const filtered = useMemo(
-    () => (filter === "all" ? deals : deals.filter((d) => d.company_type === filter)),
-    [deals, filter],
+  const pipeline = pipelines.find((p) => p.id === pipelineId) ?? pipelines.find((p) => p.is_default) ?? pipelines[0];
+  const stages = pipeline?.stages ?? [];
+  const openStages = stages.filter((s) => s.kind === "open");
+
+  const inPipeline = useMemo(
+    () => deals.filter((d) => pipelineForDeal(d, pipelines)?.id === pipeline?.id),
+    [deals, pipelines, pipeline],
   );
-  const byStage = useMemo(() => {
-    const m: Record<CrmDealStage, CrmDeal[]> = { new: [], qualified: [], proposal: [], negotiation: [], won: [], lost: [] };
-    for (const d of filtered) m[d.stage].push(d);
-    return m;
-  }, [filtered]);
-  const openValue = filtered
-    .filter((d) => d.stage !== "won" && d.stage !== "lost")
-    .reduce((n, d) => n + (d.amount ?? 0), 0);
+  const filtered = useMemo(
+    () => (filter === "all" ? inPipeline : inPipeline.filter((d) => d.company_type === filter)),
+    [inPipeline, filter],
+  );
+  const grouped = useMemo(() => {
+    const m = new Map<string, CrmDeal[]>();
+    for (const s of stages) m.set(s.key, []);
+    const other: CrmDeal[] = [];
+    for (const d of filtered) (m.get(d.stage) ?? other).push(d);
+    return { m, other };
+  }, [filtered, stages]);
+  const openValue = filtered.filter((d) => d.stage_kind === "open").reduce((n, d) => n + (d.amount ?? 0), 0);
 
-  async function move(id: string, stage: CrmDealStage) {
+  async function move(id: string, stage: string) {
     await crmUpdateDealAction(id, { stage });
     refresh();
   }
 
+  const chipCls = (active: boolean) =>
+    cn(
+      "rounded-full border px-2.5 py-1 text-[12px] font-medium transition",
+      active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground",
+    );
+
+  const DealCard = ({ d }: { d: CrmDeal }) => (
+    <Card className="p-2.5">
+      <button type="button" className="block w-full text-left" onClick={() => setOpenDeal(d)}>
+        <div className="truncate text-sm font-medium">{d.title}</div>
+        <div className="truncate text-[11px] text-muted-foreground">{d.company_name || "—"}</div>
+        <div className="mt-1 flex items-center gap-2 text-[11px]">
+          <span className="font-medium tabular-nums">{money(d.amount)}</span>
+          <span className="text-muted-foreground">· {ago(d.last_activity_at)}</span>
+        </div>
+      </button>
+      <div className="mt-2 flex justify-end">
+        <select
+          value={d.stage}
+          onChange={(e) => move(d.id, e.target.value)}
+          className="rounded-md border border-border bg-card px-1.5 py-1 text-[11px]"
+        >
+          {stages.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.label}
+            </option>
+          ))}
+          {!stages.some((s) => s.key === d.stage) && <option value={d.stage}>{d.stage_label ?? d.stage}</option>}
+        </select>
+      </div>
+    </Card>
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => setFilter("all")}
-          className={cn(
-            "rounded-full border px-2.5 py-1 text-[12px] font-medium transition",
-            filter === "all" ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground",
-          )}
-        >
+        {pipelines.length > 1 && (
+          <select
+            value={pipelineId}
+            onChange={(e) => setPipelineId(e.target.value)}
+            className="h-8 rounded-lg border border-border bg-card px-2 text-[12.5px] font-medium"
+          >
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <button onClick={() => setFilter("all")} className={chipCls(filter === "all")}>
           All
         </button>
         {REL_TYPES.map((r) => (
-          <button
-            key={r.key}
-            onClick={() => setFilter(r.key)}
-            className={cn(
-              "rounded-full border px-2.5 py-1 text-[12px] font-medium transition",
-              filter === r.key ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground",
-            )}
-          >
+          <button key={r.key} onClick={() => setFilter(r.key)} className={chipCls(filter === r.key)}>
             {r.label}
           </button>
         ))}
         <span className="ml-auto text-[12px] font-medium text-muted-foreground">Open pipeline: {money(openValue)}</span>
+        <Button size="sm" variant="ghost" onClick={() => setManaging(true)} title="Edit pipelines & stages">
+          <Settings className="h-4 w-4" />
+        </Button>
         <Button size="sm" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" /> New deal
         </Button>
@@ -903,46 +1157,49 @@ function PipelineTab({
         </Card>
       ) : (
         <div className="flex gap-3 overflow-x-auto pb-2">
-          {STAGES.map((st) => (
-            <div key={st.key} className="flex w-64 shrink-0 flex-col gap-2">
+          {stages.map((st) => {
+            const col = grouped.m.get(st.key) ?? [];
+            const tint = stageTint(st, st.kind === "open" ? openStages.findIndex((o) => o.key === st.key) : 0);
+            return (
+              <div key={st.key} className="flex w-64 shrink-0 flex-col gap-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className={cn("text-[12px] font-semibold", tint)}>{st.label}</span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{col.length}</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {col.map((d) => (
+                    <DealCard key={d.id} d={d} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {grouped.other.length > 0 && (
+            <div className="flex w-64 shrink-0 flex-col gap-2">
               <div className="flex items-center justify-between px-1">
-                <span className={cn("text-[12px] font-semibold", st.tint)}>{st.label}</span>
-                <span className="text-[11px] tabular-nums text-muted-foreground">{byStage[st.key].length}</span>
+                <span className="text-[12px] font-semibold text-muted-foreground">Unsorted</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">{grouped.other.length}</span>
               </div>
               <div className="flex flex-col gap-2">
-                {byStage[st.key].map((d) => (
-                  <Card key={d.id} className="p-2.5">
-                    <button type="button" className="block w-full text-left" onClick={() => setOpenDeal(d)}>
-                      <div className="truncate text-sm font-medium">{d.title}</div>
-                      <div className="truncate text-[11px] text-muted-foreground">{d.company_name || "—"}</div>
-                      <div className="mt-1 flex items-center gap-2 text-[11px]">
-                        <span className="font-medium tabular-nums">{money(d.amount)}</span>
-                        <span className="text-muted-foreground">· {ago(d.last_activity_at)}</span>
-                      </div>
-                    </button>
-                    <div className="mt-2 flex justify-end">
-                      <select
-                        value={d.stage}
-                        onChange={(e) => move(d.id, e.target.value as CrmDealStage)}
-                        className="rounded-md border border-border bg-card px-1.5 py-1 text-[11px]"
-                      >
-                        {STAGES.map((s) => (
-                          <option key={s.key} value={s.key}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </Card>
+                {grouped.other.map((d) => (
+                  <DealCard key={d.id} d={d} />
                 ))}
               </div>
             </div>
-          ))}
+          )}
         </div>
       )}
 
-      <DealDialog deal={openDeal} companies={companies} contacts={contacts} onClose={() => setOpenDeal(null)} onChanged={refresh} />
-      <AddDialog open={adding} kind="deal" companies={companies} onClose={() => setAdding(false)} onDone={refresh} />
+      <DealDialog
+        deal={openDeal}
+        companies={companies}
+        contacts={contacts}
+        pipelines={pipelines}
+        onClose={() => setOpenDeal(null)}
+        onChanged={refresh}
+      />
+      <AddDialog open={adding} kind="deal" companies={companies} pipelineId={pipeline?.id} onClose={() => setAdding(false)} onDone={refresh} />
+      <PipelineManageDialog open={managing} pipelines={pipelines} onClose={() => setManaging(false)} onChanged={refresh} />
     </div>
   );
 }
@@ -953,11 +1210,13 @@ function CompaniesTab({
   companies,
   contacts,
   deals,
+  pipelines,
   refresh,
 }: {
   companies: CrmCompany[];
   contacts: CrmContact[];
   deals: CrmDeal[];
+  pipelines: CrmPipeline[];
   refresh: () => void;
 }) {
   const [filter, setFilter] = useState<CrmRelationshipType | "all">("all");
@@ -1032,7 +1291,7 @@ function CompaniesTab({
         onOpenDeal={(d) => setOpenDeal(d)}
       />
       <CrmContactDialog contact={openContact} companies={companies} onClose={() => setOpenContact(null)} onChanged={refresh} />
-      <DealDialog deal={openDeal} companies={companies} contacts={contacts} onClose={() => setOpenDeal(null)} onChanged={refresh} />
+      <DealDialog deal={openDeal} companies={companies} contacts={contacts} pipelines={pipelines} onClose={() => setOpenDeal(null)} onChanged={refresh} />
       <AddDialog open={adding} kind="company" companies={companies} onClose={() => setAdding(false)} onDone={refresh} />
     </div>
   );
@@ -1194,15 +1453,22 @@ export default function CrmPage() {
   const [companies, setCompanies] = useState<CrmCompany[] | null>(null);
   const [contacts, setContacts] = useState<CrmContact[] | null>(null);
   const [deals, setDeals] = useState<CrmDeal[] | null>(null);
+  const [pipelines, setPipelines] = useState<CrmPipeline[]>([]);
 
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [co, ct, dl] = await Promise.all([crmListCompaniesAction(), crmListContactsAction(), crmListDealsAction()]);
+    const [co, ct, dl, pl] = await Promise.all([
+      crmListCompaniesAction(),
+      crmListContactsAction(),
+      crmListDealsAction(),
+      crmListPipelinesAction(),
+    ]);
     setCompanies(co);
     setContacts(ct);
     setDeals(dl);
+    setPipelines(pl);
   }, []);
   useEffect(() => {
     refresh();
@@ -1266,9 +1532,9 @@ export default function CrmPage() {
             <Loader2 className="h-6 w-6 animate-spin" />
           </div>
         ) : tab === "pipeline" ? (
-          <PipelineTab deals={deals!} companies={companies!} contacts={contacts!} refresh={refresh} />
+          <PipelineTab deals={deals!} companies={companies!} contacts={contacts!} pipelines={pipelines} refresh={refresh} />
         ) : tab === "companies" ? (
-          <CompaniesTab companies={companies!} contacts={contacts!} deals={deals!} refresh={refresh} />
+          <CompaniesTab companies={companies!} contacts={contacts!} deals={deals!} pipelines={pipelines} refresh={refresh} />
         ) : tab === "contacts" ? (
           <ContactsTab contacts={contacts!} companies={companies!} refresh={refresh} />
         ) : (

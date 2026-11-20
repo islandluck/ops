@@ -47,6 +47,7 @@ import {
   listCompanies as crmListCompanies,
   listContacts as crmListContacts,
   listDeals as crmListDeals,
+  listPipelines as crmListPipelines,
   logActivity as crmLogActivity,
   logMeetingToCrm as crmLogMeeting,
   updateDeal as crmUpdateDeal,
@@ -730,16 +731,27 @@ function buildTools(workspaceId: string): ExecTool[] {
           const deals = await crmListDeals(workspaceId);
           const deal = deals.find((d) => d.title.toLowerCase().includes(title.toLowerCase()));
           if (!deal) return { summary: `No deal matching "${title}" in the CRM.` };
-          const STAGES = ["new", "qualified", "proposal", "negotiation", "won", "lost"];
+          const pipelines = await crmListPipelines(workspaceId);
+          const pipeline = pipelines.find((p) => p.id === deal.pipeline_id) ?? pipelines.find((p) => p.is_default) ?? pipelines[0];
           const patch: { stage?: CrmDealStage; amount?: number | null } = {};
-          const stage = str(input.stage).trim().toLowerCase();
-          if (stage && STAGES.includes(stage)) patch.stage = stage as CrmDealStage;
+          const wantStage = str(input.stage).trim().toLowerCase();
+          if (wantStage && pipeline) {
+            const match = pipeline.stages.find(
+              (s) => s.key.toLowerCase() === wantStage || s.label.toLowerCase() === wantStage || s.label.toLowerCase().includes(wantStage),
+            );
+            if (match) patch.stage = match.key;
+            else
+              return {
+                summary: `"${str(input.stage)}" isn't a stage in the "${pipeline.name}" pipeline. Stages: ${pipeline.stages.map((s) => s.label).join(", ")}.`,
+              };
+          }
           const val = input.value;
           if (val != null && val !== "") patch.amount = typeof val === "number" ? val : Number(val) || null;
           if (patch.stage === undefined && patch.amount === undefined) return { summary: "Tell me the new stage or value." };
           await crmUpdateDeal(workspaceId, deal.id, patch, { source: "agent" });
+          const stageLabel = patch.stage ? pipeline?.stages.find((s) => s.key === patch.stage)?.label ?? patch.stage : null;
           return {
-            summary: `Updated "${deal.title}"${patch.stage ? ` → ${patch.stage}` : ""}${patch.amount != null ? ` ($${patch.amount.toLocaleString()})` : ""}.`,
+            summary: `Updated "${deal.title}"${stageLabel ? ` → ${stageLabel}` : ""}${patch.amount != null ? ` ($${patch.amount.toLocaleString()})` : ""}.`,
             href: "/crm",
           };
         } catch (e) {
@@ -795,7 +807,7 @@ function buildTools(workspaceId: string): ExecTool[] {
             crmListDeals(workspaceId),
           ]);
           if (/\b(pipeline|cold|stale|open deals?|forecast|closing)\b/i.test(q)) {
-            const open = deals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+            const open = deals.filter((d) => d.stage_kind === "open");
             const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
             const cutoff = Date.now() - 14 * 86400000;
             const cold = open.filter((d) => new Date(d.last_activity_at ?? d.created_at).getTime() < cutoff);
@@ -809,7 +821,7 @@ function buildTools(workspaceId: string): ExecTool[] {
           const contact = contacts.find((c) => c.name.toLowerCase().includes(ql));
           if (company) {
             const cDeals = deals.filter((d) => d.company_id === company.id);
-            const open = cDeals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+            const open = cDeals.filter((d) => d.stage_kind === "open");
             const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
             return {
               summary: `${company.name} (${company.relationship_type}): ${company.contact_count ?? 0} contact(s), ${open.length} open deal(s)${val ? ` worth $${val.toLocaleString()}` : ""}.`,

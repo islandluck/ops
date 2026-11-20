@@ -466,6 +466,10 @@ import {
   listCompanies as crmListCompanies,
   listContacts as crmListContacts,
   listDeals as crmListDeals,
+  listPipelines as crmListPipelines,
+  createPipeline as crmCreatePipeline,
+  updatePipeline as crmUpdatePipeline,
+  deletePipeline as crmDeletePipeline,
   logActivity as crmLogActivity,
   promoteOutreachContact as crmPromoteOutreach,
   staleDeals as crmStaleDeals,
@@ -481,7 +485,9 @@ import type {
   CrmDeal,
   CrmDealStage,
   CrmForecast,
+  CrmPipeline,
   CrmRelationshipType,
+  CrmStageKind,
 } from "@/lib/types";
 import type {
   AppState,
@@ -5811,6 +5817,7 @@ export async function crmCreateDealAction(input: {
   amount?: number | null;
   currency?: string;
   stage?: CrmDealStage;
+  pipeline_id?: string | null;
   primary_contact_id?: string | null;
   close_date?: string | null;
   probability?: number | null;
@@ -5835,6 +5842,7 @@ export async function crmUpdateDealAction(
     amount?: number | null;
     currency?: string;
     stage?: CrmDealStage;
+    pipeline_id?: string | null;
     primary_contact_id?: string | null;
     company_id?: string;
     close_date?: string | null;
@@ -5953,6 +5961,61 @@ export async function crmForecastAction(): Promise<CrmForecast | null> {
     return await crmGetForecast(ws);
   } catch {
     return null;
+  }
+}
+
+export async function crmListPipelinesAction(): Promise<CrmPipeline[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmListPipelines(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function crmCreatePipelineAction(input: {
+  name: string;
+  stages?: { key?: string; label: string; kind?: CrmStageKind }[];
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await crmCreatePipeline(ws, input);
+    return r.ok ? { ok: true as const, pipelineId: r.pipeline.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the pipeline." };
+  }
+}
+
+export async function crmUpdatePipelineAction(
+  id: string,
+  patch: { name?: string; stages?: { key?: string; label: string; kind?: CrmStageKind }[] },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmUpdatePipeline(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmDeletePipelineAction(id: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    return await crmDeletePipeline(ws, id);
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't delete." };
   }
 }
 

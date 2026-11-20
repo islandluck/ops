@@ -77,6 +77,7 @@ import type {
   OutreachContactMethod,
   CrmRelationshipType,
   CrmDealStage,
+  CrmStage,
   CrmActivityType,
   CrmActivitySource,
   PermissionMode,
@@ -1700,6 +1701,25 @@ export const crmContacts = pgTable(
   ],
 );
 
+/** A configurable deal pipeline — a named, ordered set of stages. */
+export const crmPipelines = pgTable(
+  "crm_pipelines",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default("Pipeline"),
+    /** JSON: ordered CrmStage[] ({key,label,kind}). */
+    stages: jsonb("stages").$type<CrmStage[]>().notNull().default(sql`'[]'::jsonb`),
+    is_default: boolean("is_default").notNull().default(false),
+    position: integer("position").notNull().default(0),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("crm_pipelines_ws_idx").on(t.workspace_id, t.position)],
+);
+
 /** A deal / opportunity moving through the pipeline. */
 export const crmDeals = pgTable(
   "crm_deals",
@@ -1712,6 +1732,7 @@ export const crmDeals = pgTable(
       .notNull()
       .references(() => crmCompanies.id, { onDelete: "cascade" }),
     primary_contact_id: uuid("primary_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
+    pipeline_id: uuid("pipeline_id").references(() => crmPipelines.id, { onDelete: "set null" }),
     title: text("title").notNull().default(""),
     /** Deal value in cents (matches orders.amount_cents convention). */
     amount_cents: integer("amount_cents"),

@@ -1087,8 +1087,27 @@ export interface OutreachContact {
 
 /** What kind of relationship a company is — one flexible pipeline, filterable by type. */
 export type CrmRelationshipType = "customer" | "prospect" | "partner" | "investor" | "vendor" | "other";
-/** Deal pipeline stages (the board columns). "won" / "lost" are terminal. */
-export type CrmDealStage = "new" | "qualified" | "proposal" | "negotiation" | "won" | "lost";
+/** A deal's stage — a key into its pipeline's configurable stage list (free-form). */
+export type CrmDealStage = string;
+/** Whether a stage counts a deal as still in play, won, or lost. */
+export type CrmStageKind = "open" | "won" | "lost";
+/** One configurable stage within a pipeline. */
+export interface CrmStage {
+  key: string;
+  label: string;
+  kind: CrmStageKind;
+}
+/** A deal pipeline — a named, ordered set of stages. Workspaces can have several. */
+export interface CrmPipeline {
+  id: string;
+  workspace_id: string;
+  name: string;
+  stages: CrmStage[];
+  is_default: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
 /** A timeline entry's kind. */
 export type CrmActivityType = "note" | "email" | "meeting" | "call" | "stage_change" | "outreach" | "task";
 /** Where a timeline entry came from. */
@@ -1152,6 +1171,7 @@ export interface CrmDeal {
   amount: number | null;
   currency: string;
   stage: CrmDealStage;
+  pipeline_id: string | null;
   close_date: string | null;
   probability: number | null;
   note: string;
@@ -1163,6 +1183,10 @@ export interface CrmDeal {
   company_type?: CrmRelationshipType | null;
   contact_name?: string | null;
   last_activity_at?: string | null;
+  /** Resolved from the deal's pipeline (set by list queries). */
+  stage_kind?: CrmStageKind;
+  stage_label?: string;
+  pipeline_name?: string | null;
 }
 
 /** Pipeline forecast — weighted value, win rate, and breakdowns by stage + close month. */

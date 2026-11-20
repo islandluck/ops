@@ -554,6 +554,13 @@
       "when": 1795208125128,
       "tag": "0078_sturdy_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1795213405399,
+      "tag": "0079_thin_tomorrow_man",
+      "breakpoints": true
     }
   ]
 }
