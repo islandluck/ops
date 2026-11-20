@@ -102,8 +102,11 @@ export async function distillSuppliers(input: {
   return coerceLeads(parseJsonObject(text));
 }
 
-const WEB_SEARCH_TOOL = { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8 };
-const WEB_FETCH_TOOL = { type: "web_fetch_20260209" as const, name: "web_fetch" as const, max_uses: 10 };
+// allowed_callers:["direct"] is REQUIRED: these server tools default to requiring
+// "programmatic tool calling", which models like Haiku 4.5 don't support — without
+// it the request 400s. "direct" lets any model invoke the tool directly.
+const WEB_SEARCH_TOOL = { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8, allowed_callers: ["direct" as const] };
+const WEB_FETCH_TOOL = { type: "web_fetch_20260209" as const, name: "web_fetch" as const, max_uses: 10, allowed_callers: ["direct" as const] };
 
 /**
  * Primary supplier sourcing — Claude's native web-search + web-fetch tools. Claude
