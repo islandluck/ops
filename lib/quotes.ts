@@ -57,22 +57,6 @@ function toSupplier(r: SupplierRow): QuoteSupplier {
   };
 }
 
-/** Pull a bare domain out of a website URL. */
-function domainFrom(website: string | null): string | null {
-  if (!website) return null;
-  try {
-    const u = new URL(website.startsWith("http") ? website : `https://${website}`);
-    return u.hostname.replace(/^www\./, "").toLowerCase() || null;
-  } catch {
-    return null;
-  }
-}
-/** A reasonable role-based sales address when no email is published. */
-function roleEmailFrom(website: string | null): string | null {
-  const d = domainFrom(website);
-  return d ? `sales@${d}` : null;
-}
-
 /* ------------------------------- requests -------------------------------- */
 
 export async function listQuoteRequests(workspaceId: string): Promise<QuoteRequest[]> {
@@ -179,7 +163,7 @@ export async function addSupplier(
     request_id: requestId,
     company: input.company.trim().slice(0, 160),
     website: input.website?.trim() || null,
-    contact_email: input.contact_email?.trim() || roleEmailFrom(input.website ?? null),
+    contact_email: input.contact_email?.trim() || null,
     source: "manual",
     status: "found",
     note: "",
@@ -287,8 +271,8 @@ export async function sourceSuppliers(
       request_id: requestId,
       company: l.company.slice(0, 160),
       website: l.website,
-      contact_email: l.contact_email || roleEmailFrom(l.website),
-      source: l.contact_email ? "research" : "role_guess",
+      contact_email: l.contact_email,
+      source: "research",
       status: "found" as const,
       note: l.note.slice(0, 300),
       quote_price: "",
