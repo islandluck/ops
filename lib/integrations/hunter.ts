@@ -137,10 +137,35 @@ export async function accountCredits(): Promise<HunterAccount | null> {
  * user can SEE the roster and pick who to contact. Bills per result; the caller gates it
  * behind an explicit click. Prefers personal (individual) addresses over role inboxes.
  */
+/** Hunter's fixed department buckets for Domain Search filtering. */
+export const HUNTER_DEPARTMENTS = [
+  "executive",
+  "finance",
+  "management",
+  "operations",
+  "sales",
+  "marketing",
+  "legal",
+  "hr",
+  "it",
+  "support",
+  "communication",
+  "design",
+  "health",
+  "education",
+] as const;
+
+/** Hunter's seniority levels for Domain Search filtering. */
+export const HUNTER_SENIORITIES = ["executive", "senior", "junior"] as const;
+
 export async function domainSearch(input: {
   domain?: string | null;
   company?: string | null;
   limit?: number;
+  /** Comma-separated Hunter departments (narrows results server-side + saves credits). */
+  department?: string | null;
+  /** Comma-separated Hunter seniority levels (junior | senior | executive). */
+  seniority?: string | null;
 }): Promise<OutreachDomainPerson[]> {
   const key = process.env.HUNTER_API_KEY;
   if (!key) return [];
@@ -151,6 +176,8 @@ export async function domainSearch(input: {
   const params = new URLSearchParams({ api_key: key, limit: String(Math.max(1, Math.min(input.limit ?? 15, 25))), type: "personal" });
   if (domain) params.set("domain", domain);
   else if (company) params.set("company", company);
+  if (input.department?.trim()) params.set("department", input.department.trim());
+  if (input.seniority?.trim()) params.set("seniority", input.seniority.trim());
 
   try {
     const res = await fetch(`${BASE}/domain-search?${params.toString()}`, {

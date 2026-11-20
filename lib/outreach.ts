@@ -443,12 +443,20 @@ export async function getHunterCredits(): Promise<HunterCredits> {
 export async function searchDomainPeople(input: {
   domain?: string | null;
   company?: string | null;
+  department?: string | null;
+  seniority?: string | null;
 }): Promise<{ ok: true; people: OutreachDomainPerson[] } | { ok: false; error: string }> {
   if (!hunterConfigured()) return { ok: false, error: "Email finder isn't set up (HUNTER_API_KEY missing)." };
   const domain = domainFromWebsite(input.domain) ?? (input.domain?.trim() || null);
   const company = input.company?.trim() || null;
   if (!domain && !company) return { ok: false, error: "Enter a company website or domain." };
-  const people = await domainSearch({ domain, company, limit: 15 });
+  const people = await domainSearch({
+    domain,
+    company,
+    limit: 15,
+    department: input.department,
+    seniority: input.seniority,
+  });
   return { ok: true, people };
 }
 

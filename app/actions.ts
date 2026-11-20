@@ -5533,6 +5533,8 @@ export async function hunterCreditsAction(): Promise<HunterCredits> {
 export async function domainSearchAction(input: {
   domain?: string | null;
   company?: string | null;
+  department?: string | null;
+  seniority?: string | null;
 }): Promise<{ ok: boolean; people?: OutreachDomainPerson[]; error?: string }> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "Not authenticated." };

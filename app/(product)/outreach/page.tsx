@@ -582,6 +582,25 @@ function AddContactDialog({
 
 /* --------------------------- domain-search picker ------------------------ */
 
+// Hunter's fixed Domain-Search filter buckets (client-safe mirrors of the server lists).
+const DEPARTMENTS = [
+  "executive",
+  "finance",
+  "management",
+  "operations",
+  "sales",
+  "marketing",
+  "legal",
+  "hr",
+  "it",
+  "support",
+  "communication",
+  "design",
+  "health",
+  "education",
+];
+const SENIORITIES = ["executive", "senior", "junior"];
+
 function DomainSearchDialog({
   open,
   campaignId,
@@ -595,6 +614,9 @@ function DomainSearchDialog({
 }) {
   const [company, setCompany] = useState("");
   const [website, setWebsite] = useState("");
+  const [department, setDepartment] = useState("");
+  const [seniority, setSeniority] = useState("");
+  const [titleFilter, setTitleFilter] = useState("");
   const [people, setPeople] = useState<OutreachDomainPerson[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
@@ -604,10 +626,21 @@ function DomainSearchDialog({
     if (!open) return;
     setCompany("");
     setWebsite("");
+    setDepartment("");
+    setSeniority("");
+    setTitleFilter("");
     setPeople(null);
     setPicked(new Set());
     setError(null);
   }, [open]);
+
+  // Client-side title refinement (Hunter has no title param) over the returned roster.
+  function matches(p: OutreachDomainPerson): boolean {
+    const q = titleFilter.trim().toLowerCase();
+    return !q || p.position.toLowerCase().includes(q);
+  }
+  const visible = (people ?? []).filter(matches);
+  const visibleSelected = visible.filter((p) => picked.has(p.email)).length;
 
   async function search() {
     if (!company.trim() && !website.trim()) {
@@ -617,7 +650,7 @@ function DomainSearchDialog({
     setBusy("search");
     setError(null);
     setPeople(null);
-    const r = await domainSearchAction({ company, domain: website });
+    const r = await domainSearchAction({ company, domain: website, department: department || null, seniority: seniority || null });
     setBusy(null);
     if (!r.ok) {
       setError(r.error ?? "Lookup failed.");
@@ -636,8 +669,7 @@ function DomainSearchDialog({
     });
   }
   async function add() {
-    if (!people) return;
-    const chosen = people.filter((p) => picked.has(p.email));
+    const chosen = (people ?? []).filter((p) => matches(p) && picked.has(p.email));
     if (!chosen.length) return;
     setBusy("add");
     const r = await addContactsFromDomainAction(campaignId, {
@@ -658,7 +690,8 @@ function DomainSearchDialog({
     <Dialog open={open} onClose={onClose} title="Find people at a company" className="max-w-xl">
       <div className="flex max-h-[76vh] flex-col gap-3 overflow-y-auto pr-1">
         <p className="text-[12.5px] text-muted-foreground">
-          Look up a company's team on Hunter and pick who to add. Spends Hunter search credits — only runs when you click Search.
+          Look up a company's team on Hunter and pick who to add. Department and seniority narrow the search itself (Hunter bills
+          per result, so this also saves credits); the title keyword then refines the list shown. Runs only when you click Search.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -670,6 +703,42 @@ function DomainSearchDialog({
             <Input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="acme.com" />
           </div>
         </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <Label>Department</Label>
+            <select
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+              className="mt-1 h-9 w-full rounded-lg border border-border bg-card px-2 text-sm capitalize"
+            >
+              <option value="">Any</option>
+              {DEPARTMENTS.map((d) => (
+                <option key={d} value={d} className="capitalize">
+                  {d}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label>Seniority</Label>
+            <select
+              value={seniority}
+              onChange={(e) => setSeniority(e.target.value)}
+              className="mt-1 h-9 w-full rounded-lg border border-border bg-card px-2 text-sm capitalize"
+            >
+              <option value="">Any</option>
+              {SENIORITIES.map((s) => (
+                <option key={s} value={s} className="capitalize">
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label>Title contains</Label>
+            <Input value={titleFilter} onChange={(e) => setTitleFilter(e.target.value)} placeholder="procurement" />
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <Button size="sm" onClick={search} disabled={busy !== null}>
             {busy === "search" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
@@ -677,15 +746,15 @@ function DomainSearchDialog({
           </Button>
           {people && (
             <span className="text-[12px] text-muted-foreground">
-              {people.length} found · {picked.size} selected
+              {visible.length} shown · {visibleSelected} selected
             </span>
           )}
         </div>
         {error && <p className="text-sm text-amber-600">{error}</p>}
 
-        {people && people.length > 0 && (
+        {people && visible.length > 0 && (
           <div className="flex flex-col divide-y divide-border/60 overflow-hidden rounded-lg border border-border">
-            {people.map((p) => {
+            {visible.map((p) => {
               const name = `${p.first_name} ${p.last_name}`.trim() || p.email;
               const on = picked.has(p.email);
               return (
@@ -716,9 +785,11 @@ function DomainSearchDialog({
             })}
           </div>
         )}
-        {people && people.length === 0 && (
+        {people && visible.length === 0 && (
           <p className="text-[12.5px] text-muted-foreground">
-            No people found for that company on Hunter — try the domain, or add contacts manually.
+            {people.length === 0
+              ? "No people found for that company on Hunter — try the domain, adjust the filters, or add contacts manually."
+              : "No results match the title keyword — clear or broaden it."}
           </p>
         )}
 
@@ -726,9 +797,9 @@ function DomainSearchDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={add} disabled={busy !== null || !people || picked.size === 0}>
+          <Button onClick={add} disabled={busy !== null || visibleSelected === 0}>
             {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Add {picked.size || ""} {picked.size === 1 ? "contact" : "contacts"}
+            Add {visibleSelected || ""} {visibleSelected === 1 ? "contact" : "contacts"}
           </Button>
         </div>
       </div>
