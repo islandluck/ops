@@ -7,16 +7,16 @@ import { quoteRequests, quoteSuppliers } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { tavilyConfigured, tavilySearch } from "@/lib/integrations/tavily";
-import { distillSuppliers, draftRfqEmail } from "@/lib/ai/sourcing";
+import { distillSuppliers, draftRfqEmail, searchSuppliers, type SupplierLead } from "@/lib/ai/sourcing";
 import { runWithUsage } from "@/lib/ai/usage";
 import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierStatus } from "@/lib/types";
 
 /**
  * Quote sourcing engine — the user (or the Executive's source_quotes tool) opens
- * a request, the agent researches suppliers (Tavily), derives a contact email
- * (role-based sales@ when none is published), and drafts an RFQ email per
- * supplier into the Email Manager to approve + send. Nothing auto-sends.
- * Server-only.
+ * a request, the agent researches suppliers (Claude native web search, Tavily
+ * fallback), derives a contact email (role-based sales@ when none is published),
+ * and drafts an RFQ email per supplier into the Email Manager to approve + send.
+ * Nothing auto-sends. Server-only.
  */
 
 const uid = () => randomUUID();
@@ -235,20 +235,41 @@ export async function sourceSuppliers(
 ): Promise<{ ok: true; added: number; configured: boolean } | { ok: false; error: string }> {
   const request = await getQuoteRequest(workspaceId, requestId);
   if (!request) return { ok: false, error: "Request not found." };
-  if (!tavilyConfigured()) return { ok: true, added: 0, configured: false };
+
+  const hasAI = Boolean(process.env.ANTHROPIC_API_KEY);
+  const configured = hasAI || tavilyConfigured();
+  if (!configured) return { ok: true, added: 0, configured: false };
 
   const { brief } = await getPlanningContext(workspaceId);
-  const query = `${request.title} supplier OR manufacturer OR vendor`;
-  const results = await tavilySearch(query, { maxResults: 10, searchDepth: "advanced" });
-  if (!results.length) return { ok: true, added: 0, configured: true };
 
-  let leads;
-  try {
-    leads = await runWithUsage(workspaceId, "quote-source", () =>
-      distillSuppliers({ query: request.title, spec: request.spec, brief, results }),
-    );
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Sourcing failed." };
+  // Primary: Claude's native web search. Claude drives its own queries with its
+  // knowledge of the sector, so it surfaces the recognized market leaders and
+  // filters out marketplace/no-name listings a single keyword query drags in.
+  let leads: SupplierLead[] = [];
+  if (hasAI) {
+    try {
+      leads = await runWithUsage(workspaceId, "quote-source", () =>
+        searchSuppliers({ query: request.title, spec: request.spec, brief }),
+      );
+    } catch (e) {
+      // Web search unavailable (e.g. not enabled on the key) — fall through to Tavily.
+      console.warn(`[quotes] web-search sourcing failed, trying Tavily: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Fallback: Tavily keyword search → distill, when web search is off or found nothing.
+  if (!leads.length && tavilyConfigured()) {
+    const query = `${request.title} manufacturer OR supplier`;
+    const results = await tavilySearch(query, { maxResults: 10, searchDepth: "advanced" });
+    if (results.length) {
+      try {
+        leads = await runWithUsage(workspaceId, "quote-source", () =>
+          distillSuppliers({ query: request.title, spec: request.spec, brief, results }),
+        );
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : "Sourcing failed." };
+      }
+    }
   }
 
   const existing = await db
@@ -278,7 +299,7 @@ export async function sourceSuppliers(
     }));
   if (rows.length) await db.insert(quoteSuppliers).values(rows);
   if (request.status === "sourcing") await updateQuoteRequest(workspaceId, requestId, { status: "open" });
-  return { ok: true, added: rows.length, configured: true };
+  return { ok: true, added: rows.length, configured };
 }
 
 /* --------------------------------- RFQ ----------------------------------- */

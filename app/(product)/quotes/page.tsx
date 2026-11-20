@@ -368,7 +368,7 @@ function RequestDetail({ request, onBack, onChanged }: { request: QuoteRequest; 
     await refresh();
     onChanged();
     if (!r.ok) setNote(r.error ?? "Couldn't source suppliers.");
-    else if (!r.configured) setNote("Web research isn't set up — add a TAVILY_API_KEY, or add suppliers manually.");
+    else if (!r.configured) setNote("AI web research isn't available right now — add suppliers manually.");
     else setNote(r.added ? `Found ${r.added} new supplier${r.added === 1 ? "" : "s"}.` : "No new suppliers found — try adding some manually.");
   }
   async function draftAll() {
