@@ -1083,6 +1083,105 @@ export interface OutreachContact {
   updated_at: string;
 }
 
+/* ---------------------------------- CRM ---------------------------------- */
+
+/** What kind of relationship a company is — one flexible pipeline, filterable by type. */
+export type CrmRelationshipType = "customer" | "prospect" | "partner" | "investor" | "vendor" | "other";
+/** Deal pipeline stages (the board columns). "won" / "lost" are terminal. */
+export type CrmDealStage = "new" | "qualified" | "proposal" | "negotiation" | "won" | "lost";
+/** A timeline entry's kind. */
+export type CrmActivityType = "note" | "email" | "meeting" | "call" | "stage_change" | "outreach" | "task";
+/** Where a timeline entry came from. */
+export type CrmActivitySource = "manual" | "agent" | "email_manager" | "calendar" | "outreach" | "system";
+
+/** A company / account in the CRM. */
+export interface CrmCompany {
+  id: string;
+  workspace_id: string;
+  name: string;
+  domain: string | null;
+  website: string | null;
+  industry: string;
+  size: string;
+  relationship_type: CrmRelationshipType;
+  status: string;
+  note: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  /** Rollups from list queries. */
+  contact_count?: number;
+  open_deal_count?: number;
+  /** Sum of open deal value, in dollars. */
+  open_value?: number;
+  last_activity_at?: string | null;
+}
+
+/** A person in the CRM. */
+export interface CrmContact {
+  id: string;
+  workspace_id: string;
+  company_id: string | null;
+  name: string;
+  title: string;
+  email: string | null;
+  phone: string;
+  linkedin_url: string | null;
+  status: string;
+  tags: string[];
+  note: string;
+  /** Hunter result detail for the email (reused from Outreach). */
+  email_meta: OutreachEmailMeta | null;
+  last_touch_at: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  /** Joins / rollups. */
+  company_name?: string | null;
+  open_deal_count?: number;
+}
+
+/** A deal / opportunity moving through the pipeline. */
+export interface CrmDeal {
+  id: string;
+  workspace_id: string;
+  company_id: string;
+  primary_contact_id: string | null;
+  title: string;
+  /** Deal value in dollars (null when unset). Stored as cents. */
+  amount: number | null;
+  currency: string;
+  stage: CrmDealStage;
+  close_date: string | null;
+  probability: number | null;
+  note: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  /** Joins / rollups. */
+  company_name?: string | null;
+  company_type?: CrmRelationshipType | null;
+  contact_name?: string | null;
+  last_activity_at?: string | null;
+}
+
+/** One timeline entry against a company / contact / deal. */
+export interface CrmActivity {
+  id: string;
+  workspace_id: string;
+  company_id: string | null;
+  contact_id: string | null;
+  deal_id: string | null;
+  type: CrmActivityType;
+  summary: string;
+  body: string;
+  source: CrmActivitySource;
+  /** A link back to the originating record (e.g. an outbound_draft id). */
+  link_id: string | null;
+  occurred_at: string;
+  created_at: string;
+}
+
 /* ------------------------------- marketing ------------------------------- */
 
 /** A marketing distribution channel. X = auto-publish; linkedin + newsletter =

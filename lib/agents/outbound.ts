@@ -309,6 +309,21 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
       summary: `Sent email to ${row.recipient_name || to}: ${row.subject}`.slice(0, 300),
       created_at: now,
     });
+    // Mirror the send onto the CRM timeline (owner plane only). Best-effort — a CRM
+    // hiccup must never fail the actual email send. Dynamic import avoids a cycle
+    // (crm.ts imports the outbound draft staging helper).
+    try {
+      const { logOutboundEmailToCrm } = await import("@/lib/crm");
+      await logOutboundEmailToCrm(row.workspace_id, {
+        email: to,
+        name: row.recipient_name,
+        subject: row.subject,
+        draftId: row.id,
+        sentAt: now,
+      });
+    } catch (e) {
+      console.warn(`[crm] email auto-log failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   return { ok: true };
 }

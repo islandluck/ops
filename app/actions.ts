@@ -447,6 +447,36 @@ import type {
   OutreachDomainPerson,
   OutreachStatus,
 } from "@/lib/types";
+import {
+  createCompany as crmCreateCompany,
+  createContact as crmCreateContact,
+  createDeal as crmCreateDeal,
+  deleteCompany as crmDeleteCompany,
+  deleteContact as crmDeleteContact,
+  deleteDeal as crmDeleteDeal,
+  getCompany as crmGetCompany,
+  getContact as crmGetContact,
+  getDeal as crmGetDeal,
+  listActivities as crmListActivities,
+  listCompanies as crmListCompanies,
+  listContacts as crmListContacts,
+  listDeals as crmListDeals,
+  logActivity as crmLogActivity,
+  promoteOutreachContact as crmPromoteOutreach,
+  staleDeals as crmStaleDeals,
+  updateCompany as crmUpdateCompany,
+  updateContact as crmUpdateContact,
+  updateDeal as crmUpdateDeal,
+} from "@/lib/crm";
+import type {
+  CrmActivity,
+  CrmActivityType,
+  CrmCompany,
+  CrmContact,
+  CrmDeal,
+  CrmDealStage,
+  CrmRelationshipType,
+} from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -5578,5 +5608,324 @@ export async function verifyContactEmailAction(
     return r.ok ? { ok: true, status: r.status, score: r.score } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't verify the email." };
+  }
+}
+
+/* ---------------------------------- CRM ---------------------------------- */
+
+export async function crmListCompaniesAction(type?: CrmRelationshipType): Promise<CrmCompany[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmListCompanies(ws, type ? { type } : undefined);
+  } catch {
+    return [];
+  }
+}
+
+export async function crmGetCompanyAction(id: string): Promise<CrmCompany | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await crmGetCompany(ws, id);
+  } catch {
+    return null;
+  }
+}
+
+export async function crmCreateCompanyAction(input: {
+  name: string;
+  domain?: string | null;
+  website?: string | null;
+  industry?: string;
+  size?: string;
+  relationship_type?: CrmRelationshipType;
+  note?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await crmCreateCompany(ws, input);
+    return r.ok ? { ok: true as const, companyId: r.company.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the company." };
+  }
+}
+
+export async function crmUpdateCompanyAction(
+  id: string,
+  patch: {
+    name?: string;
+    domain?: string | null;
+    website?: string | null;
+    industry?: string;
+    size?: string;
+    relationship_type?: CrmRelationshipType;
+    status?: string;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmUpdateCompany(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmDeleteCompanyAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmDeleteCompany(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmListContactsAction(companyId?: string): Promise<CrmContact[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmListContacts(ws, companyId ? { companyId } : undefined);
+  } catch {
+    return [];
+  }
+}
+
+export async function crmGetContactAction(id: string): Promise<CrmContact | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await crmGetContact(ws, id);
+  } catch {
+    return null;
+  }
+}
+
+export async function crmCreateContactAction(input: {
+  name: string;
+  company_id?: string | null;
+  title?: string;
+  email?: string | null;
+  phone?: string;
+  linkedin_url?: string | null;
+  note?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await crmCreateContact(ws, input);
+    return r.ok ? { ok: true as const, contactId: r.contact.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the contact." };
+  }
+}
+
+export async function crmUpdateContactAction(
+  id: string,
+  patch: {
+    name?: string;
+    company_id?: string | null;
+    title?: string;
+    email?: string | null;
+    phone?: string;
+    linkedin_url?: string | null;
+    status?: string;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmUpdateContact(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmDeleteContactAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmDeleteContact(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmListDealsAction(): Promise<CrmDeal[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmListDeals(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function crmGetDealAction(id: string): Promise<CrmDeal | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await crmGetDeal(ws, id);
+  } catch {
+    return null;
+  }
+}
+
+export async function crmCreateDealAction(input: {
+  company_id: string;
+  title: string;
+  amount?: number | null;
+  currency?: string;
+  stage?: CrmDealStage;
+  primary_contact_id?: string | null;
+  close_date?: string | null;
+  probability?: number | null;
+  note?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await crmCreateDeal(ws, input);
+    return r.ok ? { ok: true as const, dealId: r.deal.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the deal." };
+  }
+}
+
+export async function crmUpdateDealAction(
+  id: string,
+  patch: {
+    title?: string;
+    amount?: number | null;
+    currency?: string;
+    stage?: CrmDealStage;
+    primary_contact_id?: string | null;
+    company_id?: string;
+    close_date?: string | null;
+    probability?: number | null;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmUpdateDeal(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmDeleteDealAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await crmDeleteDeal(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function crmListActivitiesAction(scope: {
+  contact_id?: string;
+  deal_id?: string;
+  company_id?: string;
+}): Promise<CrmActivity[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmListActivities(ws, scope);
+  } catch {
+    return [];
+  }
+}
+
+/** Log a manual note (or other activity type) to a contact / deal / company. */
+export async function crmLogNoteAction(
+  scope: { contact_id?: string; deal_id?: string; company_id?: string },
+  text: string,
+  type: CrmActivityType = "note",
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  if (!text.trim()) return { ok: false as const };
+  try {
+    await crmLogActivity(ws, {
+      type,
+      summary: text.trim().slice(0, 140),
+      body: text.trim(),
+      source: "manual",
+      contact_id: scope.contact_id ?? null,
+      deal_id: scope.deal_id ?? null,
+      company_id: scope.company_id ?? null,
+    });
+    return { ok: true as const };
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** Promote an Outreach contact into the CRM (company + contact + timeline entry). */
+export async function crmPromoteOutreachAction(
+  outreachContactId: string,
+): Promise<{ ok: boolean; contactId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await crmPromoteOutreach(ws, outreachContactId);
+    return r.ok ? { ok: true, contactId: r.contactId } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't add to CRM." };
+  }
+}
+
+export async function crmStaleDealsAction(): Promise<CrmDeal[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await crmStaleDeals(ws, 14);
+  } catch {
+    return [];
   }
 }

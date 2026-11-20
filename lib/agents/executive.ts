@@ -39,6 +39,16 @@ import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { createQuoteRequest, draftAllRfqs, sourceSuppliers } from "@/lib/quotes";
 import { createOutreachCampaign, draftAllOutreach, sourceContacts } from "@/lib/outreach";
+import {
+  createContact as crmCreateContact,
+  createDeal as crmCreateDeal,
+  findOrCreateCompany as crmFindOrCreateCompany,
+  listCompanies as crmListCompanies,
+  listContacts as crmListContacts,
+  listDeals as crmListDeals,
+  logActivity as crmLogActivity,
+  updateDeal as crmUpdateDeal,
+} from "@/lib/crm";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecImage, type ExecTool } from "@/lib/ai/executive";
@@ -66,6 +76,8 @@ import type {
   MemoryKind,
   Priority,
   UpdateAudience,
+  CrmDealStage,
+  CrmRelationshipType,
 } from "@/lib/types";
 
 /**
@@ -575,6 +587,213 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't run outreach." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "crm_add",
+        description:
+          "Add a company (and optionally a person and/or a deal) to the CRM. Use when the founder mentions a new company, lead, partner, investor, or vendor to track (e.g. 'add Acme Corp as a prospect', 'add John Smith at Beta'). Operator's CRM is the system of record.",
+        input_schema: {
+          type: "object",
+          properties: {
+            company: { type: "string", description: "Company / account name" },
+            relationship_type: {
+              type: "string",
+              description: "customer | prospect | partner | investor | vendor | other (default prospect)",
+            },
+            person: { type: "string", description: "A contact's full name at the company (optional)" },
+            title: { type: "string", description: "The contact's title (optional)" },
+            email: { type: "string", description: "The contact's email (optional)" },
+            deal: { type: "string", description: "A deal title to open for this company (optional)" },
+            deal_amount: { type: "number", description: "The deal's value in dollars (optional)" },
+          },
+          required: ["company"],
+        },
+      },
+      run: async (input) => {
+        const companyName = str(input.company).trim();
+        if (!companyName) return { summary: "Which company should I add?" };
+        try {
+          const relRaw = str(input.relationship_type).trim().toLowerCase();
+          const REL = ["customer", "prospect", "partner", "investor", "vendor", "other"];
+          const rel = REL.includes(relRaw) ? (relRaw as CrmRelationshipType) : undefined;
+          const company = await crmFindOrCreateCompany(workspaceId, { name: companyName, relationship_type: rel, source: "agent" });
+          const parts = [`${company.name} is in the CRM`];
+          let contactId: string | null = null;
+          const person = str(input.person).trim();
+          const email = str(input.email).trim();
+          if (person || email) {
+            const c = await crmCreateContact(workspaceId, {
+              name: person,
+              company_id: company.id,
+              title: str(input.title),
+              email: email || null,
+              source: "agent",
+            });
+            if (c.ok) {
+              contactId = c.contact.id;
+              parts.push(`with ${c.contact.name}`);
+            }
+          }
+          const dealTitle = str(input.deal).trim();
+          if (dealTitle) {
+            const amt = typeof input.deal_amount === "number" ? input.deal_amount : Number(input.deal_amount) || null;
+            const d = await crmCreateDeal(workspaceId, {
+              company_id: company.id,
+              title: dealTitle,
+              amount: amt,
+              primary_contact_id: contactId,
+              source: "agent",
+            });
+            if (d.ok) parts.push(`and the deal "${dealTitle}"`);
+          }
+          return { summary: parts.join(" ") + ".", href: "/crm" };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't add to the CRM." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "crm_log",
+        description:
+          "Log a note to someone in the CRM — a call, a reply, context to remember (e.g. 'log that John wants a demo next week'). Finds the contact or company by name and appends to their timeline.",
+        input_schema: {
+          type: "object",
+          properties: {
+            about: { type: "string", description: "The person or company the note is about" },
+            note: { type: "string", description: "What to log" },
+          },
+          required: ["about", "note"],
+        },
+      },
+      run: async (input) => {
+        const about = str(input.about).trim();
+        const note = str(input.note).trim();
+        if (!about || !note) return { summary: "Tell me who it's about and what to log." };
+        try {
+          const al = about.toLowerCase();
+          const contacts = await crmListContacts(workspaceId);
+          const contact = contacts.find((c) => c.name.toLowerCase().includes(al));
+          if (contact) {
+            await crmLogActivity(workspaceId, {
+              type: "note",
+              summary: note.slice(0, 140),
+              body: note,
+              source: "agent",
+              contact_id: contact.id,
+              company_id: contact.company_id,
+            });
+            return { summary: `Logged a note on ${contact.name}.`, href: "/crm" };
+          }
+          const companies = await crmListCompanies(workspaceId);
+          const company = companies.find((c) => c.name.toLowerCase().includes(al));
+          if (company) {
+            await crmLogActivity(workspaceId, {
+              type: "note",
+              summary: note.slice(0, 140),
+              body: note,
+              source: "agent",
+              company_id: company.id,
+            });
+            return { summary: `Logged a note on ${company.name}.`, href: "/crm" };
+          }
+          return { summary: `I couldn't find "${about}" in the CRM — want me to add them?` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't log the note." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "crm_update_deal",
+        description:
+          "Move a deal's stage or change its value in the CRM (e.g. 'move the Acme deal to negotiation', 'mark Beta won'). Finds the deal by title.",
+        input_schema: {
+          type: "object",
+          properties: {
+            deal: { type: "string", description: "The deal's title (or part of it)" },
+            stage: { type: "string", description: "new | qualified | proposal | negotiation | won | lost" },
+            value: { type: "number", description: "New deal value in dollars (optional)" },
+          },
+          required: ["deal"],
+        },
+      },
+      run: async (input) => {
+        const title = str(input.deal).trim();
+        if (!title) return { summary: "Which deal?" };
+        try {
+          const deals = await crmListDeals(workspaceId);
+          const deal = deals.find((d) => d.title.toLowerCase().includes(title.toLowerCase()));
+          if (!deal) return { summary: `No deal matching "${title}" in the CRM.` };
+          const STAGES = ["new", "qualified", "proposal", "negotiation", "won", "lost"];
+          const patch: { stage?: CrmDealStage; amount?: number | null } = {};
+          const stage = str(input.stage).trim().toLowerCase();
+          if (stage && STAGES.includes(stage)) patch.stage = stage as CrmDealStage;
+          const val = input.value;
+          if (val != null && val !== "") patch.amount = typeof val === "number" ? val : Number(val) || null;
+          if (patch.stage === undefined && patch.amount === undefined) return { summary: "Tell me the new stage or value." };
+          await crmUpdateDeal(workspaceId, deal.id, patch, { source: "agent" });
+          return {
+            summary: `Updated "${deal.title}"${patch.stage ? ` → ${patch.stage}` : ""}${patch.amount != null ? ` ($${patch.amount.toLocaleString()})` : ""}.`,
+            href: "/crm",
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't update the deal." };
+        }
+      },
+    },
+    {
+      silent: true,
+      definition: {
+        name: "crm_lookup",
+        description:
+          "Look up a company, contact, or deal in the CRM and return its status — open deals, value, last touch. Use to answer 'what's the status of the Acme deal?' or 'when did we last talk to John?'.",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "A company, person, or deal name" } },
+          required: ["query"],
+        },
+      },
+      run: async (input) => {
+        const q = str(input.query).trim();
+        if (!q) return { summary: "Who or what should I look up?" };
+        try {
+          const ql = q.toLowerCase();
+          const [companies, contacts, deals] = await Promise.all([
+            crmListCompanies(workspaceId),
+            crmListContacts(workspaceId),
+            crmListDeals(workspaceId),
+          ]);
+          const company = companies.find((c) => c.name.toLowerCase().includes(ql));
+          const deal = deals.find((d) => d.title.toLowerCase().includes(ql));
+          const contact = contacts.find((c) => c.name.toLowerCase().includes(ql));
+          if (company) {
+            const cDeals = deals.filter((d) => d.company_id === company.id);
+            const open = cDeals.filter((d) => d.stage !== "won" && d.stage !== "lost");
+            const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
+            return {
+              summary: `${company.name} (${company.relationship_type}): ${company.contact_count ?? 0} contact(s), ${open.length} open deal(s)${val ? ` worth $${val.toLocaleString()}` : ""}.`,
+              href: "/crm",
+            };
+          }
+          if (deal) {
+            return {
+              summary: `Deal "${deal.title}" (${deal.company_name ?? "—"}): ${deal.stage}${deal.amount != null ? `, $${deal.amount.toLocaleString()}` : ""}, last activity ${deal.last_activity_at ? new Date(deal.last_activity_at).toLocaleDateString() : "none"}.`,
+              href: "/crm",
+            };
+          }
+          if (contact) {
+            return {
+              summary: `${contact.name}${contact.title ? `, ${contact.title}` : ""}${contact.company_name ? ` at ${contact.company_name}` : ""} — last touch ${contact.last_touch_at ? new Date(contact.last_touch_at).toLocaleDateString() : "never"}.`,
+              href: "/crm",
+            };
+          }
+          return { summary: `Nothing in the CRM matches "${q}".` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't look that up." };
         }
       },
     },

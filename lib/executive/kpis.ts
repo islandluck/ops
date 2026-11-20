@@ -4,6 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { followerSnapshots, orders, pages, posts, projects, tasks } from "@/lib/db/schema";
 import { getHubSpotSnapshot } from "@/lib/integrations/hubspot";
+import { getCrmKpis } from "@/lib/crm";
 import type { ExecKpi, GoalMetric, KpiTrendSeries } from "@/lib/types";
 
 /**
@@ -244,34 +245,63 @@ export async function computeKpis(workspaceId: string): Promise<ExecKpi[]> {
     hint: "ready to approve",
   });
 
-  // CRM (HubSpot, when connected) — real numbers, cached 10 min. Each KPI is
-  // gated on its object's scope being present, so a contacts-only private app
-  // still shows the contacts KPI instead of a misleading "$0 pipeline".
+  // CRM pipeline KPIs. The NATIVE CRM is the system of record (Operator-primary), so it
+  // wins whenever it has any data; HubSpot is the fallback only for an empty native CRM.
+  let crmShown = false;
   try {
-    const crm = await getHubSpotSnapshot(workspaceId);
-    if (crm?.connected && crm.dealsAvailable) {
+    const native = await getCrmKpis(workspaceId);
+    if (native.hasData) {
+      crmShown = true;
       kpis.push({
         key: "pipeline",
         label: "Pipeline",
-        value: money(Math.round(crm.pipelineValue * 100)),
-        tone: crm.staleDeals.length > 0 ? "down" : "neutral",
-        hint: `${crm.openDeals.length} open deal${crm.openDeals.length === 1 ? "" : "s"}${
-          crm.staleDeals.length ? `, ${crm.staleDeals.length} going cold` : ""
+        value: money(Math.round(native.pipelineValue * 100)),
+        tone: native.staleDeals > 0 ? "down" : "neutral",
+        hint: `${native.openDeals} open deal${native.openDeals === 1 ? "" : "s"}${
+          native.staleDeals ? `, ${native.staleDeals} going cold` : ""
         }`,
       });
-    }
-    if (crm?.connected && crm.contactsAvailable) {
       kpis.push({
         key: "new_contacts",
         label: "New contacts",
-        value: String(crm.newContacts7d),
-        delta: crm.newContacts7d > 0 ? "this week" : undefined,
-        tone: crm.newContacts7d > 0 ? "up" : "neutral",
-        hint: crm.uncontacted.length ? `${crm.uncontacted.length} not yet contacted` : undefined,
+        value: String(native.newContacts7d),
+        delta: native.newContacts7d > 0 ? "this week" : undefined,
+        tone: native.newContacts7d > 0 ? "up" : "neutral",
+        hint: native.uncontacted ? `${native.uncontacted} not yet contacted` : undefined,
       });
     }
   } catch {
-    /* CRM KPIs are additive — never break the dashboard on an API hiccup */
+    /* native CRM KPIs are additive — never break the dashboard */
+  }
+
+  // HubSpot fallback — real numbers, cached 10 min, only when the native CRM is empty.
+  if (!crmShown) {
+    try {
+      const crm = await getHubSpotSnapshot(workspaceId);
+      if (crm?.connected && crm.dealsAvailable) {
+        kpis.push({
+          key: "pipeline",
+          label: "Pipeline",
+          value: money(Math.round(crm.pipelineValue * 100)),
+          tone: crm.staleDeals.length > 0 ? "down" : "neutral",
+          hint: `${crm.openDeals.length} open deal${crm.openDeals.length === 1 ? "" : "s"}${
+            crm.staleDeals.length ? `, ${crm.staleDeals.length} going cold` : ""
+          }`,
+        });
+      }
+      if (crm?.connected && crm.contactsAvailable) {
+        kpis.push({
+          key: "new_contacts",
+          label: "New contacts",
+          value: String(crm.newContacts7d),
+          delta: crm.newContacts7d > 0 ? "this week" : undefined,
+          tone: crm.newContacts7d > 0 ? "up" : "neutral",
+          hint: crm.uncontacted.length ? `${crm.uncontacted.length} not yet contacted` : undefined,
+        });
+      }
+    } catch {
+      /* CRM KPIs are additive — never break the dashboard on an API hiccup */
+    }
   }
 
   return kpis;

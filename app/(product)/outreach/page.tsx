@@ -29,6 +29,7 @@ import {
   addContactsFromDomainAction,
   composeOutreachTextAction,
   createOutreachCampaignAction,
+  crmPromoteOutreachAction,
   deleteContactAction,
   deleteOutreachCampaignAction,
   domainSearchAction,
@@ -244,6 +245,13 @@ function ContactDialog({
     });
     onChanged();
   }
+  async function promote() {
+    setBusy("promote");
+    setMsg(null);
+    const r = await crmPromoteOutreachAction(contact!.id);
+    setBusy(null);
+    setMsg(r.ok ? { ok: true, text: "Added to your CRM." } : { ok: false, text: r.error ?? "Couldn't add to CRM." });
+  }
   async function composeForProfile() {
     setBusy("compose");
     setMsg(null);
@@ -456,6 +464,10 @@ function ContactDialog({
             <Trash2 className="h-4 w-4" />
           </button>
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={promote} disabled={busy !== null} title="Add this contact to your CRM">
+              {busy === "promote" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+              Add to CRM
+            </Button>
             <Button size="sm" variant="outline" onClick={save} disabled={busy !== null}>
               {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Save

@@ -75,6 +75,10 @@ import type {
   OutreachCampaignStatus,
   OutreachStatus,
   OutreachContactMethod,
+  CrmRelationshipType,
+  CrmDealStage,
+  CrmActivityType,
+  CrmActivitySource,
   PermissionMode,
   PostStatus,
   Priority,
@@ -1638,6 +1642,120 @@ export const outreachContacts = pgTable(
     updated_at: updatedAt,
   },
   (t) => [index("outreach_contacts_ws_campaign_idx").on(t.workspace_id, t.campaign_id)],
+);
+
+/* ---------------------------------- CRM ---------------------------------- */
+
+/** A company / account — the native CRM's organization record. */
+export const crmCompanies = pgTable(
+  "crm_companies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    domain: text("domain"),
+    website: text("website"),
+    industry: text("industry").notNull().default(""),
+    size: text("size").notNull().default(""),
+    relationship_type: text("relationship_type").$type<CrmRelationshipType>().notNull().default("prospect"),
+    status: text("status").notNull().default("active"),
+    note: text("note").notNull().default(""),
+    source: text("source").notNull().default("manual"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("crm_companies_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** A person in the CRM (optionally tied to a company). */
+export const crmContacts = pgTable(
+  "crm_contacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    company_id: uuid("company_id").references(() => crmCompanies.id, { onDelete: "set null" }),
+    name: text("name").notNull().default(""),
+    title: text("title").notNull().default(""),
+    email: text("email"),
+    phone: text("phone").notNull().default(""),
+    linkedin_url: text("linkedin_url"),
+    status: text("status").notNull().default("active"),
+    tags: jsonb("tags").$type<string[]>(),
+    note: text("note").notNull().default(""),
+    /** JSON: Hunter result detail (reused from Outreach). */
+    email_meta: text("email_meta"),
+    last_touch_at: timestamp("last_touch_at", { withTimezone: true }),
+    source: text("source").notNull().default("manual"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("crm_contacts_ws_idx").on(t.workspace_id, t.created_at),
+    index("crm_contacts_ws_company_idx").on(t.workspace_id, t.company_id),
+    index("crm_contacts_ws_email_idx").on(t.workspace_id, t.email),
+  ],
+);
+
+/** A deal / opportunity moving through the pipeline. */
+export const crmDeals = pgTable(
+  "crm_deals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    company_id: uuid("company_id")
+      .notNull()
+      .references(() => crmCompanies.id, { onDelete: "cascade" }),
+    primary_contact_id: uuid("primary_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
+    title: text("title").notNull().default(""),
+    /** Deal value in cents (matches orders.amount_cents convention). */
+    amount_cents: integer("amount_cents"),
+    currency: text("currency").notNull().default("USD"),
+    stage: text("stage").$type<CrmDealStage>().notNull().default("new"),
+    close_date: timestamp("close_date", { withTimezone: true }),
+    probability: integer("probability"),
+    note: text("note").notNull().default(""),
+    source: text("source").notNull().default("manual"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("crm_deals_ws_idx").on(t.workspace_id, t.created_at),
+    index("crm_deals_ws_company_idx").on(t.workspace_id, t.company_id),
+    index("crm_deals_ws_stage_idx").on(t.workspace_id, t.stage),
+  ],
+);
+
+/** A timeline entry against a company / contact / deal. */
+export const crmActivities = pgTable(
+  "crm_activities",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    company_id: uuid("company_id").references(() => crmCompanies.id, { onDelete: "cascade" }),
+    contact_id: uuid("contact_id").references(() => crmContacts.id, { onDelete: "cascade" }),
+    deal_id: uuid("deal_id").references(() => crmDeals.id, { onDelete: "cascade" }),
+    type: text("type").$type<CrmActivityType>().notNull().default("note"),
+    summary: text("summary").notNull().default(""),
+    body: text("body").notNull().default(""),
+    source: text("source").$type<CrmActivitySource>().notNull().default("manual"),
+    link_id: text("link_id"),
+    occurred_at: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+    created_at: createdAt,
+  },
+  (t) => [
+    index("crm_activities_ws_occurred_idx").on(t.workspace_id, t.occurred_at),
+    index("crm_activities_ws_contact_idx").on(t.workspace_id, t.contact_id),
+    index("crm_activities_ws_deal_idx").on(t.workspace_id, t.deal_id),
+    index("crm_activities_ws_company_idx").on(t.workspace_id, t.company_id),
+  ],
 );
 
 /* ------------------------------- marketing ------------------------------- */
