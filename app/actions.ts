@@ -419,6 +419,27 @@ import {
   updateSupplier,
 } from "@/lib/quotes";
 import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierContactMethod, SupplierStatus } from "@/lib/types";
+import {
+  addContact,
+  composeOutreachText,
+  createOutreachCampaign,
+  deleteContact,
+  deleteOutreachCampaign,
+  draftAllOutreach,
+  draftOutreach,
+  listContacts,
+  listOutreachCampaigns,
+  sourceContacts,
+  updateContact,
+  updateOutreachCampaign,
+} from "@/lib/outreach";
+import type {
+  OutreachCampaign,
+  OutreachCampaignStatus,
+  OutreachContact,
+  OutreachContactMethod,
+  OutreachStatus,
+} from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -5260,5 +5281,199 @@ export async function composeRfqTextAction(
       : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the RFQ." };
+  }
+}
+
+/* --------------------------- outreach / campaigns ------------------------ */
+
+export async function listOutreachCampaignsAction(): Promise<OutreachCampaign[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listOutreachCampaigns(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function createOutreachCampaignAction(input: {
+  title: string;
+  description?: string;
+  target_roles?: string;
+  target_count?: number;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await createOutreachCampaign(ws, input);
+    return r.ok ? { ok: true as const, campaignId: r.campaign.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the campaign." };
+  }
+}
+
+export async function updateOutreachCampaignAction(
+  id: string,
+  patch: { title?: string; description?: string; target_roles?: string; target_count?: number; status?: OutreachCampaignStatus },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateOutreachCampaign(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteOutreachCampaignAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteOutreachCampaign(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function listContactsAction(campaignId: string): Promise<OutreachContact[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await listContacts(ws, campaignId);
+  } catch {
+    return [];
+  }
+}
+
+export async function addContactAction(
+  campaignId: string,
+  input: {
+    company: string;
+    website?: string | null;
+    person_name?: string | null;
+    title?: string | null;
+    contact_email?: string | null;
+    contact_url?: string | null;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await addContact(ws, campaignId, input);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the contact." };
+  }
+}
+
+export async function updateContactAction(
+  id: string,
+  patch: {
+    company?: string;
+    website?: string | null;
+    person_name?: string;
+    title?: string;
+    contact_email?: string | null;
+    contact_url?: string | null;
+    contact_method?: OutreachContactMethod;
+    status?: OutreachStatus;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await updateContact(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function deleteContactAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await deleteContact(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** Research companies + decision-makers for a campaign (Claude web search/fetch). */
+export async function sourceContactsAction(
+  campaignId: string,
+): Promise<{ ok: boolean; added?: number; configured?: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await sourceContacts(ws, campaignId);
+    return r.ok ? { ok: true, added: r.added, configured: r.configured } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Sourcing failed." };
+  }
+}
+
+/** Draft an outreach email for one contact → Email Manager. */
+export async function draftOutreachAction(contactId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await draftOutreach(ws, contactId, displayName(user), scopeUserId);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the outreach email." };
+  }
+}
+
+/** Draft outreach for every contact with an email + no draft yet. */
+export async function draftAllOutreachAction(campaignId: string): Promise<{ drafted: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { drafted: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { drafted: 0 };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await draftAllOutreach(ws, campaignId, displayName(user), scopeUserId);
+  } catch {
+    return { drafted: 0 };
+  }
+}
+
+/** Generate paste-ready outreach text for a profile-only contact (nothing is sent). */
+export async function composeOutreachTextAction(
+  contactId: string,
+): Promise<{ ok: boolean; subject?: string; body?: string; contact_url?: string | null; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await composeOutreachText(ws, contactId, displayName(user));
+    return r.ok
+      ? { ok: true, subject: r.subject, body: r.body, contact_url: r.contact_url }
+      : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the outreach message." };
   }
 }

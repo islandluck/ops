@@ -989,6 +989,59 @@ export interface QuoteSupplier {
   updated_at: string;
 }
 
+/* -------------------------------- outreach ------------------------------- */
+
+export type OutreachCampaignStatus = "sourcing" | "open" | "closed";
+/** A contact's place in the outreach flow. */
+export type OutreachStatus = "found" | "drafted" | "sent" | "replied" | "meeting" | "declined" | "no_response";
+/** How to reach a contact: a real email, a profile/contact URL, or unknown. */
+export type OutreachContactMethod = "email" | "profile" | "none";
+
+/** An outreach campaign — an idea + the roles to reach, owning a set of contacts. */
+export interface OutreachCampaign {
+  id: string;
+  workspace_id: string;
+  title: string;
+  /** The pitch/context the agent uses to personalize each email. */
+  description: string;
+  /** The decision-maker roles to look for (e.g. "VP Business Development, Head of Procurement"). */
+  target_roles: string;
+  /** How many companies/contacts to find. */
+  target_count: number;
+  status: OutreachCampaignStatus;
+  created_at: string;
+  updated_at: string;
+  /** Rollups from list queries. */
+  contact_count?: number;
+  sent_count?: number;
+  replied_count?: number;
+}
+
+/** One person being reached in a campaign (the per-contact draft + its outcome). */
+export interface OutreachContact {
+  id: string;
+  workspace_id: string;
+  campaign_id: string;
+  company: string;
+  website: string | null;
+  /** The named decision-maker (may be empty if only a company was found). */
+  person_name: string;
+  /** Their role/title at the company. */
+  title: string;
+  contact_email: string | null;
+  /** How to reach them, and the profile/contact URL when there's no email. */
+  contact_method: OutreachContactMethod;
+  contact_url: string | null;
+  /** Where the lead came from: "research" | "manual". */
+  source: string;
+  status: OutreachStatus;
+  /** The Email Manager outbound draft staged for this contact (if any). */
+  outbound_draft_id: string | null;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /* ------------------------------- marketing ------------------------------- */
 
 /** A marketing distribution channel. X = auto-publish; linkedin + newsletter =

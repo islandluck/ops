@@ -72,6 +72,9 @@ import type {
   QuoteRequestStatus,
   SupplierStatus,
   SupplierContactMethod,
+  OutreachCampaignStatus,
+  OutreachStatus,
+  OutreachContactMethod,
   PermissionMode,
   PostStatus,
   Priority,
@@ -1579,6 +1582,58 @@ export const quoteSuppliers = pgTable(
     updated_at: updatedAt,
   },
   (t) => [index("quote_suppliers_ws_request_idx").on(t.workspace_id, t.request_id)],
+);
+
+/* -------------------------------- outreach ------------------------------- */
+
+/** An outreach campaign — an idea + the roles to reach, owning a set of contacts. */
+export const outreachCampaigns = pgTable(
+  "outreach_campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default(""),
+    description: text("description").notNull().default(""),
+    /** Comma-separated decision-maker roles to look for. */
+    target_roles: text("target_roles").notNull().default(""),
+    target_count: integer("target_count").notNull().default(5),
+    status: text("status").$type<OutreachCampaignStatus>().notNull().default("sourcing"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("outreach_campaigns_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** A person approached in a campaign (the per-contact outreach draft + its outcome). */
+export const outreachContacts = pgTable(
+  "outreach_contacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    campaign_id: uuid("campaign_id")
+      .notNull()
+      .references(() => outreachCampaigns.id, { onDelete: "cascade" }),
+    company: text("company").notNull().default(""),
+    website: text("website"),
+    person_name: text("person_name").notNull().default(""),
+    title: text("title").notNull().default(""),
+    contact_email: text("contact_email"),
+    /** How to reach them: "email" | "profile" | "none", + the profile/contact URL. */
+    contact_method: text("contact_method").$type<OutreachContactMethod>().notNull().default("none"),
+    contact_url: text("contact_url"),
+    source: text("source").notNull().default("research"),
+    status: text("status").$type<OutreachStatus>().notNull().default("found"),
+    /** The Email Manager outbound draft staged for this contact. */
+    outbound_draft_id: uuid("outbound_draft_id"),
+    note: text("note").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("outreach_contacts_ws_campaign_idx").on(t.workspace_id, t.campaign_id)],
 );
 
 /* ------------------------------- marketing ------------------------------- */

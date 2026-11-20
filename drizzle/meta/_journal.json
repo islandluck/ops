@@ -533,6 +533,13 @@
       "when": 1795137525056,
       "tag": "0075_dashing_molten_man",
       "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1795185152213,
+      "tag": "0076_demonic_invisible_woman",
+      "breakpoints": true
     }
   ]
 }

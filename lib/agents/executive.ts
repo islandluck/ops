@@ -38,6 +38,7 @@ import { resolveRecipientCandidates } from "@/lib/agents/recipient";
 import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { createQuoteRequest, draftAllRfqs, sourceSuppliers } from "@/lib/quotes";
+import { createOutreachCampaign, draftAllOutreach, sourceContacts } from "@/lib/outreach";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecImage, type ExecTool } from "@/lib/ai/executive";
@@ -521,6 +522,59 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't source quotes." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "run_outreach",
+        description:
+          "Run a cold-outreach campaign. Describe who to reach and why; this finds real companies that fit, identifies the right decision-maker at each on the live web, then drafts a personalized outreach email to each in the Email Manager for the founder to review + send. Use when the founder wants to reach out to a type of company/person (e.g. 'reach out to fertilizer companies about piloting our reactor'). Never sends automatically. Returns a link to the Outreach page to track contacts + replies.",
+        input_schema: {
+          type: "object",
+          properties: {
+            idea: {
+              type: "string",
+              description: "Who to reach and why (e.g. 'fertilizer companies — gauge interest in piloting a CLAS reactor')",
+            },
+            context: { type: "string", description: "The pitch / context used to personalize each email (what we offer, the ask)" },
+            roles: { type: "string", description: "Target decision-maker roles (e.g. 'VP Business Development, Head of Procurement')" },
+            count: { type: "number", description: "How many companies/contacts to find (default 5)" },
+          },
+          required: ["idea"],
+        },
+      },
+      run: async (input) => {
+        const idea = str(input.idea).trim();
+        if (!idea) return { summary: "Tell me who you want to reach, and why." };
+        const context = str(input.context).trim();
+        const roles = str(input.roles).trim();
+        const count = typeof input.count === "number" ? input.count : Number(input.count) || 5;
+        try {
+          const created = await createOutreachCampaign(workspaceId, {
+            title: idea,
+            description: context,
+            target_roles: roles,
+            target_count: count,
+          });
+          if (!created.ok) return { summary: `Couldn't start the outreach campaign: ${created.error}` };
+          const campId = created.campaign.id;
+          const sourced = await sourceContacts(workspaceId, campId);
+          if (!sourced.ok) return { summary: `Couldn't research contacts: ${sourced.error}`, href: `/outreach?open=${campId}` };
+          if (!sourced.configured) {
+            return {
+              summary:
+                "I created the outreach campaign, but live web research isn't set up (no ANTHROPIC_API_KEY) — add contacts manually on the Outreach page.",
+              href: `/outreach?open=${campId}`,
+            };
+          }
+          const drafted = await draftAllOutreach(workspaceId, campId, "", null);
+          return {
+            summary: `Found ${sourced.added} contact${sourced.added === 1 ? "" : "s"} for "${idea}" and drafted ${drafted.drafted} outreach email${drafted.drafted === 1 ? "" : "s"} in the Email Manager — review and send them there. Track replies on the Outreach page.`,
+            href: `/outreach?open=${campId}`,
+          };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't run outreach." };
         }
       },
     },
