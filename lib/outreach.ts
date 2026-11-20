@@ -7,6 +7,7 @@ import { outreachCampaigns, outreachContacts } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { draftOutreachEmail, searchContacts, type OutreachLead } from "@/lib/ai/outreach";
+import { domainFromWebsite, findEmail, hunterConfigured, HUNTER_MIN_SCORE } from "@/lib/integrations/hunter";
 import { runWithUsage } from "@/lib/ai/usage";
 import type {
   OutreachCampaign,
@@ -300,6 +301,23 @@ export async function sourceContacts(
     return { ok: false, error: e instanceof Error ? e.message : "Sourcing failed." };
   }
 
+  // Enrich: when the researcher found a person but no published email, resolve a REAL
+  // one via Hunter (name + company domain), gated by confidence so we don't draft to a
+  // guessed address that bounces. No-op when HUNTER_API_KEY isn't set (web-only).
+  if (hunterConfigured()) {
+    for (const l of leads) {
+      if (l.contact_email || !l.person_name) continue;
+      const domain = domainFromWebsite(l.website);
+      if (!domain && !l.company) continue;
+      const r = await findEmail({ fullName: l.person_name, domain, company: l.company });
+      if (r.email && (r.score === null || r.score >= HUNTER_MIN_SCORE)) {
+        l.contact_email = r.email;
+        const conf = r.score !== null ? ` (${r.score}% confidence)` : "";
+        l.note = `${l.note}${l.note ? " · " : ""}Email found via Hunter${conf}`.slice(0, 300);
+      }
+    }
+  }
+
   // Dedupe set for this campaign: company + person.
   const seen = new Set(inCampaign.map((e) => `${e.company.trim().toLowerCase()}|${e.person_name.trim().toLowerCase()}`));
   // Don't-contact-twice: emails already engaged in ANY campaign in this workspace.
@@ -340,6 +358,33 @@ export async function sourceContacts(
   if (rows.length) await db.insert(outreachContacts).values(rows);
   if (campaign.status === "sourcing") await updateOutreachCampaign(workspaceId, campaignId, { status: "open" });
   return { ok: true, added: rows.length, configured };
+}
+
+/** Resolve a real email for an existing contact via Hunter (name + company domain),
+ *  gated by confidence. On a confident hit, persists it on the contact. */
+export async function findContactEmail(
+  workspaceId: string,
+  contactId: string,
+): Promise<{ ok: true; email: string | null; score: number | null } | { ok: false; error: string }> {
+  if (!hunterConfigured()) return { ok: false, error: "Email finder isn't set up (HUNTER_API_KEY missing)." };
+  const [row] = await db
+    .select()
+    .from(outreachContacts)
+    .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, contactId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Contact not found." };
+  if (!row.person_name.trim()) return { ok: false, error: "Add the person's name first." };
+  const domain = domainFromWebsite(row.website);
+  if (!domain && !row.company.trim()) return { ok: false, error: "Add a website or company so I can search their domain." };
+  const r = await findEmail({ fullName: row.person_name, domain, company: row.company });
+  if (!r.email || (r.score !== null && r.score < HUNTER_MIN_SCORE)) {
+    return { ok: true, email: null, score: r.score };
+  }
+  await db
+    .update(outreachContacts)
+    .set({ contact_email: r.email, contact_method: "email", updated_at: new Date() })
+    .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, contactId)));
+  return { ok: true, email: r.email, score: r.score };
 }
 
 /* -------------------------------- drafting ------------------------------- */

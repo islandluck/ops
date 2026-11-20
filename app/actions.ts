@@ -427,6 +427,7 @@ import {
   deleteOutreachCampaign,
   draftAllOutreach,
   draftOutreach,
+  findContactEmail,
   listContacts,
   listOutreachCampaigns,
   sourceContacts,
@@ -5457,6 +5458,22 @@ export async function draftAllOutreachAction(campaignId: string): Promise<{ draf
     return await draftAllOutreach(ws, campaignId, displayName(user), scopeUserId);
   } catch {
     return { drafted: 0 };
+  }
+}
+
+/** Find a real email for one contact via Hunter (name + company domain). */
+export async function findContactEmailAction(
+  contactId: string,
+): Promise<{ ok: boolean; email?: string | null; score?: number | null; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await findContactEmail(ws, contactId);
+    return r.ok ? { ok: true, email: r.email, score: r.score } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't search for an email." };
   }
 }
 

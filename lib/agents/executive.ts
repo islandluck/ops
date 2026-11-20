@@ -529,13 +529,13 @@ function buildTools(workspaceId: string): ExecTool[] {
       definition: {
         name: "run_outreach",
         description:
-          "Run a cold-outreach campaign. Describe who to reach and why; this finds real companies that fit, identifies the right decision-maker at each on the live web, then drafts a personalized outreach email to each in the Email Manager for the founder to review + send. Use when the founder wants to reach out to a type of company/person (e.g. 'reach out to fertilizer companies about piloting our reactor'). Never sends automatically. Returns a link to the Outreach page to track contacts + replies.",
+          "Run a cold-outreach campaign. Describe who to reach and why; this finds real companies that fit, identifies the right decision-maker at each on the live web, then drafts a personalized outreach email to each in the Email Manager for the founder to review + send. Use when the founder wants to reach out to a type of company/person (e.g. 'reach out to potential pilot customers to gauge interest'). Never sends automatically. Returns a link to the Outreach page to track contacts + replies.",
         input_schema: {
           type: "object",
           properties: {
             idea: {
               type: "string",
-              description: "Who to reach and why (e.g. 'fertilizer companies — gauge interest in piloting a CLAS reactor')",
+              description: "Who to reach and why (e.g. 'companies that could pilot our product — gauge their interest')",
             },
             context: { type: "string", description: "The pitch / context used to personalize each email (what we offer, the ask)" },
             roles: { type: "string", description: "Target decision-maker roles (e.g. 'VP Business Development, Head of Procurement')" },

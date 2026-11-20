@@ -30,6 +30,7 @@ import {
   deleteOutreachCampaignAction,
   draftAllOutreachAction,
   draftOutreachAction,
+  findContactEmailAction,
   listContactsAction,
   listOutreachCampaignsAction,
   sourceContactsAction,
@@ -92,7 +93,7 @@ function CampaignDialog({ open, onClose, onCreated }: { open: boolean; onClose: 
           <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="Fertilizer companies — pilot a CLAS reactor / scale production"
+            placeholder="e.g. Companies that could pilot or partner with us — and why"
           />
         </div>
         <div>
@@ -153,7 +154,7 @@ function ContactDialog({
   const [status, setStatus] = useState<OutreachStatus>("found");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; link?: boolean } | null>(null);
   const [composed, setComposed] = useState<{ subject: string; body: string; url: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -196,9 +197,31 @@ function ContactDialog({
     const r = await draftOutreachAction(contact!.id);
     setBusy(null);
     if ("ok" in r && r.ok) {
-      setMsg({ ok: true, text: "Outreach email drafted in the Email Manager — review and send it there." });
+      setMsg({ ok: true, link: true, text: "Outreach email drafted in the Email Manager — review and send it there." });
       onChanged();
     } else setMsg({ ok: false, text: ("error" in r && r.error) || "Couldn't draft the email." });
+  }
+  async function findEmail() {
+    setBusy("find");
+    setMsg(null);
+    // Persist any name/website/company edits first so Hunter searches the right person + domain.
+    await updateContactAction(contact!.id, { person_name: personName, company, website });
+    const r = await findContactEmailAction(contact!.id);
+    setBusy(null);
+    if (!r.ok) {
+      setMsg({ ok: false, text: r.error ?? "Couldn't search for an email." });
+      return;
+    }
+    if (r.email) {
+      setEmail(r.email);
+      setMsg({ ok: true, text: `Found ${r.email}${r.score != null ? ` (${r.score}% confidence)` : ""}.` });
+      onChanged();
+    } else {
+      setMsg({
+        ok: false,
+        text: `No confident email found${r.score != null ? ` (best ${r.score}%)` : ""} — reach them via their profile instead.`,
+      });
+    }
   }
   async function composeForProfile() {
     setBusy("compose");
@@ -267,6 +290,17 @@ function ContactDialog({
           <div>
             <Label>Email</Label>
             <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" className={inputCls} />
+            {!email.trim() && personName.trim() && (
+              <button
+                type="button"
+                onClick={findEmail}
+                disabled={busy !== null}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-primary transition hover:underline disabled:opacity-50"
+              >
+                {busy === "find" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                Find email
+              </button>
+            )}
           </div>
           <div>
             <Label>Website</Label>
@@ -326,7 +360,7 @@ function ContactDialog({
         {msg && (
           <p className={cn("text-[12.5px]", msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600")}>
             {msg.text}
-            {msg.ok && (
+            {msg.link && (
               <a href="/email" className="ml-1 font-medium underline">
                 Open Email Manager
               </a>
