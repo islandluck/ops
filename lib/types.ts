@@ -997,6 +997,43 @@ export type OutreachStatus = "found" | "drafted" | "sent" | "replied" | "meeting
 /** How to reach a contact: a real email, a profile/contact URL, or unknown. */
 export type OutreachContactMethod = "email" | "profile" | "none";
 
+/** Hunter lookup detail stored on a contact's email — for transparency + spend audit. */
+export interface OutreachEmailMeta {
+  /** Hunter Email Finder confidence 0-100. */
+  score: number | null;
+  /** Verification status reported by the Finder (valid | accept_all | unknown | …). */
+  status: string | null;
+  /** Source page URLs Hunter cites for the address. */
+  sources: string[];
+  /** How it was found: "finder" | "domain-search". */
+  found_via?: string;
+  /** On-demand Email Verifier result (separate credit pool). */
+  verify_status?: string | null;
+  verify_score?: number | null;
+  verified_at?: string | null;
+}
+
+/** One person returned by Hunter's Domain Search (transient — not stored until added). */
+export interface OutreachDomainPerson {
+  email: string;
+  first_name: string;
+  last_name: string;
+  position: string;
+  confidence: number | null;
+  /** "personal" (a real individual) | "generic" (a role inbox). */
+  type: string;
+  sources: string[];
+}
+
+/** Hunter account credit snapshot for the spend chip. */
+export interface HunterCredits {
+  configured: boolean;
+  searches_used: number | null;
+  searches_available: number | null;
+  verifications_used: number | null;
+  verifications_available: number | null;
+}
+
 /** An outreach campaign — an idea + the roles to reach, owning a set of contacts. */
 export interface OutreachCampaign {
   id: string;
@@ -1008,6 +1045,8 @@ export interface OutreachCampaign {
   target_roles: string;
   /** How many companies/contacts to find. */
   target_count: number;
+  /** When true, sourcing auto-spends Hunter credits to find emails; default off. */
+  auto_find_emails: boolean;
   status: OutreachCampaignStatus;
   created_at: string;
   updated_at: string;
@@ -1038,6 +1077,8 @@ export interface OutreachContact {
   /** The Email Manager outbound draft staged for this contact (if any). */
   outbound_draft_id: string | null;
   note: string;
+  /** Hunter result detail for the email — confidence, verification, and source URLs. */
+  email_meta: OutreachEmailMeta | null;
   created_at: string;
   updated_at: string;
 }

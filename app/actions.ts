@@ -425,20 +425,26 @@ import {
   createOutreachCampaign,
   deleteContact,
   deleteOutreachCampaign,
+  addContactsFromDomain,
   draftAllOutreach,
   draftOutreach,
   findContactEmail,
+  getHunterCredits,
   listContacts,
   listOutreachCampaigns,
+  searchDomainPeople,
   sourceContacts,
   updateContact,
   updateOutreachCampaign,
+  verifyContactEmail,
 } from "@/lib/outreach";
 import type {
+  HunterCredits,
   OutreachCampaign,
   OutreachCampaignStatus,
   OutreachContact,
   OutreachContactMethod,
+  OutreachDomainPerson,
   OutreachStatus,
 } from "@/lib/types";
 import type {
@@ -5304,6 +5310,7 @@ export async function createOutreachCampaignAction(input: {
   description?: string;
   target_roles?: string;
   target_count?: number;
+  auto_find_emails?: boolean;
 }) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
@@ -5319,7 +5326,14 @@ export async function createOutreachCampaignAction(input: {
 
 export async function updateOutreachCampaignAction(
   id: string,
-  patch: { title?: string; description?: string; target_roles?: string; target_count?: number; status?: OutreachCampaignStatus },
+  patch: {
+    title?: string;
+    description?: string;
+    target_roles?: string;
+    target_count?: number;
+    auto_find_emails?: boolean;
+    status?: OutreachCampaignStatus;
+  },
 ) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const };
@@ -5492,5 +5506,75 @@ export async function composeOutreachTextAction(
       : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the outreach message." };
+  }
+}
+
+/** Hunter credit snapshot for the spend chip (searches + verifications remaining). */
+export async function hunterCreditsAction(): Promise<HunterCredits> {
+  const off: HunterCredits = {
+    configured: false,
+    searches_used: null,
+    searches_available: null,
+    verifications_used: null,
+    verifications_available: null,
+  };
+  const user = await getCurrentUser();
+  if (!user) return off;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return off;
+  try {
+    return await getHunterCredits();
+  } catch {
+    return off;
+  }
+}
+
+/** Direct lookup — list the real people + emails Hunter has for a company/domain. */
+export async function domainSearchAction(input: {
+  domain?: string | null;
+  company?: string | null;
+}): Promise<{ ok: boolean; people?: OutreachDomainPerson[]; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await searchDomainPeople(input);
+    return r.ok ? { ok: true, people: r.people } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Lookup failed." };
+  }
+}
+
+/** Add selected Domain-Search people as contacts in a campaign. */
+export async function addContactsFromDomainAction(
+  campaignId: string,
+  input: { company: string; website: string | null; people: OutreachDomainPerson[] },
+): Promise<{ ok: boolean; added?: number; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await addContactsFromDomain(ws, campaignId, input);
+    return r.ok ? { ok: true, added: r.added } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't add contacts." };
+  }
+}
+
+/** Verify a contact's email deliverability on demand (Hunter Email Verifier). */
+export async function verifyContactEmailAction(
+  contactId: string,
+): Promise<{ ok: boolean; status?: string | null; score?: number | null; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await verifyContactEmail(ws, contactId);
+    return r.ok ? { ok: true, status: r.status, score: r.score } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't verify the email." };
   }
 }

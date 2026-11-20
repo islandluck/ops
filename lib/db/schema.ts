@@ -1599,6 +1599,8 @@ export const outreachCampaigns = pgTable(
     /** Comma-separated decision-maker roles to look for. */
     target_roles: text("target_roles").notNull().default(""),
     target_count: integer("target_count").notNull().default(5),
+    /** When true, sourcing auto-spends Hunter credits to find emails; default off. */
+    auto_find_emails: boolean("auto_find_emails").notNull().default(false),
     status: text("status").$type<OutreachCampaignStatus>().notNull().default("sourcing"),
     created_at: createdAt,
     updated_at: updatedAt,
@@ -1630,6 +1632,8 @@ export const outreachContacts = pgTable(
     /** The Email Manager outbound draft staged for this contact. */
     outbound_draft_id: uuid("outbound_draft_id"),
     note: text("note").notNull().default(""),
+    /** JSON: Hunter result detail {score, status, sources[], found_via, verify_*}. */
+    email_meta: text("email_meta"),
     created_at: createdAt,
     updated_at: updatedAt,
   },

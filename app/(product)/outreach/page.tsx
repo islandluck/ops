@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  BadgeCheck,
   Check,
   ChevronLeft,
   Copy,
@@ -15,6 +16,7 @@ import {
   Send,
   Sparkles,
   Trash2,
+  Users,
 } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
@@ -24,20 +26,24 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
   addContactAction,
+  addContactsFromDomainAction,
   composeOutreachTextAction,
   createOutreachCampaignAction,
   deleteContactAction,
   deleteOutreachCampaignAction,
+  domainSearchAction,
   draftAllOutreachAction,
   draftOutreachAction,
   findContactEmailAction,
+  hunterCreditsAction,
   listContactsAction,
   listOutreachCampaignsAction,
   sourceContactsAction,
   updateContactAction,
   updateOutreachCampaignAction,
+  verifyContactEmailAction,
 } from "@/app/actions";
-import type { OutreachCampaign, OutreachContact, OutreachStatus } from "@/lib/types";
+import type { HunterCredits, OutreachCampaign, OutreachContact, OutreachDomainPerson, OutreachStatus } from "@/lib/types";
 
 const CONTACT_STATUS: { key: OutreachStatus; label: string; cls: string }[] = [
   { key: "found", label: "Found", cls: "border-border bg-muted/50 text-muted-foreground" },
@@ -223,6 +229,21 @@ function ContactDialog({
       });
     }
   }
+  async function verify() {
+    setBusy("verify");
+    setMsg(null);
+    const r = await verifyContactEmailAction(contact!.id);
+    setBusy(null);
+    if (!r.ok) {
+      setMsg({ ok: false, text: r.error ?? "Couldn't verify the email." });
+      return;
+    }
+    setMsg({
+      ok: r.status === "valid",
+      text: `Deliverability: ${r.status ?? "unknown"}${r.score != null ? ` (${r.score}%)` : ""}.`,
+    });
+    onChanged();
+  }
   async function composeForProfile() {
     setBusy("compose");
     setMsg(null);
@@ -319,6 +340,68 @@ function ContactDialog({
             For contacts with no email. Generate a message below, then open the profile and send it yourself.
           </p>
         </div>
+
+        {(contact.email_meta || email.trim()) && (
+          <div className="rounded-lg border border-border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email source</span>
+              {email.trim() && (
+                <button
+                  type="button"
+                  onClick={verify}
+                  disabled={busy !== null}
+                  className="inline-flex items-center gap-1 text-[12px] font-medium text-primary transition hover:underline disabled:opacity-50"
+                  title="Check deliverability with Hunter (uses a verification credit)"
+                >
+                  {busy === "verify" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <BadgeCheck className="h-3.5 w-3.5" />}
+                  Verify
+                </button>
+              )}
+            </div>
+            {contact.email_meta ? (
+              <div className="mt-2 space-y-1.5 text-[12px] text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span>
+                    {contact.email_meta.found_via === "domain-search" ? "Found via company search" : "Found via Hunter"}
+                    {contact.email_meta.score != null && <> · {contact.email_meta.score}% confidence</>}
+                  </span>
+                  {contact.email_meta.verify_status && (
+                    <span
+                      className={cn(
+                        "rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium",
+                        contact.email_meta.verify_status === "valid"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                          : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400",
+                      )}
+                    >
+                      {contact.email_meta.verify_status}
+                      {contact.email_meta.verify_score != null ? ` ${contact.email_meta.verify_score}%` : ""}
+                    </span>
+                  )}
+                </div>
+                {contact.email_meta.sources && contact.email_meta.sources.length > 0 && (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-medium text-foreground/70">Seen on:</span>
+                    {contact.email_meta.sources.slice(0, 4).map((s, i) => (
+                      <a
+                        key={i}
+                        href={s}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 truncate text-[11.5px] text-primary hover:underline"
+                      >
+                        <ExternalLink className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{s}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-1 text-[11.5px] text-muted-foreground">Manually entered — verify to check deliverability.</p>
+            )}
+          </div>
+        )}
 
         <div>
           <Label>Notes</Label>
@@ -497,6 +580,162 @@ function AddContactDialog({
   );
 }
 
+/* --------------------------- domain-search picker ------------------------ */
+
+function DomainSearchDialog({
+  open,
+  campaignId,
+  onClose,
+  onAdded,
+}: {
+  open: boolean;
+  campaignId: string;
+  onClose: () => void;
+  onAdded: (added: number) => void;
+}) {
+  const [company, setCompany] = useState("");
+  const [website, setWebsite] = useState("");
+  const [people, setPeople] = useState<OutreachDomainPerson[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setCompany("");
+    setWebsite("");
+    setPeople(null);
+    setPicked(new Set());
+    setError(null);
+  }, [open]);
+
+  async function search() {
+    if (!company.trim() && !website.trim()) {
+      setError("Enter a company and its website or domain.");
+      return;
+    }
+    setBusy("search");
+    setError(null);
+    setPeople(null);
+    const r = await domainSearchAction({ company, domain: website });
+    setBusy(null);
+    if (!r.ok) {
+      setError(r.error ?? "Lookup failed.");
+      return;
+    }
+    const found = r.people ?? [];
+    setPeople(found);
+    setPicked(new Set(found.map((p) => p.email)));
+  }
+  function toggle(emailAddr: string) {
+    setPicked((cur) => {
+      const next = new Set(cur);
+      if (next.has(emailAddr)) next.delete(emailAddr);
+      else next.add(emailAddr);
+      return next;
+    });
+  }
+  async function add() {
+    if (!people) return;
+    const chosen = people.filter((p) => picked.has(p.email));
+    if (!chosen.length) return;
+    setBusy("add");
+    const r = await addContactsFromDomainAction(campaignId, {
+      company: company.trim(),
+      website: website.trim() || null,
+      people: chosen,
+    });
+    setBusy(null);
+    if (!r.ok) {
+      setError(r.error ?? "Couldn't add contacts.");
+      return;
+    }
+    onAdded(r.added ?? 0);
+    onClose();
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Find people at a company" className="max-w-xl">
+      <div className="flex max-h-[76vh] flex-col gap-3 overflow-y-auto pr-1">
+        <p className="text-[12.5px] text-muted-foreground">
+          Look up a company's team on Hunter and pick who to add. Spends Hunter search credits — only runs when you click Search.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Company</Label>
+            <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Acme Corp" />
+          </div>
+          <div>
+            <Label>Website / domain</Label>
+            <Input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="acme.com" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button size="sm" onClick={search} disabled={busy !== null}>
+            {busy === "search" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            Search
+          </Button>
+          {people && (
+            <span className="text-[12px] text-muted-foreground">
+              {people.length} found · {picked.size} selected
+            </span>
+          )}
+        </div>
+        {error && <p className="text-sm text-amber-600">{error}</p>}
+
+        {people && people.length > 0 && (
+          <div className="flex flex-col divide-y divide-border/60 overflow-hidden rounded-lg border border-border">
+            {people.map((p) => {
+              const name = `${p.first_name} ${p.last_name}`.trim() || p.email;
+              const on = picked.has(p.email);
+              return (
+                <button
+                  key={p.email}
+                  type="button"
+                  onClick={() => toggle(p.email)}
+                  className="flex items-start gap-3 p-2.5 text-left transition hover:bg-accent/50"
+                >
+                  <span
+                    className={cn(
+                      "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                      on ? "border-primary bg-primary text-primary-foreground" : "border-border",
+                    )}
+                  >
+                    {on && <Check className="h-3 w-3" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-x-2">
+                      <span className="truncate text-sm font-medium">{name}</span>
+                      {p.confidence != null && <span className="text-[11px] text-muted-foreground">{p.confidence}%</span>}
+                    </span>
+                    {p.position && <span className="block truncate text-[12px] text-muted-foreground">{p.position}</span>}
+                    <span className="block truncate text-[11.5px] text-muted-foreground">{p.email}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {people && people.length === 0 && (
+          <p className="text-[12.5px] text-muted-foreground">
+            No people found for that company on Hunter — try the domain, or add contacts manually.
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2 border-t border-border pt-3">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={add} disabled={busy !== null || !people || picked.size === 0}>
+            {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Add {picked.size || ""} {picked.size === 1 ? "contact" : "contacts"}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 /* ----------------------------- campaign detail --------------------------- */
 
 function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCampaign; onBack: () => void; onChanged: () => void }) {
@@ -507,26 +746,41 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
   const [note, setNote] = useState<string | null>(null);
   const [description, setDescription] = useState(campaign.description);
   const [roles, setRoles] = useState(campaign.target_roles);
+  const [autoFind, setAutoFind] = useState(campaign.auto_find_emails);
+  const [credits, setCredits] = useState<HunterCredits | null>(null);
+  const [domainOpen, setDomainOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const c = await listContactsAction(campaign.id);
     setContacts(c);
     setOpen((cur) => (cur ? c.find((x) => x.id === cur.id) ?? null : null));
   }, [campaign.id]);
+  const loadCredits = useCallback(async () => {
+    setCredits(await hunterCreditsAction());
+  }, []);
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    loadCredits();
+  }, [refresh, loadCredits]);
   useEffect(() => {
     setDescription(campaign.description);
     setRoles(campaign.target_roles);
+    setAutoFind(campaign.auto_find_emails);
   }, [campaign]);
 
+  async function toggleAutoFind() {
+    const next = !autoFind;
+    setAutoFind(next);
+    await updateOutreachCampaignAction(campaign.id, { auto_find_emails: next });
+    onChanged();
+  }
   async function source() {
     setBusy("source");
     setNote(null);
     const r = await sourceContactsAction(campaign.id);
     setBusy(null);
     await refresh();
+    await loadCredits();
     onChanged();
     if (!r.ok) setNote(r.error ?? "Couldn't source contacts.");
     else if (!r.configured) setNote("AI web research isn't available right now — add contacts manually.");
@@ -559,6 +813,14 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
             {note && <span className="ml-1 text-emerald-600 dark:text-emerald-400">· {note}</span>}
           </p>
         </div>
+        {credits?.configured && credits.searches_available != null && (
+          <span
+            className="shrink-0 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+            title="Hunter search credits remaining this period"
+          >
+            Hunter: {Math.max(0, (credits.searches_available ?? 0) - (credits.searches_used ?? 0))} searches left
+          </span>
+        )}
       </div>
 
       <Card className="flex flex-col gap-3 p-4">
@@ -580,6 +842,18 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
             placeholder="VP Business Development, Head of Procurement"
           />
         </div>
+        <label className="flex items-start gap-2 text-[12.5px] text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={autoFind}
+            onChange={toggleAutoFind}
+            className="mt-0.5 h-3.5 w-3.5 rounded border-border accent-primary"
+          />
+          <span>
+            Auto-find emails with Hunter when sourcing
+            <span className="block text-[11px]">Spends a search credit per contact. Off = find emails per contact on demand.</span>
+          </span>
+        </label>
       </Card>
 
       <div className="flex flex-wrap gap-2">
@@ -593,6 +867,9 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
         </Button>
         <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" /> Add contact
+        </Button>
+        <Button size="sm" variant="outline" onClick={() => setDomainOpen(true)}>
+          <Users className="h-4 w-4" /> Find people at a company
         </Button>
       </div>
 
@@ -668,6 +945,16 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
 
       <ContactDialog contact={open} onClose={() => setOpen(null)} onChanged={refresh} />
       <AddContactDialog open={adding} campaignId={campaign.id} onClose={() => setAdding(false)} onAdded={refresh} />
+      <DomainSearchDialog
+        open={domainOpen}
+        campaignId={campaign.id}
+        onClose={() => setDomainOpen(false)}
+        onAdded={(n) => {
+          refresh();
+          loadCredits();
+          setNote(n ? `Added ${n} contact${n === 1 ? "" : "s"} from the company search.` : "No new contacts added.");
+        }}
+      />
     </div>
   );
 }
