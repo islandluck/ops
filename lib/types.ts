@@ -1165,6 +1165,22 @@ export interface CrmDeal {
   last_activity_at?: string | null;
 }
 
+/** Pipeline forecast — weighted value, win rate, and breakdowns by stage + close month. */
+export interface CrmForecast {
+  openCount: number;
+  /** Sum of open deal value, in dollars. */
+  openValue: number;
+  /** Probability-weighted open value (Σ amount × probability), in dollars. */
+  weighted: number;
+  /** Win rate 0-100 over closed (won + lost) deals, or null when none closed. */
+  winRate: number | null;
+  /** Value of deals won in the last 90 days, in dollars. */
+  wonValue90d: number;
+  byStage: { key: string; label: string; count: number; value: number; weighted: number }[];
+  /** Open deals bucketed by close month (YYYY-MM or "overdue" / "unscheduled"). */
+  byMonth: { month: string; label: string; count: number; value: number; weighted: number }[];
+}
+
 /** One timeline entry against a company / contact / deal. */
 export interface CrmActivity {
   id: string;

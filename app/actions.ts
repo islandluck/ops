@@ -458,6 +458,8 @@ import {
   enrichCompanyInfo as crmEnrichCompanyInfo,
   findContactEmailForCrm as crmFindContactEmail,
   getCompany as crmGetCompany,
+  getForecast as crmGetForecast,
+  importFromHubSpot as crmImportFromHubSpot,
   getContact as crmGetContact,
   getDeal as crmGetDeal,
   listActivities as crmListActivities,
@@ -478,6 +480,7 @@ import type {
   CrmContact,
   CrmDeal,
   CrmDealStage,
+  CrmForecast,
   CrmRelationshipType,
 } from "@/lib/types";
 import type {
@@ -5918,6 +5921,38 @@ export async function crmPromoteOutreachAction(
     return r.ok ? { ok: true, contactId: r.contactId } : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't add to CRM." };
+  }
+}
+
+/** Import HubSpot companies + contacts + open deals into the native CRM (idempotent). */
+export async function crmImportHubSpotAction(): Promise<{
+  ok: boolean;
+  companies?: number;
+  contacts?: number;
+  deals?: number;
+  error?: string;
+}> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await crmImportFromHubSpot(ws);
+    return r.ok ? { ok: true, companies: r.companies, contacts: r.contacts, deals: r.deals } : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Import failed." };
+  }
+}
+
+export async function crmForecastAction(): Promise<CrmForecast | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  try {
+    return await crmGetForecast(ws);
+  } catch {
+    return null;
   }
 }
 

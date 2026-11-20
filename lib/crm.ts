@@ -8,6 +8,8 @@ import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { draftFollowupEmail, enrichCompany } from "@/lib/ai/crm";
 import { domainFromWebsite, findEmail, hunterConfigured, HUNTER_MIN_SCORE } from "@/lib/integrations/hunter";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { hsDealCompany, hsOpenDeals, hsRecentCompanies, hsRecentContacts } from "@/lib/integrations/hubspot";
 import { runWithUsage } from "@/lib/ai/usage";
 import type {
   CrmActivity,
@@ -17,6 +19,7 @@ import type {
   CrmContact,
   CrmDeal,
   CrmDealStage,
+  CrmForecast,
   CrmRelationshipType,
   OutreachEmailMeta,
 } from "@/lib/types";
@@ -765,6 +768,100 @@ export async function getCrmKpis(workspaceId: string): Promise<{
   };
 }
 
+/* ------------------------------ forecasting ------------------------------ */
+
+const STAGE_LABEL: Record<string, string> = {
+  new: "New",
+  qualified: "Qualified",
+  proposal: "Proposal",
+  negotiation: "Negotiation",
+  won: "Won",
+  lost: "Lost",
+};
+/** Default close probability by stage, used to weight a deal when none is set. */
+function stageDefaultProb(stage: string): number {
+  switch (stage) {
+    case "new":
+      return 10;
+    case "qualified":
+      return 25;
+    case "proposal":
+      return 50;
+    case "negotiation":
+      return 70;
+    case "won":
+      return 100;
+    default:
+      return 0;
+  }
+}
+function dealWeighted(d: CrmDeal): number {
+  const prob = d.probability != null ? d.probability : stageDefaultProb(d.stage);
+  return (d.amount ?? 0) * (Math.max(0, Math.min(prob, 100)) / 100);
+}
+
+/** Probability-weighted pipeline forecast with by-stage + by-close-month breakdowns. */
+export async function getForecast(workspaceId: string): Promise<CrmForecast> {
+  const deals = await listDeals(workspaceId);
+  const open = deals.filter((d) => OPEN_STAGES.includes(d.stage));
+  const now = Date.now();
+  const won = deals.filter((d) => d.stage === "won");
+  const lost = deals.filter((d) => d.stage === "lost");
+  const closed = won.length + lost.length;
+  const won90 = won.filter((d) => now - new Date(d.updated_at).getTime() < 90 * 86_400_000);
+
+  const byStage = OPEN_STAGES.map((key) => {
+    const ds = open.filter((d) => d.stage === key);
+    return {
+      key,
+      label: STAGE_LABEL[key] ?? key,
+      count: ds.length,
+      value: ds.reduce((n, d) => n + (d.amount ?? 0), 0),
+      weighted: ds.reduce((n, d) => n + dealWeighted(d), 0),
+    };
+  });
+
+  // Bucket open deals by close month (plus overdue + unscheduled).
+  const buckets = new Map<string, { label: string; count: number; value: number; weighted: number }>();
+  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const monthLabel = (d: Date) => d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  for (const d of open) {
+    let key: string;
+    let label: string;
+    if (!d.close_date) {
+      key = "zzz-unscheduled";
+      label = "Unscheduled";
+    } else {
+      const cd = new Date(d.close_date);
+      if (cd.getTime() < now) {
+        key = "000-overdue";
+        label = "Overdue";
+      } else {
+        key = monthKey(cd);
+        label = monthLabel(cd);
+      }
+    }
+    const b = buckets.get(key) ?? { label, count: 0, value: 0, weighted: 0 };
+    b.count += 1;
+    b.value += d.amount ?? 0;
+    b.weighted += dealWeighted(d);
+    buckets.set(key, b);
+  }
+  const byMonth = Array.from(buckets.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([, v]) => ({ month: v.label, label: v.label, count: v.count, value: v.value, weighted: v.weighted }));
+
+  return {
+    openCount: open.length,
+    openValue: open.reduce((n, d) => n + (d.amount ?? 0), 0),
+    weighted: open.reduce((n, d) => n + dealWeighted(d), 0),
+    winRate: closed ? Math.round((won.length / closed) * 100) : null,
+    wonValue90d: won90.reduce((n, d) => n + (d.amount ?? 0), 0),
+    byStage,
+    byMonth,
+  };
+}
+
 /* ----------------------------- Phase 2: hooks ---------------------------- */
 
 const NOREPLY_RE = /^(no-?reply|notifications?|mailer-daemon|postmaster|do-?not-?reply|bounce|automated)/i;
@@ -793,6 +890,28 @@ export async function logInboundEmailToCrm(
     .update(crmContacts)
     .set({ last_touch_at: when, updated_at: new Date() })
     .where(and(eq(crmContacts.workspace_id, workspaceId), eq(crmContacts.id, hit.id)));
+}
+
+/** A scheduled meeting → the attendee's CRM timeline. Upserts the contact (a booked
+ *  meeting is a deliberate touch) + bumps last_touch. Best-effort. */
+export async function logMeetingToCrm(
+  workspaceId: string,
+  input: { email: string; name?: string | null; topic: string; when?: Date | string | null },
+): Promise<void> {
+  const contact = await upsertContactByEmail(workspaceId, { email: input.email, name: input.name, source: "calendar" });
+  if (!contact) return;
+  const whenLabel = input.when ? new Date(input.when).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+  await logActivity(workspaceId, {
+    type: "meeting",
+    summary: `Meeting scheduled${whenLabel ? ` for ${whenLabel}` : ""}: ${input.topic}`.slice(0, 300),
+    source: "calendar",
+    contact_id: contact.id,
+    company_id: contact.company_id,
+  });
+  await db
+    .update(crmContacts)
+    .set({ last_touch_at: new Date(), updated_at: new Date() })
+    .where(and(eq(crmContacts.workspace_id, workspaceId), eq(crmContacts.id, contact.id)));
 }
 
 /* -------------------------- Phase 2: intelligence ------------------------ */
@@ -951,4 +1070,137 @@ export async function crmNeedsAttention(workspaceId: string): Promise<{
       days: Math.floor((Date.now() - new Date(d.last_activity_at ?? d.created_at).getTime()) / 86400000),
     })),
   };
+}
+
+/* --------------------------- Phase 3: HubSpot ---------------------------- */
+
+/** Map a HubSpot deal stage/label to a CRM stage. */
+function mapHsStage(labelOrStage: string): CrmDealStage {
+  const s = (labelOrStage || "").toLowerCase();
+  if (s.includes("won")) return "won";
+  if (s.includes("lost")) return "lost";
+  if (s.includes("negoti")) return "negotiation";
+  if (s.includes("proposal") || s.includes("presentation") || s.includes("contract") || s.includes("decision")) return "proposal";
+  if (s.includes("qual")) return "qualified";
+  return "new";
+}
+function mapHsRelType(lifecycle: string): CrmRelationshipType {
+  const s = (lifecycle || "").toLowerCase();
+  if (s === "customer") return "customer";
+  if (s === "partner") return "partner";
+  return "prospect";
+}
+
+/**
+ * Import HubSpot companies, contacts, and open deals into the native CRM. Idempotent —
+ * re-running dedupes (companies by domain/name, contacts by email, deals by company+title),
+ * so it doubles as a resync. Operator stays the system of record. Needs HubSpot connected.
+ */
+export async function importFromHubSpot(
+  workspaceId: string,
+): Promise<{ ok: true; companies: number; contacts: number; deals: number } | { ok: false; error: string }> {
+  const token = await getValidAccessToken(workspaceId, "HubSpot");
+  if (!token) return { ok: false, error: "HubSpot isn't connected — connect it in Integrations first." };
+
+  let companiesAdded = 0;
+  let contactsAdded = 0;
+  let dealsAdded = 0;
+
+  // Dedupe maps, seeded from what's already in the CRM.
+  const existingCompanies = await db.select().from(crmCompanies).where(eq(crmCompanies.workspace_id, workspaceId));
+  const byDomain = new Map<string, string>();
+  const byName = new Map<string, string>();
+  for (const c of existingCompanies) {
+    if (c.domain) byDomain.set(c.domain.trim().toLowerCase(), c.id);
+    if (c.name.trim()) byName.set(c.name.trim().toLowerCase(), c.id);
+  }
+  const resolveCompany = async (
+    name: string,
+    domain: string | null,
+    industry: string,
+    size: string,
+    rel: CrmRelationshipType,
+  ): Promise<string | null> => {
+    const d = domain?.trim().toLowerCase() || null;
+    const n = name.trim().toLowerCase();
+    if (d && byDomain.has(d)) return byDomain.get(d)!;
+    if (n && byName.has(n)) return byName.get(n)!;
+    if (!name.trim()) return null;
+    const r = await createCompany(workspaceId, { name, domain, industry, size, relationship_type: rel, source: "hubspot" });
+    if (!r.ok) return null;
+    companiesAdded += 1;
+    if (d) byDomain.set(d, r.company.id);
+    byName.set(n, r.company.id);
+    return r.company.id;
+  };
+
+  // Companies
+  try {
+    for (const hc of await hsRecentCompanies(token, 200)) {
+      await resolveCompany(hc.name, hc.domain || null, hc.industry, hc.employees ? `${hc.employees} employees` : "", mapHsRelType(hc.lifecycleStage));
+    }
+  } catch {
+    /* scope may be missing — import what we can */
+  }
+
+  // Contacts
+  try {
+    const existingContacts = await db
+      .select({ email: crmContacts.email })
+      .from(crmContacts)
+      .where(eq(crmContacts.workspace_id, workspaceId));
+    const seenEmails = new Set(existingContacts.map((c) => (c.email ?? "").trim().toLowerCase()).filter(Boolean));
+    for (const hc of await hsRecentContacts(token, 3650, 200)) {
+      const email = (hc.email ?? "").trim().toLowerCase();
+      if (email && seenEmails.has(email)) continue;
+      if (!email && !hc.name.trim()) continue;
+      const companyId = hc.company ? await resolveCompany(hc.company, null, "", "", "prospect") : null;
+      const r = await createContact(workspaceId, { name: hc.name || email, email: hc.email || null, company_id: companyId, source: "hubspot" });
+      if (r.ok) {
+        contactsAdded += 1;
+        if (email) seenEmails.add(email);
+      }
+    }
+  } catch {
+    /* ignore partial-scope failures */
+  }
+
+  // Open deals — attach each to its company via v4 associations (bounded).
+  try {
+    const existingDeals = await db
+      .select({ company_id: crmDeals.company_id, title: crmDeals.title })
+      .from(crmDeals)
+      .where(eq(crmDeals.workspace_id, workspaceId));
+    const dealKeys = new Set(existingDeals.map((d) => `${d.company_id}|${d.title.trim().toLowerCase()}`));
+    for (const hd of (await hsOpenDeals(token, 100)).slice(0, 100)) {
+      const hsCo = await hsDealCompany(token, hd.id);
+      if (!hsCo) continue; // deals need a company; skip unattributable ones
+      const companyId = await resolveCompany(
+        hsCo.name,
+        hsCo.domain || null,
+        hsCo.industry,
+        hsCo.employees ? `${hsCo.employees} employees` : "",
+        mapHsRelType(hsCo.lifecycleStage),
+      );
+      if (!companyId) continue;
+      const key = `${companyId}|${hd.name.trim().toLowerCase()}`;
+      if (dealKeys.has(key)) continue;
+      const r = await createDeal(workspaceId, {
+        company_id: companyId,
+        title: hd.name || "Untitled deal",
+        amount: hd.amount || null,
+        stage: mapHsStage(hd.stageLabel || hd.stage),
+        close_date: hd.closeDate,
+        source: "hubspot",
+      });
+      if (r.ok) {
+        dealsAdded += 1;
+        dealKeys.add(key);
+      }
+    }
+  } catch {
+    /* ignore partial-scope failures */
+  }
+
+  return { ok: true, companies: companiesAdded, contacts: contactsAdded, deals: dealsAdded };
 }

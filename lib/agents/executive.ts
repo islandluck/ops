@@ -48,6 +48,7 @@ import {
   listContacts as crmListContacts,
   listDeals as crmListDeals,
   logActivity as crmLogActivity,
+  logMeetingToCrm as crmLogMeeting,
   updateDeal as crmUpdateDeal,
 } from "@/lib/crm";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
@@ -1055,6 +1056,15 @@ function buildTools(workspaceId: string): ExecTool[] {
           drafted = true;
         } catch {
           /* ignore */
+        }
+
+        // Log the meeting onto the attendee's CRM timeline (best-effort).
+        if (attendeeEmail) {
+          try {
+            await crmLogMeeting(workspaceId, { email: attendeeEmail, name: withWho, topic, when: startISO });
+          } catch {
+            /* ignore — CRM logging never blocks scheduling */
+          }
         }
 
         const bits = ["Zoom created"];

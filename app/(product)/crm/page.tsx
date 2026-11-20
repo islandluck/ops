@@ -31,6 +31,8 @@ import {
   crmDraftFollowupAction,
   crmEnrichCompanyAction,
   crmFindContactEmailAction,
+  crmForecastAction,
+  crmImportHubSpotAction,
   crmListActivitiesAction,
   crmListCompaniesAction,
   crmListContactsAction,
@@ -41,7 +43,7 @@ import {
   crmUpdateContactAction,
   crmUpdateDealAction,
 } from "@/app/actions";
-import type { CrmActivity, CrmCompany, CrmContact, CrmDeal, CrmDealStage, CrmRelationshipType } from "@/lib/types";
+import type { CrmActivity, CrmCompany, CrmContact, CrmDeal, CrmDealStage, CrmForecast, CrmRelationshipType } from "@/lib/types";
 
 /* --------------------------------- meta ---------------------------------- */
 
@@ -1102,15 +1104,99 @@ function ContactsTab({ contacts, companies, refresh }: { contacts: CrmContact[];
   );
 }
 
+/* ------------------------------ forecast tab ----------------------------- */
+
+function ForecastTile({ label, value, sub, tone }: { label: string; value: string; sub: string; tone?: "emerald" }) {
+  return (
+    <Card className="p-3">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={cn("mt-1 text-xl font-semibold tabular-nums", tone === "emerald" && "text-emerald-600 dark:text-emerald-400")}>
+        {value}
+      </div>
+      <div className="text-[11px] text-muted-foreground">{sub}</div>
+    </Card>
+  );
+}
+
+function ForecastBar({ label, count, value, weighted, pct }: { label: string; count: number; value: number; weighted: number; pct: number }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between text-[12.5px]">
+        <span className="font-medium">
+          {label} <span className="text-muted-foreground">· {count}</span>
+        </span>
+        <span className="tabular-nums text-muted-foreground">
+          <span className="font-medium text-foreground">{money(weighted)}</span> of {money(value)}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary/70" style={{ width: `${Math.max(2, Math.round(pct * 100))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ForecastTab() {
+  const [f, setF] = useState<CrmForecast | null | undefined>(undefined);
+  useEffect(() => {
+    crmForecastAction().then((d) => setF(d));
+  }, []);
+
+  if (f === undefined) {
+    return (
+      <div className="flex justify-center py-16 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+  if (!f) return <Card className="py-12 text-center text-sm text-muted-foreground">Couldn&apos;t load the forecast.</Card>;
+
+  const maxStage = Math.max(1, ...f.byStage.map((s) => s.weighted));
+  const maxMonth = Math.max(1, ...f.byMonth.map((m) => m.weighted));
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <ForecastTile label="Open pipeline" value={money(f.openValue)} sub={`${f.openCount} open deal${f.openCount === 1 ? "" : "s"}`} />
+        <ForecastTile label="Weighted forecast" value={money(f.weighted)} sub="probability-adjusted" tone="emerald" />
+        <ForecastTile label="Win rate" value={f.winRate != null ? `${f.winRate}%` : "—"} sub="of closed deals" />
+        <ForecastTile label="Won · last 90d" value={money(f.wonValue90d)} sub="recently closed" tone="emerald" />
+      </div>
+
+      <Card className="flex flex-col gap-3 p-4">
+        <h3 className="text-sm font-semibold">Pipeline by stage</h3>
+        <p className="-mt-2 text-[11px] text-muted-foreground">Bold = probability-weighted; faint = full value.</p>
+        {f.byStage.every((s) => s.count === 0) ? (
+          <p className="py-4 text-center text-[12.5px] text-muted-foreground">No open deals yet.</p>
+        ) : (
+          f.byStage.map((s) => <ForecastBar key={s.key} label={s.label} count={s.count} value={s.value} weighted={s.weighted} pct={s.weighted / maxStage} />)
+        )}
+      </Card>
+
+      <Card className="flex flex-col gap-3 p-4">
+        <h3 className="text-sm font-semibold">Forecast by close month</h3>
+        {f.byMonth.length === 0 ? (
+          <p className="py-4 text-center text-[12.5px] text-muted-foreground">No open deals with a close date — set expected close dates to forecast by month.</p>
+        ) : (
+          f.byMonth.map((m) => <ForecastBar key={m.month} label={m.label} count={m.count} value={m.value} weighted={m.weighted} pct={m.weighted / maxMonth} />)
+        )}
+      </Card>
+    </div>
+  );
+}
+
 /* --------------------------------- page ---------------------------------- */
 
-type Tab = "pipeline" | "companies" | "contacts";
+type Tab = "pipeline" | "companies" | "contacts" | "forecast";
 
 export default function CrmPage() {
   const [tab, setTab] = useState<Tab>("pipeline");
   const [companies, setCompanies] = useState<CrmCompany[] | null>(null);
   const [contacts, setContacts] = useState<CrmContact[] | null>(null);
   const [deals, setDeals] = useState<CrmDeal[] | null>(null);
+
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [co, ct, dl] = await Promise.all([crmListCompaniesAction(), crmListContactsAction(), crmListDealsAction()]);
@@ -1122,11 +1208,26 @@ export default function CrmPage() {
     refresh();
   }, [refresh]);
 
+  async function importHubSpot() {
+    if (!window.confirm("Import your HubSpot companies, contacts, and open deals into the CRM? Re-running is safe — it skips anything already here.")) return;
+    setImporting(true);
+    setImportMsg(null);
+    const r = await crmImportHubSpotAction();
+    setImporting(false);
+    if (r.ok) {
+      setImportMsg(
+        `Imported ${r.companies ?? 0} compan${r.companies === 1 ? "y" : "ies"}, ${r.contacts ?? 0} contact${r.contacts === 1 ? "" : "s"}, and ${r.deals ?? 0} deal${r.deals === 1 ? "" : "s"} from HubSpot.`,
+      );
+      refresh();
+    } else setImportMsg(r.error ?? "Import failed.");
+  }
+
   const loading = companies === null || contacts === null || deals === null;
   const TABS: { key: Tab; label: string }[] = [
     { key: "pipeline", label: "Pipeline" },
     { key: "companies", label: "Companies" },
     { key: "contacts", label: "Contacts" },
+    { key: "forecast", label: "Forecast" },
   ];
 
   return (
@@ -1134,8 +1235,17 @@ export default function CrmPage() {
       <PageHeader
         title="CRM"
         description="Your relationships, owned here. Deals, companies, and people — the agent logs your emails and tells you who's going cold."
+        actions={
+          <Button size="sm" variant="outline" onClick={importHubSpot} disabled={importing}>
+            {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Building2 className="h-4 w-4" />}
+            Import from HubSpot
+          </Button>
+        }
       />
       <PageBody className="space-y-4">
+        {importMsg && (
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-[12.5px] text-muted-foreground">{importMsg}</div>
+        )}
         <div className="flex gap-1 border-b border-border">
           {TABS.map((t) => (
             <button
@@ -1159,8 +1269,10 @@ export default function CrmPage() {
           <PipelineTab deals={deals!} companies={companies!} contacts={contacts!} refresh={refresh} />
         ) : tab === "companies" ? (
           <CompaniesTab companies={companies!} contacts={contacts!} deals={deals!} refresh={refresh} />
-        ) : (
+        ) : tab === "contacts" ? (
           <ContactsTab contacts={contacts!} companies={companies!} refresh={refresh} />
+        ) : (
+          <ForecastTab />
         )}
       </PageBody>
     </>

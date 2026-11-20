@@ -444,6 +444,34 @@ export async function hsAssociatedContact(
   }
 }
 
+/** The company associated with a deal (v4 associations) — for CRM import attribution. */
+export async function hsDealCompany(token: string, dealId: string): Promise<HsCompany | null> {
+  try {
+    const assoc = await hsFetch(token, `/crm/v4/objects/deals/${dealId}/associations/companies?limit=1`);
+    if (!assoc.ok) return null;
+    const aj = (await assoc.json()) as { results?: Array<{ toObjectId?: string | number }> };
+    const cid = aj.results?.[0]?.toObjectId;
+    if (!cid) return null;
+    const cres = await hsFetch(
+      token,
+      `/crm/v3/objects/companies/${cid}?properties=name,domain,industry,numberofemployees,lifecyclestage`,
+    );
+    if (!cres.ok) return null;
+    const c = (await cres.json()) as { id: string; properties?: Record<string, string | null> };
+    const p = c.properties ?? {};
+    return {
+      id: c.id,
+      name: p.name ?? "",
+      domain: p.domain ?? "",
+      industry: p.industry ?? "",
+      employees: Number(p.numberofemployees ?? 0) || 0,
+      lifecycleStage: p.lifecyclestage ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function hsSearchContactByEmail(token: string, email: string): Promise<HsContact | null> {
   const json = await hsSearch(token, "contacts", {
     filterGroups: [{ filters: [{ propertyName: "email", operator: "EQ", value: email }] }],
