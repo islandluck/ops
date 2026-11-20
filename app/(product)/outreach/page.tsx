@@ -464,10 +464,18 @@ function ContactDialog({
             <Trash2 className="h-4 w-4" />
           </button>
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" onClick={promote} disabled={busy !== null} title="Add this contact to your CRM">
-              {busy === "promote" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
-              Add to CRM
-            </Button>
+            {contact.crm_contact_id ? (
+              <a href="/crm" className="inline-flex">
+                <Button size="sm" variant="ghost" title="This contact is in your CRM">
+                  <Check className="h-4 w-4 text-emerald-500" /> In CRM
+                </Button>
+              </a>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={promote} disabled={busy !== null} title="Add this contact to your CRM">
+                {busy === "promote" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                Add to CRM
+              </Button>
+            )}
             <Button size="sm" variant="outline" onClick={save} disabled={busy !== null}>
               {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
               Save

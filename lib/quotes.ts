@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { quoteRequests, quoteSuppliers } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
+import { linkSupplierToCrm } from "@/lib/crm";
 import { tavilyConfigured, tavilySearch } from "@/lib/integrations/tavily";
 import { distillSuppliers, draftRfqEmail, searchSuppliers, type SupplierLead } from "@/lib/ai/sourcing";
 import { runWithUsage } from "@/lib/ai/usage";
@@ -60,6 +61,7 @@ function toSupplier(r: SupplierRow): QuoteSupplier {
     quote_price: r.quote_price,
     quote_lead_time: r.quote_lead_time,
     quote_notes: r.quote_notes,
+    crm_contact_id: r.crm_contact_id,
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
   };
@@ -355,6 +357,8 @@ export async function draftRfq(
     .update(quoteSuppliers)
     .set({ outbound_draft_id: staged.draft.id, status: "drafted", updated_at: new Date() })
     .where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, supplierId)));
+  // Drafting an RFQ = engaging the vendor → mirror into the shared CRM ledger.
+  await linkSupplierToCrm(workspaceId, supplierId).catch(() => {});
   return { ok: true, draftId: staged.draft.id };
 }
 

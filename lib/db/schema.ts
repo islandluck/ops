@@ -1583,6 +1583,8 @@ export const quoteSuppliers = pgTable(
     quote_price: text("quote_price").notNull().default(""),
     quote_lead_time: text("quote_lead_time").notNull().default(""),
     quote_notes: text("quote_notes").notNull().default(""),
+    /** Mirror into the shared CRM ledger (crm_contacts), when the RFQ is drafted. */
+    crm_contact_id: uuid("crm_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
     created_at: createdAt,
     updated_at: updatedAt,
   },
@@ -1639,6 +1641,8 @@ export const outreachContacts = pgTable(
     note: text("note").notNull().default(""),
     /** JSON: Hunter result detail {score, status, sources[], found_via, verify_*}. */
     email_meta: text("email_meta"),
+    /** Mirror into the shared CRM ledger (crm_contacts), when engaged. */
+    crm_contact_id: uuid("crm_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
     created_at: createdAt,
     updated_at: updatedAt,
   },

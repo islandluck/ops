@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { crmActivities, crmCompanies, crmContacts, crmDeals, crmPipelines, outreachContacts } from "@/lib/db/schema";
+import { crmActivities, crmCompanies, crmContacts, crmDeals, crmPipelines, outreachContacts, quoteSuppliers } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { draftFollowupEmail, enrichCompany } from "@/lib/ai/crm";
@@ -857,12 +857,22 @@ export async function promoteOutreachContact(
     .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, outreachContactId)))
     .limit(1);
   if (!oc) return { ok: false, error: "Outreach contact not found." };
+  if (oc.crm_contact_id) return { ok: true, contactId: oc.crm_contact_id, companyId: "" };
+
+  const linkOutreach = (crmContactId: string) =>
+    db
+      .update(outreachContacts)
+      .set({ crm_contact_id: crmContactId, updated_at: new Date() })
+      .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, outreachContactId)));
 
   // Dedupe: if a CRM contact already has this email, reuse it.
   if (oc.contact_email) {
     const existing = await db.select().from(crmContacts).where(eq(crmContacts.workspace_id, workspaceId));
     const hit = existing.find((c) => (c.email ?? "").trim().toLowerCase() === oc.contact_email!.trim().toLowerCase());
-    if (hit) return { ok: true, contactId: hit.id, companyId: hit.company_id ?? "" };
+    if (hit) {
+      await linkOutreach(hit.id);
+      return { ok: true, contactId: hit.id, companyId: hit.company_id ?? "" };
+    }
   }
 
   const company = await findOrCreateCompany(workspaceId, {
@@ -889,7 +899,51 @@ export async function promoteOutreachContact(
     company_id: company.id,
     contact_id: created.contact.id,
   });
+  await linkOutreach(created.contact.id);
   return { ok: true, contactId: created.contact.id, companyId: company.id };
+}
+
+/** Mirror a Quotes supplier into the shared CRM ledger as a vendor company + contact.
+ *  Idempotent (links via quote_suppliers.crm_contact_id). */
+export async function linkSupplierToCrm(
+  workspaceId: string,
+  supplierId: string,
+): Promise<{ ok: true; contactId: string } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(quoteSuppliers)
+    .where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, supplierId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Supplier not found." };
+  if (row.crm_contact_id) return { ok: true, contactId: row.crm_contact_id };
+
+  const company = await findOrCreateCompany(workspaceId, {
+    name: row.company || "Supplier",
+    website: row.website,
+    relationship_type: "vendor",
+    source: "quotes",
+  });
+  const created = await createContact(workspaceId, {
+    name: row.company || (row.contact_email ?? "").split("@")[0] || "Supplier contact",
+    company_id: company.id,
+    email: row.contact_email,
+    linkedin_url: row.contact_method === "form" ? row.contact_url : null,
+    source: "quotes",
+    note: row.note,
+  });
+  if (!created.ok) return { ok: false, error: created.error };
+  await db
+    .update(quoteSuppliers)
+    .set({ crm_contact_id: created.contact.id, updated_at: new Date() })
+    .where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, supplierId)));
+  await logActivity(workspaceId, {
+    type: "note",
+    summary: `Vendor from Quotes: ${row.company}`,
+    source: "system",
+    company_id: company.id,
+    contact_id: created.contact.id,
+  });
+  return { ok: true, contactId: created.contact.id };
 }
 
 /** Email auto-log — when an outbound draft is sent, mirror it onto the CRM timeline. */

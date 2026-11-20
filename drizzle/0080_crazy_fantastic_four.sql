@@ -1,0 +1,4 @@
+ALTER TABLE "outreach_contacts" ADD COLUMN "crm_contact_id" uuid;--> statement-breakpoint
+ALTER TABLE "quote_suppliers" ADD COLUMN "crm_contact_id" uuid;--> statement-breakpoint
+ALTER TABLE "outreach_contacts" ADD CONSTRAINT "outreach_contacts_crm_contact_id_crm_contacts_id_fk" FOREIGN KEY ("crm_contact_id") REFERENCES "public"."crm_contacts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "quote_suppliers" ADD CONSTRAINT "quote_suppliers_crm_contact_id_crm_contacts_id_fk" FOREIGN KEY ("crm_contact_id") REFERENCES "public"."crm_contacts"("id") ON DELETE set null ON UPDATE no action;

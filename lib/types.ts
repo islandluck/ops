@@ -985,6 +985,8 @@ export interface QuoteSupplier {
   quote_price: string;
   quote_lead_time: string;
   quote_notes: string;
+  /** The CRM contact this supplier is mirrored to (the shared ledger), when linked. */
+  crm_contact_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1079,6 +1081,8 @@ export interface OutreachContact {
   note: string;
   /** Hunter result detail for the email — confidence, verification, and source URLs. */
   email_meta: OutreachEmailMeta | null;
+  /** The CRM contact this is mirrored to (the shared ledger), when linked. */
+  crm_contact_id: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { outreachCampaigns, outreachContacts } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
+import { promoteOutreachContact } from "@/lib/crm";
 import { draftOutreachEmail, searchContacts, type OutreachLead } from "@/lib/ai/outreach";
 import {
   accountCredits,
@@ -97,6 +98,7 @@ function toContact(r: ContactRow): OutreachContact {
     outbound_draft_id: r.outbound_draft_id,
     note: r.note,
     email_meta: parseEmailMeta(r.email_meta),
+    crm_contact_id: r.crm_contact_id,
     created_at: iso(r.created_at),
     updated_at: iso(r.updated_at),
   };
@@ -588,6 +590,8 @@ export async function draftOutreach(
     .update(outreachContacts)
     .set({ outbound_draft_id: staged.draft.id, status: "drafted", updated_at: new Date() })
     .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, contactId)));
+  // Drafting = real engagement → mirror this contact into the shared CRM ledger.
+  await promoteOutreachContact(workspaceId, contactId).catch(() => {});
   return { ok: true, draftId: staged.draft.id };
 }
 
