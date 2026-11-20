@@ -406,6 +406,7 @@ import {
 import type { MarketingAngle, MarketingCampaign, MarketingChannel, MarketingItem } from "@/lib/types";
 import {
   addSupplier,
+  composeRfqText,
   createQuoteRequest,
   deleteQuoteRequest,
   deleteSupplier,
@@ -417,7 +418,7 @@ import {
   updateQuoteRequest,
   updateSupplier,
 } from "@/lib/quotes";
-import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierStatus } from "@/lib/types";
+import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierContactMethod, SupplierStatus } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -5147,7 +5148,7 @@ export async function listSuppliersAction(requestId: string): Promise<QuoteSuppl
 
 export async function addSupplierAction(
   requestId: string,
-  input: { company: string; website?: string | null; contact_email?: string | null },
+  input: { company: string; website?: string | null; contact_email?: string | null; contact_url?: string | null },
 ) {
   const user = await getCurrentUser();
   if (!user) return { ok: false as const, error: "Not authenticated." };
@@ -5167,6 +5168,8 @@ export async function updateSupplierAction(
     company?: string;
     website?: string | null;
     contact_email?: string | null;
+    contact_url?: string | null;
+    contact_method?: SupplierContactMethod;
     status?: SupplierStatus;
     note?: string;
     quote_price?: string;
@@ -5197,7 +5200,7 @@ export async function deleteSupplierAction(id: string) {
   }
 }
 
-/** Research suppliers for a request (Tavily → AI distill). */
+/** Research suppliers for a request (Claude web search/fetch → Tavily fallback). */
 export async function sourceSuppliersAction(
   requestId: string,
 ): Promise<{ ok: boolean; added?: number; configured?: boolean; error?: string }> {
@@ -5239,5 +5242,23 @@ export async function draftAllRfqsAction(requestId: string): Promise<{ drafted: 
     return await draftAllRfqs(ws, requestId, displayName(user), scopeUserId);
   } catch {
     return { drafted: 0 };
+  }
+}
+
+/** Generate paste-ready RFQ text for a form-only supplier (nothing is sent). */
+export async function composeRfqTextAction(
+  supplierId: string,
+): Promise<{ ok: boolean; subject?: string; body?: string; contact_url?: string | null; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  try {
+    const r = await composeRfqText(ws, supplierId, displayName(user));
+    return r.ok
+      ? { ok: true, subject: r.subject, body: r.body, contact_url: r.contact_url }
+      : { ok: false, error: r.error };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the RFQ." };
   }
 }

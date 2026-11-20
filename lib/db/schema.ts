@@ -71,6 +71,7 @@ import type {
   PayType,
   QuoteRequestStatus,
   SupplierStatus,
+  SupplierContactMethod,
   PermissionMode,
   PostStatus,
   Priority,
@@ -1563,6 +1564,9 @@ export const quoteSuppliers = pgTable(
     company: text("company").notNull().default(""),
     website: text("website"),
     contact_email: text("contact_email"),
+    /** How to reach them for a quote: "email" | "form" | "none", + the form/contact URL. */
+    contact_method: text("contact_method").$type<SupplierContactMethod>().notNull().default("none"),
+    contact_url: text("contact_url"),
     source: text("source").notNull().default("research"),
     status: text("status").$type<SupplierStatus>().notNull().default("found"),
     /** The Email Manager outbound draft staged for this supplier. */

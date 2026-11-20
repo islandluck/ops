@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Check,
   ChevronLeft,
+  Copy,
   ExternalLink,
   FileSearch,
+  FileText,
   Globe,
   Loader2,
   Mail,
@@ -22,6 +24,7 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
   addSupplierAction,
+  composeRfqTextAction,
   createQuoteRequestAction,
   deleteQuoteRequestAction,
   deleteSupplierAction,
@@ -128,23 +131,29 @@ function SupplierDialog({
   const [company, setCompany] = useState("");
   const [website, setWebsite] = useState("");
   const [email, setEmail] = useState("");
+  const [contactUrl, setContactUrl] = useState("");
   const [status, setStatus] = useState<SupplierStatus>("found");
   const [price, setPrice] = useState("");
   const [lead, setLead] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [composed, setComposed] = useState<{ subject: string; body: string; url: string | null } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!supplier) return;
     setCompany(supplier.company);
     setWebsite(supplier.website ?? "");
     setEmail(supplier.contact_email ?? "");
+    setContactUrl(supplier.contact_url ?? "");
     setStatus(supplier.status);
     setPrice(supplier.quote_price);
     setLead(supplier.quote_lead_time);
     setNotes(supplier.quote_notes);
     setMsg(null);
+    setComposed(null);
+    setCopied(false);
   }, [supplier]);
 
   if (!supplier) return null;
@@ -155,6 +164,7 @@ function SupplierDialog({
       company,
       website,
       contact_email: email,
+      contact_url: contactUrl,
       status,
       quote_price: price,
       quote_lead_time: lead,
@@ -173,6 +183,29 @@ function SupplierDialog({
       setMsg({ ok: true, text: "RFQ drafted in the Email Manager — review and send it there." });
       onChanged();
     } else setMsg({ ok: false, text: ("error" in r && r.error) || "Couldn't draft the RFQ." });
+  }
+  async function composeForForm() {
+    setBusy("compose");
+    setMsg(null);
+    // Persist any form-URL edit first so the generated text and the Open-form link agree.
+    if (contactUrl.trim() !== (supplier!.contact_url ?? "")) await updateSupplierAction(supplier!.id, { contact_url: contactUrl });
+    const r = await composeRfqTextAction(supplier!.id);
+    setBusy(null);
+    if (r.ok) {
+      setComposed({ subject: r.subject ?? "", body: r.body ?? "", url: r.contact_url ?? (contactUrl.trim() || null) });
+      setCopied(false);
+    } else setMsg({ ok: false, text: r.error ?? "Couldn't compose the RFQ." });
+  }
+  async function copyComposed() {
+    if (!composed) return;
+    const text = `Subject: ${composed.subject}\n\n${composed.body}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setMsg({ ok: false, text: "Couldn't copy — select the text and copy manually." });
+    }
   }
   async function remove() {
     if (!window.confirm(`Remove ${supplier!.company}?`)) return;
@@ -215,6 +248,18 @@ function SupplierDialog({
             <Input value={website} onChange={(e) => setWebsite(e.target.value)} className={inputCls} />
           </div>
         </div>
+        <div>
+          <Label>Quote form URL</Label>
+          <Input
+            value={contactUrl}
+            onChange={(e) => setContactUrl(e.target.value)}
+            placeholder="https://supplier.com/request-a-quote"
+            className={inputCls}
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            For suppliers with no email. Generate RFQ text below, then open the form and paste it.
+          </p>
+        </div>
 
         <div className="rounded-lg border border-border bg-muted/20 p-3">
           <div className="flex items-center justify-between">
@@ -235,6 +280,38 @@ function SupplierDialog({
             <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Terms, MOQ, inclusions, caveats…" />
           </div>
         </div>
+
+        {composed && (
+          <div className="rounded-lg border border-border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">RFQ to paste</span>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={copyComposed}
+                  className="inline-flex items-center gap-1 text-[12px] font-medium text-foreground/80 transition hover:text-foreground"
+                >
+                  {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  {copied ? "Copied" : "Copy"}
+                </button>
+                {composed.url && (
+                  <a
+                    href={composed.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[12px] font-medium text-primary underline"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" /> Open form
+                  </a>
+                )}
+              </div>
+            </div>
+            <div className="mt-2 text-[12.5px] font-medium">{composed.subject}</div>
+            <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words font-sans text-[12.5px] text-muted-foreground">
+              {composed.body}
+            </pre>
+          </div>
+        )}
 
         {msg && (
           <p className={cn("text-[12.5px]", msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600")}>
@@ -262,10 +339,20 @@ function SupplierDialog({
                   <ExternalLink className="h-4 w-4" /> View RFQ draft
                 </Button>
               </a>
-            ) : (
-              <Button size="sm" onClick={draftRfq} disabled={busy !== null || !email.trim()}>
+            ) : email.trim() ? (
+              <Button size="sm" onClick={draftRfq} disabled={busy !== null}>
                 {busy === "rfq" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
                 Draft RFQ
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={composeForForm}
+                disabled={busy !== null || !contactUrl.trim()}
+                title={!contactUrl.trim() ? "Add a contact email or a quote form URL first" : undefined}
+              >
+                {busy === "compose" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Compose RFQ
               </Button>
             )}
           </div>
@@ -291,6 +378,7 @@ function AddSupplierDialog({
   const [company, setCompany] = useState("");
   const [website, setWebsite] = useState("");
   const [email, setEmail] = useState("");
+  const [contactUrl, setContactUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -298,12 +386,13 @@ function AddSupplierDialog({
     setCompany("");
     setWebsite("");
     setEmail("");
+    setContactUrl("");
   }, [open]);
 
   async function add() {
     if (!company.trim()) return;
     setSaving(true);
-    await addSupplierAction(requestId, { company, website, contact_email: email });
+    await addSupplierAction(requestId, { company, website, contact_email: email, contact_url: contactUrl });
     setSaving(false);
     onAdded();
     onClose();
@@ -322,7 +411,12 @@ function AddSupplierDialog({
         </div>
         <div>
           <Label>Contact email</Label>
-          <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="sales@supplier.com (or leave blank to guess)" />
+          <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="sales@supplier.com" />
+        </div>
+        <div>
+          <Label>Quote form URL</Label>
+          <Input value={contactUrl} onChange={(e) => setContactUrl(e.target.value)} placeholder="https://supplier.com/request-a-quote" />
+          <p className="mt-1 text-[11px] text-muted-foreground">Optional — if they take quotes through a web form, not email.</p>
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
@@ -377,7 +471,9 @@ function RequestDetail({ request, onBack, onChanged }: { request: QuoteRequest; 
     const r = await draftAllRfqsAction(request.id);
     setBusy(null);
     await refresh();
-    setNote(r.drafted ? `Drafted ${r.drafted} RFQ${r.drafted === 1 ? "" : "s"} in the Email Manager.` : "Nothing to draft — suppliers need an email and no existing draft.");
+    const formOnly = (suppliers ?? []).filter((s) => !s.contact_email && s.contact_url && s.status === "found").length;
+    const tail = formOnly ? ` ${formOnly} supplier${formOnly === 1 ? "" : "s"} use a web form — open each to compose RFQ text.` : "";
+    setNote((r.drafted ? `Drafted ${r.drafted} RFQ${r.drafted === 1 ? "" : "s"} in the Email Manager.` : "No email RFQs to draft.") + tail);
   }
 
   const quoted = suppliers?.filter((s) => s.status === "quoted").length ?? 0;
@@ -451,7 +547,17 @@ function RequestDetail({ request, onBack, onChanged }: { request: QuoteRequest; 
                     <td className="px-3 py-2.5">
                       <button onClick={() => setOpen(s)} className="block w-full min-w-0 text-left">
                         <div className="truncate font-medium hover:underline">{s.company}</div>
-                        <div className="truncate text-[11px] text-muted-foreground">{s.contact_email || "no email yet"}</div>
+                        <div className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
+                          {s.contact_email ? (
+                            s.contact_email
+                          ) : s.contact_url ? (
+                            <>
+                              <FileText className="h-3 w-3 shrink-0" /> Web form
+                            </>
+                          ) : (
+                            "no contact yet"
+                          )}
+                        </div>
                       </button>
                     </td>
                     <td className="px-3 py-2.5">

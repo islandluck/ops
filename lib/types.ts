@@ -943,6 +943,8 @@ export interface Application {
 export type QuoteRequestStatus = "sourcing" | "open" | "closed";
 /** A supplier's place in the RFQ flow. */
 export type SupplierStatus = "found" | "drafted" | "sent" | "replied" | "quoted" | "declined" | "no_response";
+/** How to request a quote from a supplier: real email, a web form, or unknown. */
+export type SupplierContactMethod = "email" | "form" | "none";
 
 /** A request to source quotes for a product/service (the sourcing job). */
 export interface QuoteRequest {
@@ -970,7 +972,10 @@ export interface QuoteSupplier {
   company: string;
   website: string | null;
   contact_email: string | null;
-  /** Where the email/lead came from: "research" | "role_guess" | "manual". */
+  /** How to reach them for a quote, and the form/contact URL when not email. */
+  contact_method: SupplierContactMethod;
+  contact_url: string | null;
+  /** Where the lead came from: "research" | "manual". */
   source: string;
   status: SupplierStatus;
   /** The Email Manager outbound draft staged for this supplier (if any). */

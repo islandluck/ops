@@ -9,7 +9,7 @@ import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { tavilyConfigured, tavilySearch } from "@/lib/integrations/tavily";
 import { distillSuppliers, draftRfqEmail, searchSuppliers, type SupplierLead } from "@/lib/ai/sourcing";
 import { runWithUsage } from "@/lib/ai/usage";
-import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierStatus } from "@/lib/types";
+import type { QuoteRequest, QuoteRequestStatus, QuoteSupplier, SupplierContactMethod, SupplierStatus } from "@/lib/types";
 
 /**
  * Quote sourcing engine — the user (or the Executive's source_quotes tool) opens
@@ -37,6 +37,12 @@ function toRequest(r: RequestRow): QuoteRequest {
     updated_at: iso(r.updated_at),
   };
 }
+/** Derive how to reach a supplier: a real email wins, else a form URL, else none. */
+function methodFor(email: string | null | undefined, url: string | null | undefined): SupplierContactMethod {
+  if (email && email.trim()) return "email";
+  if (url && url.trim()) return "form";
+  return "none";
+}
 function toSupplier(r: SupplierRow): QuoteSupplier {
   return {
     id: r.id,
@@ -45,6 +51,8 @@ function toSupplier(r: SupplierRow): QuoteSupplier {
     company: r.company,
     website: r.website,
     contact_email: r.contact_email,
+    contact_method: r.contact_method,
+    contact_url: r.contact_url,
     source: r.source,
     status: r.status,
     outbound_draft_id: r.outbound_draft_id,
@@ -152,18 +160,22 @@ export async function listSuppliers(workspaceId: string, requestId: string): Pro
 export async function addSupplier(
   workspaceId: string,
   requestId: string,
-  input: { company: string; website?: string | null; contact_email?: string | null },
+  input: { company: string; website?: string | null; contact_email?: string | null; contact_url?: string | null },
 ): Promise<{ ok: true; supplier: QuoteSupplier } | { ok: false; error: string }> {
   if (!input.company.trim()) return { ok: false, error: "Add a company name." };
   const id = uid();
   const now = new Date();
+  const email = input.contact_email?.trim() || null;
+  const url = input.contact_url?.trim() || null;
   await db.insert(quoteSuppliers).values({
     id,
     workspace_id: workspaceId,
     request_id: requestId,
     company: input.company.trim().slice(0, 160),
     website: input.website?.trim() || null,
-    contact_email: input.contact_email?.trim() || null,
+    contact_email: email,
+    contact_method: methodFor(email, url),
+    contact_url: url,
     source: "manual",
     status: "found",
     note: "",
@@ -184,6 +196,8 @@ export async function updateSupplier(
     company?: string;
     website?: string | null;
     contact_email?: string | null;
+    contact_url?: string | null;
+    contact_method?: SupplierContactMethod;
     status?: SupplierStatus;
     note?: string;
     quote_price?: string;
@@ -195,11 +209,25 @@ export async function updateSupplier(
   if (patch.company !== undefined) set.company = patch.company.slice(0, 160);
   if (patch.website !== undefined) set.website = patch.website?.trim() || null;
   if (patch.contact_email !== undefined) set.contact_email = patch.contact_email?.trim() || null;
+  if (patch.contact_url !== undefined) set.contact_url = patch.contact_url?.trim() || null;
   if (patch.status !== undefined) set.status = patch.status;
   if (patch.note !== undefined) set.note = patch.note.slice(0, 2000);
   if (patch.quote_price !== undefined) set.quote_price = patch.quote_price.slice(0, 200);
   if (patch.quote_lead_time !== undefined) set.quote_lead_time = patch.quote_lead_time.slice(0, 200);
   if (patch.quote_notes !== undefined) set.quote_notes = patch.quote_notes.slice(0, 4000);
+  // Keep contact_method consistent: explicit wins, else re-derive when email/url change.
+  if (patch.contact_method !== undefined) {
+    set.contact_method = patch.contact_method;
+  } else if (patch.contact_email !== undefined || patch.contact_url !== undefined) {
+    const [cur] = await db
+      .select({ contact_email: quoteSuppliers.contact_email, contact_url: quoteSuppliers.contact_url })
+      .from(quoteSuppliers)
+      .where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, id)))
+      .limit(1);
+    const email = (set.contact_email !== undefined ? set.contact_email : cur?.contact_email) as string | null;
+    const url = (set.contact_url !== undefined ? set.contact_url : cur?.contact_url) as string | null;
+    set.contact_method = methodFor(email, url);
+  }
   await db.update(quoteSuppliers).set(set).where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, id)));
   return { ok: true };
 }
@@ -211,8 +239,9 @@ export async function deleteSupplier(workspaceId: string, id: string): Promise<{
 
 /* ------------------------------- sourcing -------------------------------- */
 
-/** Research suppliers for a request (Tavily → AI distill) and add new ones.
- *  Derives a role-based sales@ email when none is published. */
+/** Research suppliers for a request (Claude web search/fetch → Tavily fallback) and
+ *  add new ones. Captures a REAL email when published, else a quote-form URL; never
+ *  fabricates an address. */
 export async function sourceSuppliers(
   workspaceId: string,
   requestId: string,
@@ -272,6 +301,8 @@ export async function sourceSuppliers(
       company: l.company.slice(0, 160),
       website: l.website,
       contact_email: l.contact_email,
+      contact_method: methodFor(l.contact_email, l.contact_url),
+      contact_url: l.contact_url,
       source: "research",
       status: "found" as const,
       note: l.note.slice(0, 300),
@@ -327,7 +358,8 @@ export async function draftRfq(
   return { ok: true, draftId: staged.draft.id };
 }
 
-/** Draft RFQs for every supplier that has an email and no draft yet. Bounded. */
+/** Draft RFQs for every email-reachable supplier with no draft yet. Bounded.
+ *  Form-only suppliers are skipped (no email) — handle those via composeRfqText. */
 export async function draftAllRfqs(
   workspaceId: string,
   requestId: string,
@@ -342,4 +374,34 @@ export async function draftAllRfqs(
     if (r.ok) drafted++;
   }
   return { drafted };
+}
+
+/**
+ * Generate paste-ready RFQ text for a supplier that takes quotes via a web form
+ * (no email to send to). Returns the subject + body for the user to paste into the
+ * supplier's quote form — nothing is staged or sent.
+ */
+export async function composeRfqText(
+  workspaceId: string,
+  supplierId: string,
+  senderName: string,
+): Promise<{ ok: true; subject: string; body: string; contact_url: string | null } | { ok: false; error: string }> {
+  const [row] = await db
+    .select()
+    .from(quoteSuppliers)
+    .where(and(eq(quoteSuppliers.workspace_id, workspaceId), eq(quoteSuppliers.id, supplierId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Supplier not found." };
+  const request = await getQuoteRequest(workspaceId, row.request_id);
+  if (!request) return { ok: false, error: "Request not found." };
+
+  const { brief } = await getPlanningContext(workspaceId);
+  try {
+    const draft = await runWithUsage(workspaceId, "quote-rfq", () =>
+      draftRfqEmail({ company: row.company, request: { title: request.title, spec: request.spec }, brief, senderName }),
+    );
+    return { ok: true, subject: draft.subject, body: draft.body, contact_url: row.contact_url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the RFQ." };
+  }
 }

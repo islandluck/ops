@@ -32,8 +32,10 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 export interface SupplierLead {
   company: string;
   website: string | null;
-  /** A contact/sales email ONLY if one is visibly present in the results. */
+  /** A real contact/sales email ONLY if one was actually found (never guessed). */
   contact_email: string | null;
+  /** The supplier's "request a quote"/contact-page URL, when there's no email. */
+  contact_url: string | null;
   note: string;
 }
 
@@ -51,6 +53,7 @@ function coerceLeads(obj: Record<string, unknown> | null): SupplierLead[] {
       company: str(s.company).trim().slice(0, 160),
       website: nstr(s.website)?.slice(0, 300) ?? null,
       contact_email: nstr(s.contact_email)?.slice(0, 200) ?? null,
+      contact_url: nstr(s.contact_url)?.slice(0, 500) ?? null,
       note: str(s.note).trim().slice(0, 300),
     }))
     .filter((s) => s.company.length > 0)
@@ -99,13 +102,17 @@ export async function distillSuppliers(input: {
   return coerceLeads(parseJsonObject(text));
 }
 
+const WEB_SEARCH_TOOL = { type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8 };
+const WEB_FETCH_TOOL = { type: "web_fetch_20260209" as const, name: "web_fetch" as const, max_uses: 10 };
+
 /**
- * Primary supplier sourcing — Claude's native web-search tool. Claude drives its
- * OWN queries using its knowledge of the sector (so it surfaces the recognized
- * market leaders, not whatever a single keyword query ranks first), prioritizes
- * established/reputable manufacturers, skips marketplaces/directories, and returns
- * real suppliers with a published sales/contact email when one exists. Never
- * invents a company, URL, or address. Throws if web search is unavailable.
+ * Primary supplier sourcing — Claude's native web-search + web-fetch tools. Claude
+ * drives its OWN queries using its knowledge of the sector (so it surfaces the
+ * recognized market leaders, not whatever a single keyword query ranks first),
+ * then OPENS each supplier's own contact / "request a quote" page to pin down a
+ * REAL published email — or, when there's no email (common for large suppliers who
+ * only take RFQs via a web form), the URL of that form. Never guesses or invents a
+ * company, URL, or address. Throws if the web tools are unavailable.
  */
 export async function searchSuppliers(input: {
   query: string;
@@ -118,13 +125,16 @@ export async function searchSuppliers(input: {
   const system = [
     `You are a procurement researcher helping ${input.brief.company_name || "a company"} find SUPPLIERS to request a quote from.`,
     input.brief.business_description ? `About the buyer: ${input.brief.business_description}` : "",
-    "Use the web_search tool to find real companies that manufacture or supply the requested product/service — vendors the buyer could email for a quote.",
-    "PRIORITIZE established, reputable, recognized suppliers — the known industry leaders for this category, anywhere in the world. Start from the leading names you already know, then search to confirm each one's current official homepage and (when published) a sales/quote/contact email.",
+    "Use web_search to find real companies that manufacture or supply the requested product/service, then use web_fetch to OPEN each promising supplier's own site — their 'Contact', 'Contact sales', or 'Request a quote' page — to pin down how to reach them for a quote.",
+    "PRIORITIZE established, reputable, recognized suppliers — the known industry leaders for this category, anywhere in the world. Start from the leading names you already know, then search/fetch to confirm each one's current official homepage.",
     "HARD EXCLUSIONS: skip B2B marketplaces and directories (Alibaba, Made-in-China, GlobalSources, IndiaMART, ThomasNet listing pages, Amazon, eBay, DHgate), lead-gen/aggregator pages, blog/news articles, and anonymous or no-name resellers. Prefer the manufacturer's OWN website.",
-    "For each supplier: company (real name), website (official homepage), contact_email (a real published sales/quote/contact email ONLY if you actually found one in search results — otherwise null; NEVER guess, construct, or invent an address), note (one line on what they offer / why they fit).",
-    "Find 5-8 strong suppliers. Only real companies you verified via search.",
+    "For each supplier, determine how to request a quote:",
+    "- contact_email: a REAL sales/quote/contact email you ACTUALLY SAW on their page or in a result. NEVER guess, construct, pattern-match, or invent an address (no 'sales@domain' guessing). If you did not see a real address, set it null.",
+    "- contact_url: when there is no published email, the URL of their 'Request a quote' / 'Contact sales' / 'Contact us' page (where a person would submit an RFQ form). Many large suppliers only take quotes via a web form — capture that URL.",
+    "Also give: company (real name), website (official homepage), note (one line on what they offer / why they fit).",
+    "Find 5-8 strong suppliers. Only real companies you verified. Prefer a real email; otherwise a form URL; a supplier may have one, the other, or (rarely) neither.",
     "",
-    'When you finish searching, respond with ONLY this JSON (no prose, no fences): {"suppliers": [{"company": string, "website": string|null, "contact_email": string|null, "note": string}]}',
+    'When done, respond with ONLY this JSON (no prose, no fences): {"suppliers": [{"company": string, "website": string|null, "contact_email": string|null, "contact_url": string|null, "note": string}]}',
   ]
     .filter(Boolean)
     .join("\n");
@@ -133,29 +143,35 @@ export async function searchSuppliers(input: {
     `Find suppliers of: ${input.query}`,
     input.spec ? `Spec/requirements: ${input.spec}` : "",
     "",
-    "Search now, then return the JSON.",
+    "Research now (search, then open contact pages), then return the JSON.",
   ]
     .filter(Boolean)
     .join("\n");
 
-  // Web search is a server tool: Anthropic runs the searches inline. A long turn
-  // may return stop_reason "pause_turn" — feed the partial turn back to continue.
-  const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMsg }];
-  let text = "";
-  for (let i = 0; i < 4; i++) {
-    const msg = await client.messages.create({
-      model: MODEL,
-      max_tokens: 4000,
-      system,
-      tools: [{ type: "web_search_20260209" as const, name: "web_search" as const, max_uses: 8 }],
-      messages,
-    });
-    text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
-    if (msg.stop_reason === "pause_turn") {
-      messages.push({ role: "assistant", content: msg.content });
-      continue;
+  // Server tools run inline; a long turn may return stop_reason "pause_turn" — feed
+  // the partial turn back to continue. Returns the final assistant text.
+  const runWithTools = async (tools: Anthropic.Messages.ToolUnion[]): Promise<string> => {
+    const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMsg }];
+    let text = "";
+    for (let i = 0; i < 6; i++) {
+      const msg = await client.messages.create({ model: MODEL, max_tokens: 4000, system, tools, messages });
+      text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+      if (msg.stop_reason === "pause_turn") {
+        messages.push({ role: "assistant", content: msg.content });
+        continue;
+      }
+      break;
     }
-    break;
+    return text;
+  };
+
+  // Prefer search + fetch; if web_fetch isn't enabled on the key, keep the search
+  // quality by retrying with search only (rather than dropping to the Tavily path).
+  let text: string;
+  try {
+    text = await runWithTools([WEB_SEARCH_TOOL, WEB_FETCH_TOOL]);
+  } catch {
+    text = await runWithTools([WEB_SEARCH_TOOL]);
   }
   return coerceLeads(parseJsonObject(text));
 }
