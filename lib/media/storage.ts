@@ -75,6 +75,24 @@ export async function deleteImageAt(path: string): Promise<void> {
   }
 }
 
+/* ---------------------------- signature logos ---------------------------- */
+
+// A signature logo is a small, non-sensitive brand image. It lives in the public
+// image bucket so the in-app builder can preview it by URL; on send it's fetched
+// back (getImageBytes) and embedded inline (CID), never hotlinked.
+export const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB — logos are small.
+
+/** Upload a signature logo; returns its storage path + public URL. */
+export async function uploadSignatureLogoBytes(
+  workspaceId: string,
+  id: string,
+  bytes: Buffer,
+  mime: string,
+): Promise<{ path: string; url: string }> {
+  const { path, publicUrl } = await uploadImageBytes(workspaceId, `sig-${id}`, bytes, mime);
+  return { path, url: publicUrl };
+}
+
 /* --------------------------- email attachments --------------------------- */
 
 // A separate PRIVATE bucket — attachments can be any file type (docs, PDFs) and

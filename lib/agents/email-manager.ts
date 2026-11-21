@@ -7,6 +7,7 @@ import { activityEvents, emailTriage } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
 import { getEmailSettingsFor, saveEmailSettingsFor } from "@/lib/agents/email-settings";
+import { buildSignedEmail } from "@/lib/email/signed-send";
 import {
   archiveMessage,
   getMessageDetail,
@@ -414,10 +415,13 @@ export async function sendEmailReply(
 
   const subject = /^re:/i.test(row.subject) ? row.subject : `Re: ${row.subject}`;
   try {
+    const signed = await buildSignedEmail(workspaceId, scopeUserId, row.draft_reply);
     await sendGmail(token, {
       to: row.from_email,
       subject,
-      body: row.draft_reply,
+      body: signed.body,
+      html: signed.html,
+      inlineImages: signed.inlineImages,
       threadId: row.thread_id || undefined,
       inReplyTo: row.source_message_id || undefined,
     });

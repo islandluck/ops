@@ -60,20 +60,6 @@ function needsAttention(category: string, urgency: string, action: string): bool
 
 /* ------------------------------- email style ------------------------------- */
 
-async function getEmailStyle(
-  workspaceId: string,
-): Promise<{ signature: string; replyStyle: string }> {
-  const [b] = await db
-    .select({
-      signature: businessBriefs.email_signature,
-      replyStyle: businessBriefs.email_reply_style,
-    })
-    .from(businessBriefs)
-    .where(eq(businessBriefs.workspace_id, workspaceId))
-    .limit(1);
-  return { signature: b?.signature?.trim() ?? "", replyStyle: b?.replyStyle?.trim() ?? "" };
-}
-
 /** Append the founder's signature to a non-empty drafted reply. */
 function withSignature(reply: string, signature: string): string {
   const r = reply.trim();
@@ -104,9 +90,9 @@ async function _triageAndStore(
   const now = new Date();
   const { brief } = await getPlanningContext(workspaceId);
   // Owner drafts in the brief's voice; a member drafts in their OWN saved voice.
-  const { signature, replyStyle } = scopeUserId
-    ? await getEmailPersona(workspaceId, scopeUserId)
-    : await getEmailStyle(workspaceId);
+  // getEmailPersona(ws, null) resolves the owner plane, so both share one gated path
+  // (a signature block yields a short closing here; the card is added at send time).
+  const { signature, replyStyle } = await getEmailPersona(workspaceId, scopeUserId);
 
   const triaged = await triageEmails(emails, brief, { replyStyle });
 

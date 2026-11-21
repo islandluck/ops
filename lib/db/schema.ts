@@ -92,6 +92,7 @@ import type {
   RecipientCandidate,
   RiskLevel,
   ScreeningQuestion,
+  SignatureBlock,
   SourceDistillation,
   TaskStatus,
 } from "@/lib/types";
@@ -161,6 +162,8 @@ export const businessBriefs = pgTable("business_briefs", {
   // Email Manager — the founder's outgoing-email identity, injected into every
   // drafted reply so replies sound like them and sign off correctly.
   email_signature: text("email_signature").notNull().default(""),
+  // Formatted, table-based HTML signature card (logo + links), appended at send time.
+  email_signature_block: jsonb("email_signature_block").$type<SignatureBlock | null>(),
   email_reply_style: text("email_reply_style").notNull().default(""),
   // Auto-triage cadence: off | hourly | daily. Drives runDueEmailTriage (never auto-sends).
   email_triage_cadence: text("email_triage_cadence").notNull().default("off"),
@@ -483,6 +486,8 @@ export const emailSettings = pgTable(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     member_user_id: uuid("member_user_id").notNull(),
     signature: text("signature").notNull().default(""),
+    // Formatted, table-based HTML signature card (logo + links), appended at send time.
+    signature_block: jsonb("signature_block").$type<SignatureBlock | null>(),
     reply_style: text("reply_style").notNull().default(""),
     // off | hourly | daily
     cadence: text("cadence").notNull().default("off"),

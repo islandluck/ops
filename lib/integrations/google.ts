@@ -63,8 +63,11 @@ export async function sendGmail(
     subject: string;
     body: string;
     /** Optional HTML alternative — sent as multipart/alternative with `body` as the
-     *  plain-text fallback (only for the no-attachment case). */
+     *  plain-text fallback. Works alongside inline images and attachments. */
     html?: string;
+    /** Inline images referenced from `html` via `cid:<cid>` (e.g. a signature logo).
+     *  Embedded in a multipart/related part so they render without external fetch. */
+    inlineImages?: { cid: string; mime: string; bytes: Buffer; filename?: string }[];
     cc?: string;
     bcc?: string;
     threadId?: string;
@@ -84,54 +87,81 @@ export async function sendGmail(
   }
 
   const attachments = msg.attachments ?? [];
-  let mimeMessage: string;
-  if (attachments.length === 0 && msg.html) {
-    // multipart/alternative: plain-text fallback first, then the HTML body.
-    const boundary = `alt_${crypto.randomBytes(12).toString("hex")}`;
-    mimeMessage = [
-      ...headers,
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-      "",
-      `--${boundary}`,
-      "Content-Type: text/plain; charset=UTF-8",
-      "",
-      msg.body,
-      `--${boundary}`,
-      "Content-Type: text/html; charset=UTF-8",
-      "",
-      msg.html,
-      `--${boundary}--`,
-    ].join("\r\n");
-  } else if (attachments.length === 0) {
-    mimeMessage = [...headers, "Content-Type: text/plain; charset=UTF-8", "", msg.body].join("\r\n");
+  const inlineImages = msg.inlineImages ?? [];
+
+  // Build the MIME tree from the inside out so HTML, an inline logo, and file
+  // attachments can all coexist:
+  //   multipart/mixed ( multipart/related ( multipart/alternative ( text, html ), <images> ), <attachments> )
+  // Each wrapper is added only when it's actually needed, so the simple cases
+  // (plain text; text+html; text+attachments) produce exactly the old structure.
+  const rand = () => crypto.randomBytes(12).toString("hex");
+  const b64 = (buf: Buffer) => buf.toString("base64").replace(/(.{76})/g, "$1\r\n");
+
+  // `part` = { ct: the Content-Type header value, body: the already-rendered part body }.
+  type Part = { ct: string; body: string };
+
+  let part: Part;
+  if (msg.html) {
+    const b = `alt_${rand()}`;
+    part = {
+      ct: `multipart/alternative; boundary="${b}"`,
+      body: [
+        `--${b}`,
+        "Content-Type: text/plain; charset=UTF-8",
+        "",
+        msg.body,
+        `--${b}`,
+        "Content-Type: text/html; charset=UTF-8",
+        "",
+        msg.html,
+        `--${b}--`,
+      ].join("\r\n"),
+    };
   } else {
-    // multipart/mixed: the text body, then each attachment base64-encoded.
-    const boundary = `mixed_${crypto.randomBytes(12).toString("hex")}`;
-    const parts: string[] = [
-      ...headers,
-      `Content-Type: multipart/mixed; boundary="${boundary}"`,
-      "",
-      `--${boundary}`,
-      "Content-Type: text/plain; charset=UTF-8",
-      "",
-      msg.body,
-    ];
+    part = { ct: "text/plain; charset=UTF-8", body: msg.body };
+  }
+
+  // Wrap the alternative + inline images in multipart/related (only meaningful with HTML).
+  if (msg.html && inlineImages.length) {
+    const b = `rel_${rand()}`;
+    const lines: string[] = [`--${b}`, `Content-Type: ${part.ct}`, "", part.body];
+    for (const img of inlineImages) {
+      const cid = img.cid.replace(/[<>"\r\n]/g, "");
+      const name = (img.filename || `${cid}`).replace(/["\r\n]/g, "").slice(0, 255);
+      lines.push(
+        `--${b}`,
+        `Content-Type: ${img.mime || "image/png"}`,
+        "Content-Transfer-Encoding: base64",
+        `Content-ID: <${cid}>`,
+        `Content-Disposition: inline; filename="${name}"`,
+        "",
+        b64(img.bytes),
+      );
+    }
+    lines.push(`--${b}--`);
+    part = { ct: `multipart/related; boundary="${b}"`, body: lines.join("\r\n") };
+  }
+
+  // Wrap everything in multipart/mixed when there are file attachments.
+  if (attachments.length) {
+    const b = `mixed_${rand()}`;
+    const lines: string[] = [`--${b}`, `Content-Type: ${part.ct}`, "", part.body];
     for (const a of attachments) {
       const name = a.filename.replace(/["\r\n]/g, "").slice(0, 255) || "attachment";
-      const b64 = a.bytes.toString("base64").replace(/(.{76})/g, "$1\r\n");
-      parts.push(
-        `--${boundary}`,
+      lines.push(
+        `--${b}`,
         `Content-Type: ${a.mime || "application/octet-stream"}; name="${name}"`,
         "Content-Transfer-Encoding: base64",
         `Content-Disposition: attachment; filename="${name}"`,
         "",
-        b64,
+        b64(a.bytes),
       );
     }
-    parts.push(`--${boundary}--`);
-    mimeMessage = parts.join("\r\n");
+    lines.push(`--${b}--`);
+    part = { ct: `multipart/mixed; boundary="${b}"`, body: lines.join("\r\n") };
   }
 
+  const mimeMessage = [...headers, `Content-Type: ${part.ct}`, "", part.body].join("\r\n");
   const raw = base64url(mimeMessage);
   const payload: Record<string, string> = { raw };
   if (msg.threadId) payload.threadId = msg.threadId;

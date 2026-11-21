@@ -610,6 +610,13 @@
       "when": 1795243400279,
       "tag": "0086_wooden_galactus",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1795279934370,
+      "tag": "0087_wealthy_paibok",
+      "breakpoints": true
     }
   ]
 }

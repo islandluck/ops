@@ -16,6 +16,7 @@ import { isProviderConfigured, providerForIntegrationName } from "./registry";
 import { getValidAccessToken } from "./tokens";
 import { scopeFilter } from "@/lib/access/scope";
 import { createCalendarEvent, createSpreadsheet, sendGmail } from "./google";
+import { buildSignedEmail } from "@/lib/email/signed-send";
 import { hsCreateNote, upsertContact } from "./hubspot";
 import { createNotionPage } from "./notion";
 import { createDraftInvoice, isStripeTestKey } from "./stripe";
@@ -191,10 +192,13 @@ export async function runTaskExecution(
         const to = meta?.to ? String(meta.to) : actor.email;
         if (meta && meta.kind === "reply" && meta.to) {
           // Triage reply: send the approved draft back to the original sender, in-thread.
+          const signed = await buildSignedEmail(workspaceId, scope, draft || task.description);
           await sendGmail(token, {
             to: String(meta.to),
             subject: meta.subject ? String(meta.subject) : `Re: ${parseSubject(draft)}`,
-            body: draft || task.description,
+            body: signed.body,
+            html: signed.html,
+            inlineImages: signed.inlineImages,
             threadId: meta.thread_id ? String(meta.thread_id) : undefined,
             inReplyTo: meta.in_reply_to ? String(meta.in_reply_to) : undefined,
           });
@@ -202,10 +206,13 @@ export async function runTaskExecution(
           touched.push("Gmail");
         } else if (to) {
           const self = !meta?.to; // sending to the owner because no recipient was captured
+          const signed = await buildSignedEmail(workspaceId, scope, draft || task.description);
           await sendGmail(token, {
             to,
             subject: meta?.subject ? String(meta.subject) : parseSubject(draft),
-            body: draft || task.description,
+            body: signed.body,
+            html: signed.html,
+            inlineImages: signed.inlineImages,
           });
           steps.push({ label: `Sent via Gmail (to ${to})${self ? " — your own inbox" : ""}`, status: "done" });
           touched.push("Gmail");

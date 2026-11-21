@@ -7,6 +7,7 @@ import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema"
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
 import { getEmailPersona } from "@/lib/agents/email-settings";
+import { buildSignedEmail } from "@/lib/email/signed-send";
 import { sendGmail } from "@/lib/integrations/google";
 import { executionKilled } from "@/lib/integrations/guardrails";
 import { deleteAttachmentAt, getAttachmentBytes } from "@/lib/media/storage";
@@ -281,12 +282,15 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
       }),
     );
     const attachments = loaded.filter((a): a is NonNullable<typeof a> => Boolean(a));
+    const signed = await buildSignedEmail(row.workspace_id, row.member_user_id, row.body);
     await sendGmail(token, {
       to,
       cc: row.cc || undefined,
       bcc: row.bcc || undefined,
       subject: row.subject || "(no subject)",
-      body: row.body,
+      body: signed.body,
+      html: signed.html,
+      inlineImages: signed.inlineImages,
       attachments: attachments.length ? attachments : undefined,
     });
   } catch (e) {

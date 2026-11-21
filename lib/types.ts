@@ -1715,10 +1715,44 @@ export interface EmailTriageInfo {
 /** How often the Admin agent auto-triages the inbox in the background. */
 export type EmailCadence = "off" | "hourly" | "daily";
 
+/** Two layouts for the formatted signature card. */
+export type SignatureLayout = "logo-left" | "stacked";
+
+/**
+ * A structured, formatted email signature ("signature block"). Stored as JSON per
+ * plane (owner → business brief; member → their email_settings row) and rendered to
+ * bulletproof, table-based HTML that is appended at SEND time — see
+ * lib/email/signature.ts. The logo travels inline (CID), so it shows even when a
+ * client blocks external images.
+ */
+export interface SignatureBlock {
+  enabled: boolean;
+  name: string;
+  title: string;
+  company: string;
+  phone: string;
+  email: string;
+  website: string;
+  linkedin: string;
+  tagline: string;
+  /** Accent hex (#rrggbb) for the name + links. */
+  accent: string;
+  layout: SignatureLayout;
+  /** Storage path in the public image bucket (used to fetch bytes for the inline CID). */
+  logo_path: string | null;
+  /** Public URL of the logo — used only for the in-app preview. */
+  logo_url: string | null;
+  logo_mime: string | null;
+  /** Rendered logo width in px. */
+  logo_width: number;
+}
+
 export interface EmailSettings {
   signature: string;
   reply_style: string;
   cadence: EmailCadence;
+  /** The formatted signature card (optional; normalized on read). */
+  signature_block?: SignatureBlock | null;
 }
 
 export interface EmailManagerState {
