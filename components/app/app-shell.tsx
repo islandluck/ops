@@ -45,11 +45,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <p className="text-sm text-muted-foreground">
             {loadError
               ? "The database didn’t respond. This can happen on a cold start — please try again."
-              : "Your session may have expired. Try reloading, or sign in again."}
+              : "Your session may have expired. Sign in again to continue."}
           </p>
-          <Button size="sm" onClick={() => reloadWorkspace()}>
-            Try again
-          </Button>
+          {loadError ? (
+            <Button size="sm" onClick={() => reloadWorkspace()}>
+              Try again
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              onClick={() => {
+                window.location.href = "/login";
+              }}
+            >
+              Sign in
+            </Button>
+          )}
         </div>
       </div>
     );

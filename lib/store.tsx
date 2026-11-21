@@ -253,7 +253,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setState(loaded);
           setLoadError(false);
         } else if (firstLoad) {
-          setLoadError(true);
+          // A null (not a throw) means NOT authenticated / no backend — an expired
+          // session, not a DB outage. Leave loadError false so the shell shows the
+          // "session may have expired — sign in" message, not "the database didn't
+          // respond". A real DB error throws and is handled by the catch/retry below.
+          setLoadError(false);
         }
         // Background reload returning nothing: keep showing the state we have.
         setHydrated(true);
@@ -262,6 +266,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
       }
     }
+    // Only reached after 3 thrown attempts = a genuine DB/loader failure.
     if (firstLoad) setLoadError(true);
     setHydrated(true);
   }, []);
