@@ -541,6 +541,16 @@ export async function verifyContactEmail(
 
 /* -------------------------------- drafting ------------------------------- */
 
+/** Attach an already-staged Email Manager draft to a contact (marks it drafted + mirrors
+ *  into the CRM). Used when another surface (e.g. Fundraise warm intros) stages the draft. */
+export async function markContactDrafted(workspaceId: string, contactId: string, draftId: string): Promise<void> {
+  await db
+    .update(outreachContacts)
+    .set({ outbound_draft_id: draftId, status: "drafted", updated_at: new Date() })
+    .where(and(eq(outreachContacts.workspace_id, workspaceId), eq(outreachContacts.id, contactId)));
+  await promoteOutreachContact(workspaceId, contactId).catch(() => {});
+}
+
 /** Draft an outreach email for one contact → stage it in the Email Manager. */
 export async function draftOutreach(
   workspaceId: string,

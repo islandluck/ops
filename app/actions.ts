@@ -504,7 +504,16 @@ import {
   updateRound as frUpdateRound,
 } from "@/lib/fundraise";
 import type { ImportResult as FrImportResult } from "@/lib/fundraise";
-import type { FundraiseInvestor, FundraiseRound, FundraiseRoundStatus, FundraiseStage } from "@/lib/types";
+import {
+  addIntroPath as frAddIntroPath,
+  deleteIntroPath as frDeleteIntroPath,
+  listIntroPaths as frListIntroPaths,
+  requestIntro as frRequestIntro,
+  researchIntroPaths as frResearchIntroPaths,
+  scoutFounderEmail as frScoutFounderEmail,
+  updateIntroPath as frUpdateIntroPath,
+} from "@/lib/fundraise-intros";
+import type { FundraiseInvestor, FundraiseIntroPath, FundraiseIntroStatus, FundraiseRound, FundraiseRoundStatus, FundraiseStage } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -6234,6 +6243,121 @@ export async function frImportInvestorsAction(
     return await frImportInvestors(ws, roundId, cells, { dryRun: opts?.dryRun ?? false });
   } catch (e) {
     return fail(e instanceof Error ? e.message : "Import failed.");
+  }
+}
+
+/* ----------------------- fundraise warm intros ----------------------- */
+
+export async function frListIntroPathsAction(investorId: string): Promise<FundraiseIntroPath[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await frListIntroPaths(ws, investorId);
+  } catch {
+    return [];
+  }
+}
+
+/** AI-research this VC's portfolio for the companies closest to us + their founders. */
+export async function frResearchIntroPathsAction(investorId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await frResearchIntroPaths(ws, investorId, { count: 3 });
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Research failed." };
+  }
+}
+
+export async function frAddIntroPathAction(
+  investorId: string,
+  input: {
+    portfolio_company: string;
+    portfolio_domain?: string | null;
+    founder_name?: string;
+    founder_title?: string;
+    founder_email?: string | null;
+    relevance?: string;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await frAddIntroPath(ws, investorId, input);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the path." };
+  }
+}
+
+export async function frUpdateIntroPathAction(
+  id: string,
+  patch: {
+    portfolio_company?: string;
+    portfolio_domain?: string | null;
+    founder_name?: string;
+    founder_title?: string;
+    founder_email?: string | null;
+    relevance?: string;
+    status?: FundraiseIntroStatus;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frUpdateIntroPath(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function frDeleteIntroPathAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frDeleteIntroPath(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+/** Resolve the founder's email via Hunter (confidence-gated). */
+export async function frScoutFounderEmailAction(introPathId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await frScoutFounderEmail(ws, introPathId);
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Email lookup failed." };
+  }
+}
+
+/** Draft the warm-intro "short call" email to the founder → Email Manager (never sends). */
+export async function frRequestIntroAction(introPathId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await frRequestIntro(ws, introPathId, displayName(user), scopeUserId);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the intro request." };
   }
 }
 

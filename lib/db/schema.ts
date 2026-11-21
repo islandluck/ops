@@ -81,6 +81,7 @@ import type {
   CrmStage,
   CrmActivityType,
   CrmActivitySource,
+  FundraiseIntroStatus,
   FundraiseRoundStatus,
   FundraiseStage,
   PermissionMode,
@@ -1842,6 +1843,36 @@ export const fundraiseInvestors = pgTable(
     index("fundraise_investors_ws_round_idx").on(t.workspace_id, t.round_id),
     index("fundraise_investors_ws_stage_idx").on(t.workspace_id, t.stage),
   ],
+);
+
+/** A warm-intro route to a target VC — through a founder in one of their portfolio companies. */
+export const fundraiseIntroPaths = pgTable(
+  "fundraise_intro_paths",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    investor_id: uuid("investor_id")
+      .notNull()
+      .references(() => fundraiseInvestors.id, { onDelete: "cascade" }),
+    portfolio_company: text("portfolio_company").notNull().default(""),
+    portfolio_domain: text("portfolio_domain"),
+    founder_name: text("founder_name").notNull().default(""),
+    founder_title: text("founder_title").notNull().default(""),
+    founder_email: text("founder_email"),
+    /** Why this company is close to us (research rationale) + 0-100 similarity. */
+    relevance: text("relevance").notNull().default(""),
+    relevance_score: integer("relevance_score"),
+    status: text("status").$type<FundraiseIntroStatus>().notNull().default("suggested"),
+    outreach_contact_id: uuid("outreach_contact_id").references(() => outreachContacts.id, { onDelete: "set null" }),
+    crm_contact_id: uuid("crm_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
+    source: text("source").notNull().default("ai"),
+    note: text("note").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("fundraise_intro_paths_ws_investor_idx").on(t.workspace_id, t.investor_id)],
 );
 
 /* ------------------------------- marketing ------------------------------- */

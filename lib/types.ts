@@ -1288,6 +1288,40 @@ export interface FundraiseInvestor {
   contact_name?: string | null;
 }
 
+/** A warm-intro route to a target VC — through a founder in one of their portfolio companies. */
+export type FundraiseIntroStatus =
+  | "suggested"
+  | "approved"
+  | "email_found"
+  | "requested"
+  | "intro_made"
+  | "declined";
+
+export interface FundraiseIntroPath {
+  id: string;
+  workspace_id: string;
+  /** The target VC (a fundraise_investors row) we want a warm intro to. */
+  investor_id: string;
+  portfolio_company: string;
+  portfolio_domain: string | null;
+  founder_name: string;
+  founder_title: string;
+  founder_email: string | null;
+  /** Why this portfolio company is close to us + a 0-100 similarity score. */
+  relevance: string;
+  relevance_score: number | null;
+  status: FundraiseIntroStatus;
+  /** Links to the outreach contact once an intro request is drafted, + the CRM contact. */
+  outreach_contact_id: string | null;
+  crm_contact_id: string | null;
+  source: string;
+  note: string;
+  created_at: string;
+  updated_at: string;
+  /** Join: the target VC's firm name. */
+  investor_name?: string;
+}
+
 /* ------------------------------- marketing ------------------------------- */
 
 /** A marketing distribution channel. X = auto-publish; linkedin + newsletter =

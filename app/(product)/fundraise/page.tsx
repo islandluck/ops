@@ -4,12 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
+  AtSign,
   Check,
   Clock,
   Download,
   Flag,
+  Handshake,
   Loader2,
   Plus,
+  Send,
+  Sparkles,
   Star,
   Target,
   Trash2,
@@ -23,17 +27,24 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
+  frAddIntroPathAction,
   frCreateInvestorAction,
   frCreateRoundAction,
   frDeleteInvestorAction,
+  frDeleteIntroPathAction,
   frDeleteRoundAction,
   frImportInvestorsAction,
   frListInvestorsAction,
+  frListIntroPathsAction,
   frListRoundsAction,
+  frRequestIntroAction,
+  frResearchIntroPathsAction,
+  frScoutFounderEmailAction,
+  frUpdateIntroPathAction,
   frUpdateInvestorAction,
   frUpdateRoundAction,
 } from "@/app/actions";
-import type { FundraiseInvestor, FundraiseRound, FundraiseStage } from "@/lib/types";
+import type { FundraiseInvestor, FundraiseIntroPath, FundraiseIntroStatus, FundraiseRound, FundraiseStage } from "@/lib/types";
 
 type ImportResult = Awaited<ReturnType<typeof frImportInvestorsAction>>;
 type ImportRow = ImportResult["rows"][number];
@@ -476,10 +487,12 @@ function InvestorDialog({
   investor,
   onClose,
   onChanged,
+  onWarmIntros,
 }: {
   investor: FundraiseInvestor | null;
   onClose: () => void;
   onChanged: () => void;
+  onWarmIntros: () => void;
 }) {
   const [name, setName] = useState("");
   const [check, setCheck] = useState("");
@@ -572,10 +585,15 @@ function InvestorDialog({
           <button type="button" onClick={remove} className="text-muted-foreground transition hover:text-destructive" title="Remove investor">
             <Trash2 className="h-4 w-4" />
           </button>
-          <Button size="sm" onClick={save} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Save
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={onWarmIntros}>
+              <Handshake className="h-4 w-4" /> Warm intros
+            </Button>
+            <Button size="sm" onClick={save} disabled={busy}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save
+            </Button>
+          </div>
         </div>
       </div>
     </Dialog>
@@ -673,6 +691,236 @@ function AddInvestorDialog({
   );
 }
 
+/* ------------------------------ warm intros ------------------------------ */
+
+const INTRO_STATUS: Record<FundraiseIntroStatus, { label: string; tint: string }> = {
+  suggested: { label: "Suggested", tint: "text-slate-500" },
+  approved: { label: "Approved", tint: "text-sky-600 dark:text-sky-400" },
+  email_found: { label: "Email found", tint: "text-violet-600 dark:text-violet-400" },
+  requested: { label: "Intro requested", tint: "text-amber-600 dark:text-amber-400" },
+  intro_made: { label: "Intro made", tint: "text-emerald-600 dark:text-emerald-400" },
+  declined: { label: "Declined", tint: "text-muted-foreground" },
+};
+
+function AddPathForm({ investorId, onAdded }: { investorId: string; onAdded: () => void }) {
+  const [company, setCompany] = useState("");
+  const [domain, setDomain] = useState("");
+  const [founder, setFounder] = useState("");
+  const [title, setTitle] = useState("");
+  const [email, setEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function add() {
+    if (!company.trim()) {
+      setError("Add the portfolio company name.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const r = await frAddIntroPathAction(investorId, {
+      portfolio_company: company,
+      portfolio_domain: domain || null,
+      founder_name: founder,
+      founder_title: title,
+      founder_email: email || null,
+    });
+    setSaving(false);
+    if (r.ok) onAdded();
+    else setError(r.error ?? "Couldn't add.");
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Portfolio company *" />
+        <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="Website (for email lookup)" />
+        <Input value={founder} onChange={(e) => setFounder(e.target.value)} placeholder="Founder name" />
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Founder title" />
+        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Founder email (optional)" className="sm:col-span-2" />
+      </div>
+      {error && <p className="text-[12px] text-red-600">{error}</p>}
+      <div className="flex justify-end">
+        <Button size="sm" onClick={add} disabled={saving || !company.trim()}>
+          {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          Add path
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function WarmIntrosDialog({ investor, onClose }: { investor: FundraiseInvestor | null; onClose: () => void }) {
+  const [paths, setPaths] = useState<FundraiseIntroPath[] | null>(null);
+  const [researching, setResearching] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const investorId = investor?.id ?? null;
+  const load = useCallback(async () => {
+    if (!investorId) return;
+    setPaths(await frListIntroPathsAction(investorId));
+  }, [investorId]);
+
+  useEffect(() => {
+    if (!investorId) return;
+    setPaths(null);
+    setMsg(null);
+    setAddOpen(false);
+    load();
+  }, [investorId, load]);
+
+  if (!investor) return null;
+
+  async function research() {
+    setResearching(true);
+    setMsg(null);
+    const r = await frResearchIntroPathsAction(investor!.id);
+    setResearching(false);
+    if (!r.ok) setMsg(r.error ?? "Research failed.");
+    else if (!r.configured) setMsg("AI isn't configured (ANTHROPIC_API_KEY missing).");
+    else {
+      setMsg(r.added ? `Found ${r.added} intro path${r.added === 1 ? "" : "s"}.` : "No new portfolio matches found — try adding one manually.");
+      await load();
+    }
+  }
+  async function findEmail(id: string, hasName: boolean) {
+    if (!hasName) {
+      setMsg("Add the founder's name first.");
+      return;
+    }
+    setBusyId(id);
+    setMsg(null);
+    const r = await frScoutFounderEmailAction(id);
+    setBusyId(null);
+    if (!r.ok) setMsg(r.error);
+    else if (!r.email) setMsg("No confident email found — add it manually, or check the company website.");
+    else {
+      setMsg(`Found an email (confidence ${r.score ?? "—"}).`);
+      await load();
+    }
+  }
+  async function requestIntro(id: string) {
+    setBusyId(id);
+    setMsg(null);
+    const r = await frRequestIntroAction(id);
+    setBusyId(null);
+    if (!r.ok) setMsg(r.error);
+    else {
+      setMsg("Intro request drafted → review & send it in the Email Manager.");
+      await load();
+    }
+  }
+  async function setStatus(id: string, status: FundraiseIntroStatus) {
+    await frUpdateIntroPathAction(id, { status });
+    await load();
+  }
+  async function remove(id: string) {
+    await frDeleteIntroPathAction(id);
+    await load();
+  }
+
+  return (
+    <Dialog open={!!investor} onClose={onClose} title={`Warm intros → ${investor.name}`} className="max-w-2xl">
+      <div className="flex flex-col gap-3">
+        <p className="text-[12px] text-muted-foreground">
+          Find the founders in {investor.name}&rsquo;s portfolio closest to you, scout their email, and draft a warm founder-to-founder note asking for a quick call — a portfolio
+          intro beats a cold pitch. Nothing sends; drafts land in your Email Manager.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={research} disabled={researching}>
+            {researching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            Find intro paths
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setAddOpen((v) => !v)}>
+            <Plus className="h-4 w-4" /> Add manually
+          </Button>
+        </div>
+        {addOpen && (
+          <AddPathForm
+            investorId={investor.id}
+            onAdded={() => {
+              setAddOpen(false);
+              load();
+            }}
+          />
+        )}
+        {msg && <p className="rounded-lg bg-muted/50 px-2.5 py-1.5 text-[12px] text-muted-foreground">{msg}</p>}
+        {paths === null ? (
+          <div className="flex justify-center py-8 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : paths.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border py-8 text-center text-[12.5px] text-muted-foreground">
+            No intro paths yet. Click <span className="font-medium text-foreground">Find intro paths</span> to research {investor.name}&rsquo;s portfolio.
+          </div>
+        ) : (
+          <div className="flex max-h-[26rem] flex-col gap-2 overflow-auto">
+            {paths.map((p) => {
+              const requested = p.status === "requested" || p.status === "intro_made";
+              return (
+                <div key={p.id} className="rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-semibold">{p.portfolio_company}</span>
+                        {p.relevance_score != null && (
+                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">{p.relevance_score}% match</span>
+                        )}
+                      </div>
+                      {(p.founder_name || p.founder_title) && (
+                        <div className="text-[12px] text-muted-foreground">
+                          {p.founder_name}
+                          {p.founder_title ? ` · ${p.founder_title}` : ""}
+                        </div>
+                      )}
+                      {p.relevance && <p className="mt-0.5 text-[11.5px] text-muted-foreground">{p.relevance}</p>}
+                      {p.founder_email && <div className="mt-0.5 truncate text-[11.5px] text-foreground/80">{p.founder_email}</div>}
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <span className={cn("text-[11px] font-medium", INTRO_STATUS[p.status].tint)}>{INTRO_STATUS[p.status].label}</span>
+                      <button type="button" onClick={() => remove(p.id)} className="text-muted-foreground transition hover:text-destructive" title="Remove">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {!p.founder_email ? (
+                      <Button size="sm" variant="outline" onClick={() => findEmail(p.id, Boolean(p.founder_name))} disabled={busyId === p.id}>
+                        {busyId === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AtSign className="h-3.5 w-3.5" />} Find email
+                      </Button>
+                    ) : !requested ? (
+                      <Button size="sm" onClick={() => requestIntro(p.id)} disabled={busyId === p.id}>
+                        {busyId === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} Request intro
+                      </Button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-[11.5px] text-emerald-600 dark:text-emerald-400">
+                        <Check className="h-3.5 w-3.5" /> Drafted → Email Manager
+                      </span>
+                    )}
+                    <select
+                      value={p.status}
+                      onChange={(e) => setStatus(p.id, e.target.value as FundraiseIntroStatus)}
+                      className="ml-auto rounded-md border border-border bg-card px-1.5 py-1 text-[11px]"
+                    >
+                      {(Object.keys(INTRO_STATUS) as FundraiseIntroStatus[]).map((s) => (
+                        <option key={s} value={s}>
+                          {INTRO_STATUS[s].label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Dialog>
+  );
+}
+
 /* --------------------------------- page ---------------------------------- */
 
 export default function FundraisePage() {
@@ -683,6 +931,7 @@ export default function FundraisePage() {
   const [importOpen, setImportOpen] = useState(false);
   const [roundDialog, setRoundDialog] = useState<{ open: boolean; round: FundraiseRound | null }>({ open: false, round: null });
   const [openInvestor, setOpenInvestor] = useState<FundraiseInvestor | null>(null);
+  const [warmIntrosFor, setWarmIntrosFor] = useState<FundraiseInvestor | null>(null);
 
   const loadRounds = useCallback(async () => {
     const rs = await frListRoundsAction();
@@ -851,7 +1100,15 @@ export default function FundraisePage() {
                                 </div>
                               )}
                             </button>
-                            <div className="mt-2 flex justify-end">
+                            <div className="mt-2 flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setWarmIntrosFor(v)}
+                                className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[10.5px] text-muted-foreground transition hover:text-foreground"
+                                title="Warm intros via portfolio founders"
+                              >
+                                <Handshake className="h-3 w-3" /> Intros
+                              </button>
                               <select
                                 value={v.stage}
                                 onChange={(e) => move(v.id, e.target.value as FundraiseStage)}
@@ -912,7 +1169,13 @@ export default function FundraisePage() {
           loadRounds();
           setOpenInvestor(null);
         }}
+        onWarmIntros={() => {
+          const inv = openInvestor;
+          setOpenInvestor(null);
+          setWarmIntrosFor(inv);
+        }}
       />
+      <WarmIntrosDialog investor={warmIntrosFor} onClose={() => setWarmIntrosFor(null)} />
     </>
   );
 }
