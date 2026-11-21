@@ -17,6 +17,12 @@ const uid = () => randomUUID();
 const iso = (d: Date) => new Date(d).toISOString();
 const isoN = (d: Date | null) => (d ? iso(d) : null);
 
+/** Dollars → integer cents, guarding against non-finite input (NaN/Infinity → null) so a
+ *  bad numeric entry can't error the insert on a bigint column. */
+function dollarsToCents(dollars: number | null | undefined): number | null {
+  return dollars != null && Number.isFinite(dollars) ? Math.round(dollars * 100) : null;
+}
+
 /** Stages whose checks count as money raised (committed or wired). */
 const COMMITTED_STAGES: FundraiseStage[] = ["committed", "closed"];
 /** Active pipeline stages (in play, not yet committed, not passed). */
@@ -120,8 +126,8 @@ export async function createRound(
     id,
     workspace_id: workspaceId,
     name: name.slice(0, 120),
-    target_amount_cents: input.target_amount == null ? null : Math.round(input.target_amount * 100),
-    valuation_cents: input.valuation == null ? null : Math.round(input.valuation * 100),
+    target_amount_cents: dollarsToCents(input.target_amount),
+    valuation_cents: dollarsToCents(input.valuation),
     status: "open",
     close_date: input.close_date ? new Date(input.close_date) : null,
     note: (input.note ?? "").slice(0, 4000),
@@ -146,8 +152,8 @@ export async function updateRound(
 ): Promise<{ ok: boolean }> {
   const set: Record<string, unknown> = { updated_at: new Date() };
   if (patch.name !== undefined) set.name = patch.name.slice(0, 120);
-  if (patch.target_amount !== undefined) set.target_amount_cents = patch.target_amount == null ? null : Math.round(patch.target_amount * 100);
-  if (patch.valuation !== undefined) set.valuation_cents = patch.valuation == null ? null : Math.round(patch.valuation * 100);
+  if (patch.target_amount !== undefined) set.target_amount_cents = dollarsToCents(patch.target_amount);
+  if (patch.valuation !== undefined) set.valuation_cents = dollarsToCents(patch.valuation);
   if (patch.status !== undefined) set.status = patch.status;
   if (patch.close_date !== undefined) set.close_date = patch.close_date ? new Date(patch.close_date) : null;
   if (patch.note !== undefined) set.note = patch.note.slice(0, 4000);
@@ -234,7 +240,7 @@ export async function createInvestor(
     contact_id: input.contact_id ?? null,
     name: name.slice(0, 160),
     stage: input.stage ?? "researching",
-    check_amount_cents: input.check_amount == null ? null : Math.round(input.check_amount * 100),
+    check_amount_cents: dollarsToCents(input.check_amount),
     is_lead: input.is_lead ?? false,
     last_contact_at: input.last_contact_date ? new Date(input.last_contact_date) : null,
     needs_followup: input.needs_followup ?? false,
@@ -267,7 +273,7 @@ export async function updateInvestor(
   if (patch.company_id !== undefined) set.company_id = patch.company_id || null;
   if (patch.contact_id !== undefined) set.contact_id = patch.contact_id || null;
   if (patch.stage !== undefined) set.stage = patch.stage;
-  if (patch.check_amount !== undefined) set.check_amount_cents = patch.check_amount == null ? null : Math.round(patch.check_amount * 100);
+  if (patch.check_amount !== undefined) set.check_amount_cents = dollarsToCents(patch.check_amount);
   if (patch.is_lead !== undefined) set.is_lead = patch.is_lead;
   if (patch.last_contact_date !== undefined) set.last_contact_at = patch.last_contact_date ? new Date(patch.last_contact_date) : null;
   if (patch.needs_followup !== undefined) set.needs_followup = patch.needs_followup;

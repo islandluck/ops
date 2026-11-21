@@ -38,6 +38,11 @@ const uid = () => randomUUID();
 const iso = (d: Date) => new Date(d).toISOString();
 const isoN = (d: Date | null) => (d ? iso(d) : null);
 
+/** Dollars → integer cents, guarding non-finite input (NaN/Infinity → null). */
+function dollarsToCents(dollars: number | null | undefined): number | null {
+  return dollars != null && Number.isFinite(dollars) ? Math.round(dollars * 100) : null;
+}
+
 /** The stages a brand-new workspace's default pipeline is seeded with. */
 export const DEFAULT_STAGES: CrmStage[] = [
   { key: "new", label: "New", kind: "open" },
@@ -768,7 +773,7 @@ export async function createDeal(
     primary_contact_id: input.primary_contact_id ?? null,
     pipeline_id: pipeline.id,
     title: title.slice(0, 200),
-    amount_cents: input.amount == null ? null : Math.round(input.amount * 100),
+    amount_cents: dollarsToCents(input.amount),
     currency: (input.currency ?? "USD").slice(0, 8),
     stage,
     close_date: input.close_date ? new Date(input.close_date) : null,
@@ -815,7 +820,7 @@ export async function updateDeal(
   if (!cur) return { ok: false };
   const set: Record<string, unknown> = { updated_at: new Date() };
   if (patch.title !== undefined) set.title = patch.title.slice(0, 200);
-  if (patch.amount !== undefined) set.amount_cents = patch.amount == null ? null : Math.round(patch.amount * 100);
+  if (patch.amount !== undefined) set.amount_cents = dollarsToCents(patch.amount);
   if (patch.currency !== undefined) set.currency = patch.currency.slice(0, 8);
   if (patch.stage !== undefined) set.stage = patch.stage;
   if (patch.pipeline_id !== undefined) set.pipeline_id = patch.pipeline_id || null;
