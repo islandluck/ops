@@ -56,8 +56,10 @@ import {
   IMAGE_MIME_TYPES,
   MAX_ATTACHMENT_BYTES,
   MAX_IMAGE_BYTES,
+  MAX_LOGO_BYTES,
   uploadAttachmentBytes,
   uploadImageBytes,
+  uploadSignatureLogoBytes,
 } from "@/lib/media/storage";
 import { searchStockImages, stockConfigured, type StockImage } from "@/lib/ai/stock";
 import { draftWithClaude } from "@/lib/ai/draft";
@@ -2561,6 +2563,29 @@ export async function saveEmailSettingsAction(settings: EmailSettings) {
   if (!ws) return { ok: false as const, error: "No workspace." };
   const { scopeUserId } = await getViewer(user.id, ws);
   return saveEmailSettings(ws, settings, scopeUserId);
+}
+
+/** Upload a signature logo; returns its storage path + public URL for the builder. */
+export async function uploadSignatureLogoAction(
+  formData: FormData,
+): Promise<{ ok: true; path: string; url: string; mime: string } | { ok: false; error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false, error: "No file provided." };
+  if (!IMAGE_MIME_TYPES.includes(file.type)) {
+    return { ok: false, error: "Unsupported image type — use PNG, JPEG, WebP, or GIF." };
+  }
+  if (file.size > MAX_LOGO_BYTES) return { ok: false, error: "Logo is too large (max 2 MB)." };
+  try {
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const { path, url } = await uploadSignatureLogoBytes(ws, randomUUID(), bytes, file.type);
+    return { ok: true, path, url, mime: file.type };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Upload failed." };
+  }
 }
 
 /* ----------------------- outbound email composer ------------------------ */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Archive,
@@ -8,7 +8,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Globe,
+  Image as ImageIcon,
   Inbox,
+  Linkedin,
   Loader2,
   Mail,
   PenSquare,
@@ -18,14 +21,23 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  Upload,
   Wand2,
+  X,
 } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/input";
+import { Input, Textarea } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
+import {
+  emptySignatureBlock,
+  normalizeSignatureBlock,
+  renderSignatureHtml,
+  signatureBlockActive,
+} from "@/lib/email/signature";
+import type { SignatureBlock, SignatureLayout } from "@/lib/types";
 import {
   archiveEmailAction,
   bulkArchiveAction,
@@ -38,6 +50,7 @@ import {
   getEmailManagerAction,
   saveEmailDraftAction,
   saveEmailSettingsAction,
+  uploadSignatureLogoAction,
   sendEmailReplyAction,
   sendInboxSummaryToExecutiveAction,
   trashEmailAction,
@@ -986,6 +999,41 @@ function TriageInfo({
   );
 }
 
+/** One labeled single-line field in the signature builder. */
+function SigField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  icon,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  icon?: ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        {icon}
+        {label}
+      </label>
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-8 text-[12.5px]"
+      />
+    </div>
+  );
+}
+
+const SIG_LAYOUTS: { key: SignatureLayout; label: string }[] = [
+  { key: "logo-left", label: "Logo left" },
+  { key: "stacked", label: "Logo on top" },
+];
+
 function SettingsPanel({
   initial,
   onClose,
@@ -996,15 +1044,50 @@ function SettingsPanel({
   const [signature, setSignature] = useState(initial.signature);
   const [replyStyle, setReplyStyle] = useState(initial.reply_style);
   const [cadence, setCadence] = useState<EmailCadence>(initial.cadence);
+  const [block, setBlock] = useState<SignatureBlock>(() => normalizeSignatureBlock(initial.signature_block));
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoErr, setLogoErr] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [learning, setLearning] = useState(false);
   const [learnMsg, setLearnMsg] = useState("");
+  const logoInputRef = useRef<HTMLInputElement>(null);
+
+  const patchBlock = (p: Partial<SignatureBlock>) => setBlock((b) => ({ ...b, ...p }));
+
+  function dirtySave() {
+    setSaveState((s) => (s === "saved" ? "idle" : s));
+  }
 
   async function save() {
     setSaveState("saving");
-    const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle, cadence });
+    const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle, cadence, signature_block: block });
     setSaveState(r.ok ? "saved" : "idle");
   }
+
+  async function onPickLogo(file: File) {
+    setLogoErr("");
+    setLogoBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await uploadSignatureLogoAction(fd);
+      if (r.ok) {
+        patchBlock({ logo_path: r.path, logo_url: r.url, logo_mime: r.mime, enabled: true });
+        dirtySave();
+      } else {
+        setLogoErr(r.error);
+      }
+    } finally {
+      setLogoBusy(false);
+    }
+  }
+
+  function removeLogo() {
+    patchBlock({ logo_path: null, logo_url: null, logo_mime: null });
+    dirtySave();
+  }
+
+  const previewHtml = renderSignatureHtml(block, {});
 
   // Learn the founder's signature + style from their Sent mail — fills the fields to review.
   async function learnStyle() {
@@ -1076,14 +1159,17 @@ function SettingsPanel({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <label className="text-[12px] font-medium">Signature</label>
+          <label className="text-[12px] font-medium">Plain-text sign-off</label>
           <Textarea
             value={signature}
             onChange={(e) => setSignature(e.target.value)}
             placeholder={"Best,\nAlex Rivera\nFounder, Northwind Studio\nnorthwindstudio.com"}
             className="min-h-[120px] resize-y text-[12.5px]"
           />
-          <p className="text-[11px] text-muted-foreground">Appended to the end of every drafted reply.</p>
+          <p className="text-[11px] text-muted-foreground">
+            Used when the formatted signature below is off. When it&apos;s on, drafts end with a short
+            closing and the formatted block is added automatically.
+          </p>
         </div>
         <div className="space-y-1.5">
           <label className="text-[12px] font-medium">Reply style</label>
@@ -1096,6 +1182,120 @@ function SettingsPanel({
           <p className="text-[11px] text-muted-foreground">Guides how the agent writes each draft.</p>
         </div>
       </div>
+      {/* Formatted signature builder */}
+      <div className="mt-4 rounded-lg border border-border">
+        <button
+          onClick={() => {
+            patchBlock({ enabled: !block.enabled });
+            dirtySave();
+          }}
+          className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+        >
+          <PenSquare className="h-4 w-4 text-primary" />
+          <span className="text-[12.5px] font-medium">Formatted signature</span>
+          <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            looks hand-signed
+          </span>
+          <span
+            className={cn(
+              "ml-auto flex h-5 w-9 items-center rounded-full border transition-colors",
+              block.enabled ? "justify-end border-primary bg-primary" : "justify-start border-border bg-muted",
+            )}
+          >
+            <span className="mx-0.5 h-4 w-4 rounded-full bg-white shadow-sm" />
+          </span>
+        </button>
+
+        {block.enabled && (
+          <div className="space-y-3 border-t border-border p-3">
+            <div className="grid gap-2.5 sm:grid-cols-2">
+              <SigField label="Full name" value={block.name} onChange={(v) => { patchBlock({ name: v }); dirtySave(); }} placeholder="Laron Brown" />
+              <SigField label="Job title" value={block.title} onChange={(v) => { patchBlock({ title: v }); dirtySave(); }} placeholder="Founder & CEO" />
+              <SigField label="Company" value={block.company} onChange={(v) => { patchBlock({ company: v }); dirtySave(); }} placeholder="Andros Innovations" />
+              <SigField label="Phone" value={block.phone} onChange={(v) => { patchBlock({ phone: v }); dirtySave(); }} placeholder="(555) 012-3456" />
+              <SigField label="Email" value={block.email} onChange={(v) => { patchBlock({ email: v }); dirtySave(); }} placeholder="laron@androsinnovations.com" />
+              <SigField label="Website" value={block.website} onChange={(v) => { patchBlock({ website: v }); dirtySave(); }} placeholder="androsinnovations.com" icon={<Globe className="h-3 w-3" />} />
+              <SigField label="LinkedIn URL" value={block.linkedin} onChange={(v) => { patchBlock({ linkedin: v }); dirtySave(); }} placeholder="linkedin.com/in/…" icon={<Linkedin className="h-3 w-3" />} />
+              <SigField label="Tagline (optional)" value={block.tagline} onChange={(v) => { patchBlock({ tagline: v }); dirtySave(); }} placeholder="Clean-energy ammonia, looping." />
+            </div>
+
+            {/* Logo + accent + layout */}
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onPickLogo(f);
+                    e.target.value = "";
+                  }}
+                />
+                {block.logo_url ? (
+                  <div className="flex items-center gap-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={block.logo_url} alt="Logo" className="h-9 w-9 rounded border border-border object-contain" />
+                    <Button size="sm" variant="ghost" onClick={removeLogo}>
+                      <X className="h-3.5 w-3.5" />
+                      Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" disabled={logoBusy} onClick={() => logoInputRef.current?.click()}>
+                    {logoBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    Logo
+                  </Button>
+                )}
+              </div>
+
+              <label className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+                <ImageIcon className="h-3 w-3" />
+                Accent
+                <input
+                  type="color"
+                  value={block.accent}
+                  onChange={(e) => { patchBlock({ accent: e.target.value }); dirtySave(); }}
+                  className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+                />
+              </label>
+
+              <div className="inline-flex rounded-lg border border-border p-0.5">
+                {SIG_LAYOUTS.map((l) => (
+                  <button
+                    key={l.key}
+                    onClick={() => { patchBlock({ layout: l.key }); dirtySave(); }}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                      block.layout === l.key ? "bg-primary text-white" : "text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {logoErr && <p className="text-[11px] text-red-600">{logoErr}</p>}
+
+            {/* Live preview */}
+            <div className="space-y-1">
+              <p className="text-[11px] font-medium text-muted-foreground">Preview</p>
+              <div className="rounded-lg border border-border bg-white p-4">
+                {signatureBlockActive(block) ? (
+                  <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                ) : (
+                  <p className="text-[12px] text-muted-foreground">Add your name or a logo to see the preview.</p>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                The logo travels inside the email, so it shows even when a client blocks external images.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="mt-3 flex items-center gap-2">
         <Button size="sm" onClick={save} disabled={saveState === "saving"}>
           <Check className="h-4 w-4" />
