@@ -1,0 +1,1 @@
+ALTER TABLE "crm_deals" ALTER COLUMN "amount_cents" SET DATA TYPE bigint;

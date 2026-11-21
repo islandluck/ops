@@ -1741,8 +1741,10 @@ export const crmDeals = pgTable(
     primary_contact_id: uuid("primary_contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
     pipeline_id: uuid("pipeline_id").references(() => crmPipelines.id, { onDelete: "set null" }),
     title: text("title").notNull().default(""),
-    /** Deal value in cents (matches orders.amount_cents convention). */
-    amount_cents: integer("amount_cents"),
+    /** Deal value in cents. bigint — B2B deal/contract values routinely exceed
+     *  the 4-byte integer ceiling (~$21.47M in cents); orders stays integer
+     *  because it's Stripe-Checkout-capped. */
+    amount_cents: bigint("amount_cents", { mode: "number" }),
     currency: text("currency").notNull().default("USD"),
     stage: text("stage").$type<CrmDealStage>().notNull().default("new"),
     close_date: timestamp("close_date", { withTimezone: true }),
