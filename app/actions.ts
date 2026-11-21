@@ -426,12 +426,15 @@ import {
   deleteContact,
   deleteOutreachCampaign,
   addContactsFromDomain,
+  campaignScheduleInfo,
+  cancelCampaignSchedule,
   draftAllOutreach,
   draftOutreach,
   findContactEmail,
   getHunterCredits,
   listContacts,
   listOutreachCampaigns,
+  scheduleCampaignOutreach,
   searchDomainPeople,
   sourceContacts,
   updateContact,
@@ -5548,6 +5551,52 @@ export async function composeOutreachTextAction(
       : { ok: false, error: r.error };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the outreach message." };
+  }
+}
+
+/** Bulk-schedule a campaign's drafted emails to send at a time (optionally staggered). */
+export async function scheduleCampaignOutreachAction(campaignId: string, whenISO: string, staggerMinutes: number) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    const r = await scheduleCampaignOutreach(ws, campaignId, whenISO, staggerMinutes, scopeUserId);
+    return r.ok
+      ? { ok: true as const, scheduled: r.scheduled, firstAt: r.firstAt, lastAt: r.lastAt }
+      : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't schedule the send." };
+  }
+}
+
+/** Cancel the scheduled send for every draft in a campaign. */
+export async function cancelCampaignScheduleAction(campaignId: string): Promise<{ cancelled: number }> {
+  const user = await getCurrentUser();
+  if (!user) return { cancelled: 0 };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { cancelled: 0 };
+  try {
+    const { scopeUserId } = await getViewer(user.id, ws);
+    return await cancelCampaignSchedule(ws, campaignId, scopeUserId);
+  } catch {
+    return { cancelled: 0 };
+  }
+}
+
+/** Schedule state for a campaign — drafts present, how many scheduled, next send. */
+export async function campaignScheduleInfoAction(
+  campaignId: string,
+): Promise<{ drafted: number; scheduled: number; nextAt: string | null }> {
+  const user = await getCurrentUser();
+  if (!user) return { drafted: 0, scheduled: 0, nextAt: null };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { drafted: 0, scheduled: 0, nextAt: null };
+  try {
+    return await campaignScheduleInfo(ws, campaignId);
+  } catch {
+    return { drafted: 0, scheduled: 0, nextAt: null };
   }
 }
 

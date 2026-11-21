@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   BadgeCheck,
+  CalendarClock,
   Check,
   ChevronLeft,
   Copy,
@@ -27,6 +28,8 @@ import { cn } from "@/lib/cn";
 import {
   addContactAction,
   addContactsFromDomainAction,
+  campaignScheduleInfoAction,
+  cancelCampaignScheduleAction,
   composeOutreachTextAction,
   createOutreachCampaignAction,
   crmPromoteOutreachAction,
@@ -39,6 +42,7 @@ import {
   hunterCreditsAction,
   listContactsAction,
   listOutreachCampaignsAction,
+  scheduleCampaignOutreachAction,
   sourceContactsAction,
   updateContactAction,
   updateOutreachCampaignAction,
@@ -829,6 +833,95 @@ function DomainSearchDialog({
 
 /* ----------------------------- campaign detail --------------------------- */
 
+/* ------------------------------ schedule dialog -------------------------- */
+
+function fmtWhen(iso: string | null): string {
+  if (!iso) return "";
+  return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function ScheduleDialog({
+  open,
+  campaignId,
+  draftedCount,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  campaignId: string;
+  draftedCount: number;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [when, setWhen] = useState("");
+  const [stagger, setStagger] = useState(2);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    // Default to the next Monday at 9:00am local.
+    const d = new Date();
+    d.setHours(9, 0, 0, 0);
+    do {
+      d.setDate(d.getDate() + 1);
+    } while (d.getDay() !== 1);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    setWhen(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    setStagger(2);
+    setError(null);
+  }, [open]);
+
+  async function schedule() {
+    if (!when) {
+      setError("Pick a date and time.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const r = await scheduleCampaignOutreachAction(campaignId, new Date(when).toISOString(), stagger);
+    setBusy(false);
+    if (r.ok) {
+      onDone(
+        `Scheduled ${r.scheduled} email${r.scheduled === 1 ? "" : "s"} to start ${fmtWhen(r.firstAt)}${
+          stagger > 0 && r.scheduled > 1 ? `, spaced ${stagger} min apart` : ""
+        }.`,
+      );
+      onClose();
+    } else setError(r.error ?? "Couldn't schedule the send.");
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} title="Schedule the send" className="max-w-md">
+      <div className="flex flex-col gap-3">
+        <p className="text-[12.5px] text-muted-foreground">
+          {draftedCount} drafted email{draftedCount === 1 ? "" : "s"} will send automatically at the time you pick — nothing goes out before
+          then, and you can cancel any time until it sends.
+        </p>
+        <div>
+          <Label>Send at</Label>
+          <Input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+        </div>
+        <div>
+          <Label>Space sends apart (minutes)</Label>
+          <Input type="number" min={0} max={120} value={stagger} onChange={(e) => setStagger(Number(e.target.value))} className="w-28" />
+          <p className="mt-1 text-[11px] text-muted-foreground">Staggering a few minutes between emails is gentler on deliverability. 0 = all at once.</p>
+        </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={schedule} disabled={busy || draftedCount === 0}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Schedule {draftedCount || ""}
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCampaign; onBack: () => void; onChanged: () => void }) {
   const [contacts, setContacts] = useState<OutreachContact[] | null>(null);
   const [open, setOpen] = useState<OutreachContact | null>(null);
@@ -840,6 +933,8 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
   const [autoFind, setAutoFind] = useState(campaign.auto_find_emails);
   const [credits, setCredits] = useState<HunterCredits | null>(null);
   const [domainOpen, setDomainOpen] = useState(false);
+  const [schedOpen, setSchedOpen] = useState(false);
+  const [sched, setSched] = useState<{ drafted: number; scheduled: number; nextAt: string | null } | null>(null);
 
   const refresh = useCallback(async () => {
     const c = await listContactsAction(campaign.id);
@@ -849,10 +944,22 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
   const loadCredits = useCallback(async () => {
     setCredits(await hunterCreditsAction());
   }, []);
+  const loadSched = useCallback(async () => {
+    setSched(await campaignScheduleInfoAction(campaign.id));
+  }, [campaign.id]);
   useEffect(() => {
     refresh();
     loadCredits();
-  }, [refresh, loadCredits]);
+    loadSched();
+  }, [refresh, loadCredits, loadSched]);
+
+  async function cancelSchedule() {
+    setBusy("cancel");
+    const r = await cancelCampaignScheduleAction(campaign.id);
+    setBusy(null);
+    await loadSched();
+    setNote(`Cancelled ${r.cancelled} scheduled send${r.cancelled === 1 ? "" : "s"}.`);
+  }
   useEffect(() => {
     setDescription(campaign.description);
     setRoles(campaign.target_roles);
@@ -883,6 +990,7 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
     const r = await draftAllOutreachAction(campaign.id);
     setBusy(null);
     await refresh();
+    await loadSched();
     const profileOnly = (contacts ?? []).filter((c) => !c.contact_email && c.contact_url && c.status === "found").length;
     const tail = profileOnly ? ` ${profileOnly} contact${profileOnly === 1 ? "" : "s"} have no email — open each to compose a message.` : "";
     setNote((r.drafted ? `Drafted ${r.drafted} email${r.drafted === 1 ? "" : "s"} in the Email Manager.` : "No email drafts to create.") + tail);
@@ -956,6 +1064,15 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
           {busy === "draftall" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
           Draft all emails
         </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => setSchedOpen(true)}
+          disabled={busy !== null || !(sched && sched.drafted > 0)}
+          title={sched && sched.drafted > 0 ? "Bulk-schedule the drafted emails" : "Draft the emails first"}
+        >
+          <CalendarClock className="h-4 w-4" /> Schedule send
+        </Button>
         <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
           <Plus className="h-4 w-4" /> Add contact
         </Button>
@@ -963,6 +1080,22 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
           <Users className="h-4 w-4" /> Find people at a company
         </Button>
       </div>
+
+      {sched && sched.scheduled > 0 && (
+        <div className="flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-[12.5px]">
+          <CalendarClock className="h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+          <span className="text-sky-700 dark:text-sky-400">
+            {sched.scheduled} email{sched.scheduled === 1 ? "" : "s"} scheduled{sched.nextAt ? ` — starts ${fmtWhen(sched.nextAt)}` : ""}.
+          </span>
+          <button
+            onClick={cancelSchedule}
+            disabled={busy !== null}
+            className="ml-auto text-muted-foreground underline transition hover:text-foreground disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
 
       {contacts === null ? (
         <div className="flex justify-center py-12 text-muted-foreground">
@@ -1044,6 +1177,17 @@ function CampaignDetail({ campaign, onBack, onChanged }: { campaign: OutreachCam
           refresh();
           loadCredits();
           setNote(n ? `Added ${n} contact${n === 1 ? "" : "s"} from the company search.` : "No new contacts added.");
+        }}
+      />
+      <ScheduleDialog
+        open={schedOpen}
+        campaignId={campaign.id}
+        draftedCount={sched?.drafted ?? 0}
+        onClose={() => setSchedOpen(false)}
+        onDone={(msg) => {
+          setNote(msg);
+          loadSched();
+          refresh();
         }}
       />
     </div>

@@ -3,9 +3,9 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { outreachCampaigns, outreachContacts } from "@/lib/db/schema";
+import { outboundDrafts, outreachCampaigns, outreachContacts } from "@/lib/db/schema";
 import { getPlanningContext } from "@/lib/db/queries";
-import { stageOutboundDraft } from "@/lib/agents/outbound";
+import { scheduleOutboundDraft, stageOutboundDraft, unscheduleOutboundDraft } from "@/lib/agents/outbound";
 import { promoteOutreachContact } from "@/lib/crm";
 import { draftOutreachEmail, searchContacts, type OutreachLead } from "@/lib/ai/outreach";
 import {
@@ -648,4 +648,71 @@ export async function composeOutreachText(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't compose the outreach message." };
   }
+}
+
+/* ------------------------------- scheduling ------------------------------ */
+
+/** Bulk-schedule every drafted email in a campaign to send at `whenISO`, optionally
+ *  staggered by `staggerMinutes` between sends (gentler on deliverability). The existing
+ *  outbound cron delivers them when due — nothing sends before then; still never auto-
+ *  sends anything you didn't draft + schedule. */
+export async function scheduleCampaignOutreach(
+  workspaceId: string,
+  campaignId: string,
+  whenISO: string,
+  staggerMinutes: number,
+  scopeUserId: string | null,
+): Promise<{ ok: true; scheduled: number; firstAt: string; lastAt: string } | { ok: false; error: string }> {
+  const when = new Date(whenISO);
+  if (Number.isNaN(when.getTime())) return { ok: false, error: "Pick a valid date and time." };
+  if (when.getTime() < Date.now() + 60_000) return { ok: false, error: "Pick a time in the future." };
+  const contacts = await listContacts(workspaceId, campaignId);
+  const targets = contacts.filter((c) => c.outbound_draft_id && c.status === "drafted");
+  if (!targets.length) return { ok: false, error: "No drafted emails to schedule — draft the emails first." };
+  const stagger = Math.max(0, Math.min(staggerMinutes || 0, 120));
+  let scheduled = 0;
+  let lastAt = when;
+  for (let i = 0; i < targets.length; i++) {
+    const at = new Date(when.getTime() + i * stagger * 60_000);
+    const r = await scheduleOutboundDraft(workspaceId, targets[i].outbound_draft_id!, at.toISOString(), scopeUserId);
+    if (r.ok) {
+      scheduled += 1;
+      lastAt = at;
+    }
+  }
+  return { ok: true, scheduled, firstAt: when.toISOString(), lastAt: lastAt.toISOString() };
+}
+
+/** Cancel the scheduled send for every draft in a campaign (back to plain drafts). */
+export async function cancelCampaignSchedule(
+  workspaceId: string,
+  campaignId: string,
+  scopeUserId: string | null,
+): Promise<{ cancelled: number }> {
+  const contacts = await listContacts(workspaceId, campaignId);
+  const ids = contacts.map((c) => c.outbound_draft_id).filter((x): x is string => Boolean(x));
+  let cancelled = 0;
+  for (const id of ids) {
+    const r = await unscheduleOutboundDraft(workspaceId, id, scopeUserId);
+    if (r.ok) cancelled += 1;
+  }
+  return { cancelled };
+}
+
+/** Schedule state for a campaign — drafts present, how many are scheduled, the next send. */
+export async function campaignScheduleInfo(
+  workspaceId: string,
+  campaignId: string,
+): Promise<{ drafted: number; scheduled: number; nextAt: string | null }> {
+  const contacts = await listContacts(workspaceId, campaignId);
+  const draftIds = contacts.map((c) => c.outbound_draft_id).filter((x): x is string => Boolean(x));
+  const drafted = contacts.filter((c) => c.outbound_draft_id && c.status === "drafted").length;
+  if (!draftIds.length) return { drafted, scheduled: 0, nextAt: null };
+  const rows = await db
+    .select({ scheduled_at: outboundDrafts.scheduled_at, status: outboundDrafts.status })
+    .from(outboundDrafts)
+    .where(and(eq(outboundDrafts.workspace_id, workspaceId), inArray(outboundDrafts.id, draftIds)));
+  const pending = rows.filter((r) => r.scheduled_at && (r.status === "draft" || r.status === "failed"));
+  const nextAt = pending.length ? Math.min(...pending.map((r) => new Date(r.scheduled_at!).getTime())) : null;
+  return { drafted, scheduled: pending.length, nextAt: nextAt ? new Date(nextAt).toISOString() : null };
 }
