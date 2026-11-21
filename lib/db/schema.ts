@@ -7,6 +7,7 @@
  */
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -1796,9 +1797,10 @@ export const fundraiseRounds = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     name: text("name").notNull().default(""),
-    /** Target raise + valuation, in cents. */
-    target_amount_cents: integer("target_amount_cents"),
-    valuation_cents: integer("valuation_cents"),
+    /** Target raise + valuation, in cents. bigint — valuations/targets routinely
+     *  exceed the 4-byte integer ceiling (~$21.47M in cents). */
+    target_amount_cents: bigint("target_amount_cents", { mode: "number" }),
+    valuation_cents: bigint("valuation_cents", { mode: "number" }),
     status: text("status").$type<FundraiseRoundStatus>().notNull().default("open"),
     close_date: timestamp("close_date", { withTimezone: true }),
     note: text("note").notNull().default(""),
@@ -1823,7 +1825,7 @@ export const fundraiseInvestors = pgTable(
     contact_id: uuid("contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
     name: text("name").notNull().default(""),
     stage: text("stage").$type<FundraiseStage>().notNull().default("researching"),
-    check_amount_cents: integer("check_amount_cents"),
+    check_amount_cents: bigint("check_amount_cents", { mode: "number" }),
     is_lead: boolean("is_lead").notNull().default(false),
     note: text("note").notNull().default(""),
     source: text("source").notNull().default("manual"),
