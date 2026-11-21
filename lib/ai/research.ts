@@ -40,6 +40,8 @@ export async function researchTopics(
         days: opts?.days ?? 7,
         include_answer: true,
       }),
+      // A hung research call must not stall the agent run that requested it.
+      signal: AbortSignal.timeout(20_000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as {

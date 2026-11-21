@@ -1,12 +1,14 @@
 import "server-only";
 
+import { fetchWithTimeout } from "./http";
+
 import { fitToX, X_MAX_CHARS } from "@/lib/social/x-post";
 
 /** X (Twitter) API v2 calls with an OAuth 2.0 access token. */
 export { X_MAX_CHARS };
 
 export async function getXAccount(accessToken: string): Promise<string | null> {
-  const res = await fetch("https://api.x.com/2/users/me", {
+  const res = await fetchWithTimeout("https://api.x.com/2/users/me", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;
@@ -21,7 +23,7 @@ export async function getXAccount(accessToken: string): Promise<string | null> {
  */
 export async function getUserTweets(accessToken: string, max = 40): Promise<string[]> {
   try {
-    const me = await fetch("https://api.x.com/2/users/me", {
+    const me = await fetchWithTimeout("https://api.x.com/2/users/me", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!me.ok) return [];
@@ -33,7 +35,7 @@ export async function getUserTweets(accessToken: string, max = 40): Promise<stri
       exclude: "retweets,replies",
       "tweet.fields": "text",
     });
-    const res = await fetch(`https://api.x.com/2/users/${id}/tweets?${params.toString()}`, {
+    const res = await fetchWithTimeout(`https://api.x.com/2/users/${id}/tweets?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return [];
@@ -56,7 +58,7 @@ export async function uploadMediaToX(accessToken: string, bytes: Buffer, mime: s
   const form = new FormData();
   form.append("media", new Blob([new Uint8Array(bytes)], { type: mime }));
   form.append("media_category", "tweet_image");
-  const res = await fetch("https://api.x.com/2/media/upload", {
+  const res = await fetchWithTimeout("https://api.x.com/2/media/upload", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` }, // fetch sets the multipart boundary
     body: form,
@@ -107,7 +109,7 @@ export async function postTweet(
   } = { text: body };
   if (mediaIds && mediaIds.length) payload.media = { media_ids: mediaIds };
   if (replyToTweetId) payload.reply = { in_reply_to_tweet_id: replyToTweetId };
-  const res = await fetch("https://api.x.com/2/tweets", {
+  const res = await fetchWithTimeout("https://api.x.com/2/tweets", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -183,7 +185,7 @@ export async function getTweetById(
       expansions: "author_id",
       "user.fields": "username",
     });
-    const res = await fetch(`https://api.x.com/2/tweets/${tweetId}?${params.toString()}`, {
+    const res = await fetchWithTimeout(`https://api.x.com/2/tweets/${tweetId}?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return null;
@@ -211,7 +213,7 @@ export async function getUserByUsername(
   try {
     const h = handle.replace(/^@/, "").trim();
     if (!h) return null;
-    const res = await fetch(`https://api.x.com/2/users/by/username/${encodeURIComponent(h)}`, {
+    const res = await fetchWithTimeout(`https://api.x.com/2/users/by/username/${encodeURIComponent(h)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return null;
@@ -249,7 +251,7 @@ export async function getUserRecentTweets(
       "tweet.fields": "created_at,public_metrics,text",
     });
     if (opts.sinceId) params.set("since_id", opts.sinceId);
-    const res = await fetch(`https://api.x.com/2/users/${userId}/tweets?${params.toString()}`, {
+    const res = await fetchWithTimeout(`https://api.x.com/2/users/${userId}/tweets?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return null;
@@ -280,7 +282,7 @@ export async function getUserRecentTweets(
  *  it's the user's own account). Null on error. */
 export async function getFollowerCount(accessToken: string): Promise<number | null> {
   try {
-    const res = await fetch("https://api.x.com/2/users/me?user.fields=public_metrics", {
+    const res = await fetchWithTimeout("https://api.x.com/2/users/me?user.fields=public_metrics", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return null;

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fetchWithTimeout } from "./http";
+
 /** Zoom API — create scheduled meetings on the connected user's account. */
 
 export interface ZoomMeeting {
@@ -20,7 +22,7 @@ export async function createZoomMeeting(
   accessToken: string,
   input: { topic: string; startTime: string; durationMin?: number; timezone?: string; agenda?: string },
 ): Promise<ZoomMeeting> {
-  const res = await fetch("https://api.zoom.us/v2/users/me/meetings", {
+  const res = await fetchWithTimeout("https://api.zoom.us/v2/users/me/meetings", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({

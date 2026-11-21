@@ -35,7 +35,7 @@ export async function searchStockImages(query: string, limit = 12): Promise<Stoc
   if (!key || !q) return [];
   try {
     const url = `https://api.pexels.com/v1/search?query=${encodeURIComponent(q)}&per_page=${limit}&orientation=landscape`;
-    const res = await fetch(url, { headers: { Authorization: key } });
+    const res = await fetch(url, { headers: { Authorization: key }, signal: AbortSignal.timeout(15_000) });
     if (!res.ok) return [];
     const json = (await res.json()) as { photos?: PexelsPhoto[] };
     return (json.photos ?? [])

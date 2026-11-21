@@ -5,8 +5,17 @@ import { getValidAccessToken } from "./tokens";
 
 /** Google API calls (Gmail send, Calendar events) with an OAuth access token. */
 
+/** Default timeout for Google API calls — a hung request must not block a server action
+ *  (undici's default is ~5 min, long enough to freeze the app + queue later actions). */
+const GOOGLE_TIMEOUT_MS = 20_000;
+
+/** fetch wrapper that applies a timeout unless the caller supplied its own signal. */
+function gfetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(GOOGLE_TIMEOUT_MS) });
+}
+
 export async function getGoogleEmail(accessToken: string): Promise<string | null> {
-  const res = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+  const res = await gfetch("https://www.googleapis.com/oauth2/v2/userinfo", {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return null;
@@ -127,7 +136,7 @@ export async function sendGmail(
   const payload: Record<string, string> = { raw };
   if (msg.threadId) payload.threadId = msg.threadId;
 
-  const res = await fetch(
+  const res = await gfetch(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
     {
       method: "POST",
@@ -165,7 +174,7 @@ export async function listInboxMessages(
 ): Promise<{ id: string; threadId: string }[]> {
   const q = encodeURIComponent(opts?.query ?? "in:inbox is:unread");
   const max = opts?.max ?? 15;
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=${max}`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -212,7 +221,7 @@ function extractBody(payload: GmailPart | undefined): string {
 
 /** Fetch a single message's sender, subject, body, and threading headers. */
 export async function getMessageDetail(accessToken: string, id: string): Promise<GmailMessage> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -256,7 +265,7 @@ export async function listInboxPage(
   const q = encodeURIComponent(opts?.query ?? "in:inbox");
   const max = opts?.max ?? 10;
   const pt = opts?.pageToken ? `&pageToken=${encodeURIComponent(opts.pageToken)}` : "";
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=${max}${pt}`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -277,7 +286,7 @@ export async function listInboxPage(
 
 /** Light per-message fetch (headers + snippet only) for rendering an inbox row. */
 export async function getMessageMeta(accessToken: string, id: string): Promise<GmailMeta> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -308,7 +317,7 @@ const MODIFY_SCOPE_ERROR =
 
 /** Archive a message — drop the INBOX label so it leaves the inbox. Needs gmail.modify. */
 export async function archiveMessage(accessToken: string, id: string): Promise<void> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/modify`,
     {
       method: "POST",
@@ -325,7 +334,7 @@ export async function archiveMessage(accessToken: string, id: string): Promise<v
 
 /** Move a message to Trash — recoverable in Gmail for 30 days, NOT a permanent delete. Needs gmail.modify. */
 export async function trashMessage(accessToken: string, id: string): Promise<void> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}/trash`,
     { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -341,7 +350,7 @@ export async function createSpreadsheet(
   accessToken: string,
   sheet: { title: string; rows: string[][] },
 ): Promise<{ id: string; url?: string }> {
-  const createRes = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+  const createRes = await gfetch("https://sheets.googleapis.com/v4/spreadsheets", {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ properties: { title: sheet.title } }),
@@ -355,7 +364,7 @@ export async function createSpreadsheet(
   const url = created.spreadsheetUrl ? String(created.spreadsheetUrl) : undefined;
 
   if (sheet.rows.length) {
-    const appendRes = await fetch(
+    const appendRes = await gfetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/A1:append?valueInputOption=RAW`,
       {
         method: "POST",
@@ -391,7 +400,7 @@ export async function createCalendarEvent(
     sendUpdates?: "all" | "none";
   },
 ): Promise<{ id: string; htmlLink?: string }> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events?sendUpdates=${ev.sendUpdates ?? "none"}`,
     {
       method: "POST",
@@ -431,7 +440,7 @@ export async function updateCalendarEvent(
     sendUpdates?: "all" | "none";
   },
 ): Promise<{ id: string }> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}?sendUpdates=${ev.sendUpdates ?? "none"}`,
     {
       method: "PATCH",
@@ -461,7 +470,7 @@ export async function deleteCalendarEvent(
   eventId: string,
   sendUpdates: "all" | "none" = "none",
 ): Promise<void> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}?sendUpdates=${sendUpdates}`,
     { method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -505,7 +514,7 @@ export async function listUpcomingEvents(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events` +
     `?singleEvents=true&orderBy=startTime&maxResults=${max}` +
     `&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`;
-  const res = await fetch(url, {
+  const res = await gfetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(15_000),
   });
@@ -563,7 +572,7 @@ export async function listCalendarEventsRange(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events` +
     `?singleEvents=true&orderBy=startTime&maxResults=${max}` +
     `&timeMin=${encodeURIComponent(timeMinISO)}&timeMax=${encodeURIComponent(timeMaxISO)}`;
-  const res = await fetch(url, {
+  const res = await gfetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(15_000),
   });
@@ -678,7 +687,7 @@ interface DriveFileRaw {
 export async function listDriveFolder(accessToken: string, folderId: string): Promise<DriveEntry[]> {
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const fields = encodeURIComponent("files(id,name,mimeType,webViewLink,modifiedTime)");
-  const res = await fetch(
+  const res = await gfetch(
     `https://www.googleapis.com/drive/v3/files?q=${q}&fields=${fields}&pageSize=200&orderBy=folder,name`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -702,7 +711,7 @@ export async function getDriveMeta(
   accessToken: string,
   fileId: string,
 ): Promise<{ id: string; name: string; isFolder: boolean; parents: string[] }> {
-  const res = await fetch(
+  const res = await gfetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,parents`,
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );

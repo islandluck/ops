@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fetchWithTimeout } from "./http";
+
 import { getValidAccessToken } from "./tokens";
 
 /** Slack Web API client + workspace notification helper (chat.postMessage). */
@@ -18,7 +20,7 @@ async function slackApi(
   method: string,
   params: Record<string, string>,
 ): Promise<SlackResponse> {
-  const res = await fetch(`${SLACK_API}/${method}`, {
+  const res = await fetchWithTimeout(`${SLACK_API}/${method}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,

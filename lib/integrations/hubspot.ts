@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fetchWithTimeout } from "./http";
+
 import { getValidAccessToken } from "./tokens";
 
 /**
@@ -13,7 +15,7 @@ const BASE = "https://api.hubapi.com";
 const TIMEOUT_MS = 15_000;
 
 export async function getHubSpotAccount(accessToken: string): Promise<string | null> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `https://api.hubapi.com/oauth/v1/access-tokens/${accessToken}`,
   );
   if (!res.ok) return null;
@@ -37,7 +39,7 @@ export async function upsertContact(
   };
 
   // Try create; on 409 (already exists) fall back to update by email.
-  const createRes = await fetch("https://api.hubapi.com/crm/v3/objects/contacts", {
+  const createRes = await fetchWithTimeout("https://api.hubapi.com/crm/v3/objects/contacts", {
     method: "POST",
     headers,
     body: JSON.stringify({ properties }),
@@ -47,7 +49,7 @@ export async function upsertContact(
     return { id: json.id, created: true };
   }
   if (createRes.status === 409) {
-    const updateRes = await fetch(
+    const updateRes = await fetchWithTimeout(
       `https://api.hubapi.com/crm/v3/objects/contacts/${encodeURIComponent(contact.email)}?idProperty=email`,
       { method: "PATCH", headers, body: JSON.stringify({ properties }) },
     );
@@ -191,7 +193,7 @@ function hsHeaders(token: string): Record<string, string> {
 }
 
 async function hsFetch(token: string, path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${BASE}${path}`, {
+  return fetchWithTimeout(`${BASE}${path}`, {
     ...init,
     headers: { ...hsHeaders(token), ...(init?.headers ?? {}) },
     signal: AbortSignal.timeout(TIMEOUT_MS),

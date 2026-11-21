@@ -1,5 +1,7 @@
 import "server-only";
 
+import { fetchWithTimeout } from "./http";
+
 /** Notion API calls with an OAuth access token. */
 
 const NOTION_VERSION = "2022-06-28";
@@ -23,7 +25,7 @@ function notionHeaders(accessToken: string): Record<string, string> {
  * the one just created (a cascade), since creating a page makes it the newest.
  */
 async function findParentPageId(accessToken: string): Promise<string | null> {
-  const res = await fetch("https://api.notion.com/v1/search", {
+  const res = await fetchWithTimeout("https://api.notion.com/v1/search", {
     method: "POST",
     headers: notionHeaders(accessToken),
     body: JSON.stringify({
@@ -77,7 +79,7 @@ export async function createNotionPage(
       "No accessible Notion page. In Notion, share a page with the Operator integration, then retry.",
     );
   }
-  const res = await fetch("https://api.notion.com/v1/pages", {
+  const res = await fetchWithTimeout("https://api.notion.com/v1/pages", {
     method: "POST",
     headers: notionHeaders(accessToken),
     body: JSON.stringify({
@@ -122,7 +124,7 @@ export async function searchNotionPages(
   max = 15,
 ): Promise<NotionPageRef[]> {
   try {
-    const res = await fetch("https://api.notion.com/v1/search", {
+    const res = await fetchWithTimeout("https://api.notion.com/v1/search", {
       method: "POST",
       headers: notionHeaders(accessToken),
       body: JSON.stringify({
@@ -218,7 +220,7 @@ export async function getNotionPageContent(accessToken: string, pageId: string):
       const url = new URL(`https://api.notion.com/v1/blocks/${blockId}/children`);
       url.searchParams.set("page_size", "100");
       if (cursor) url.searchParams.set("start_cursor", cursor);
-      const res = await fetch(url, { headers: notionHeaders(accessToken) });
+      const res = await fetchWithTimeout(url, { headers: notionHeaders(accessToken) });
       if (!res.ok) return;
       const json = (await res.json()) as {
         results?: Array<Record<string, unknown>>;
