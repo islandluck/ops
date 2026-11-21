@@ -1861,6 +1861,8 @@ export const fundraiseIntroPaths = pgTable(
     founder_name: text("founder_name").notNull().default(""),
     founder_title: text("founder_title").notNull().default(""),
     founder_email: text("founder_email"),
+    /** The founder's LinkedIn profile URL — the channel when there's no email. */
+    linkedin_url: text("linkedin_url"),
     /** Why this company is close to us (research rationale) + 0-100 similarity. */
     relevance: text("relevance").notNull().default(""),
     relevance_score: integer("relevance_score"),

@@ -1307,6 +1307,7 @@ export interface FundraiseIntroPath {
   founder_name: string;
   founder_title: string;
   founder_email: string | null;
+  linkedin_url: string | null;
   /** Why this portfolio company is close to us + a 0-100 similarity score. */
   relevance: string;
   relevance_score: number | null;

@@ -9,7 +9,7 @@ import { runWithUsage } from "@/lib/ai/usage";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { addContact, createOutreachCampaign, listOutreachCampaigns, markContactDrafted } from "@/lib/outreach";
 import { domainFromWebsite, findEmail, hunterConfigured, HUNTER_MIN_SCORE } from "@/lib/integrations/hunter";
-import { draftIntroRequest, findPortfolioFounders } from "@/lib/ai/intros";
+import { draftIntroRequest, draftLinkedInNote as aiDraftLinkedInNote, findPortfolioFounders } from "@/lib/ai/intros";
 import type { FundraiseIntroPath, FundraiseIntroStatus } from "@/lib/types";
 
 /**
@@ -34,6 +34,7 @@ function toPath(r: IntroRow): FundraiseIntroPath {
     founder_name: r.founder_name,
     founder_title: r.founder_title,
     founder_email: r.founder_email,
+    linkedin_url: r.linkedin_url,
     relevance: r.relevance,
     relevance_score: r.relevance_score,
     status: r.status,
@@ -113,6 +114,7 @@ export async function researchIntroPaths(
       founder_name: f.founder_name.slice(0, 120),
       founder_title: f.founder_title.slice(0, 160),
       founder_email: f.founder_email,
+      linkedin_url: f.linkedin_url,
       relevance: f.relevance.slice(0, 400),
       relevance_score: f.relevance_score,
       status: "suggested" as FundraiseIntroStatus,
@@ -135,6 +137,7 @@ export async function addIntroPath(
     founder_name?: string;
     founder_title?: string;
     founder_email?: string | null;
+    linkedin_url?: string | null;
     relevance?: string;
     note?: string;
   },
@@ -154,6 +157,7 @@ export async function addIntroPath(
     founder_name: (input.founder_name ?? "").trim().slice(0, 120),
     founder_title: (input.founder_title ?? "").trim().slice(0, 160),
     founder_email: input.founder_email?.trim() || null,
+    linkedin_url: input.linkedin_url?.trim() || null,
     relevance: (input.relevance ?? "").slice(0, 400),
     status: "approved",
     source: "manual",
@@ -174,6 +178,7 @@ export async function updateIntroPath(
     founder_name?: string;
     founder_title?: string;
     founder_email?: string | null;
+    linkedin_url?: string | null;
     relevance?: string;
     status?: FundraiseIntroStatus;
     note?: string;
@@ -185,6 +190,7 @@ export async function updateIntroPath(
   if (patch.founder_name !== undefined) set.founder_name = patch.founder_name.slice(0, 120);
   if (patch.founder_title !== undefined) set.founder_title = patch.founder_title.slice(0, 160);
   if (patch.founder_email !== undefined) set.founder_email = patch.founder_email?.trim() || null;
+  if (patch.linkedin_url !== undefined) set.linkedin_url = patch.linkedin_url?.trim() || null;
   if (patch.relevance !== undefined) set.relevance = patch.relevance.slice(0, 400);
   if (patch.status !== undefined) set.status = patch.status;
   if (patch.note !== undefined) set.note = patch.note.slice(0, 2000);
@@ -317,4 +323,39 @@ export async function requestIntro(
     .set({ outreach_contact_id: contactId, status: "requested", updated_at: new Date() })
     .where(and(eq(fundraiseIntroPaths.workspace_id, workspaceId), eq(fundraiseIntroPaths.id, introPathId)));
   return { ok: true, draftId: staged.draft.id };
+}
+
+/**
+ * Draft a short, human, direct LinkedIn connection note for this founder (≤300 chars). Nothing
+ * is sent and nothing stored — the user copies it and sends from their own LinkedIn session.
+ * Returns the note + the founder's LinkedIn URL (when known) so the UI can open their profile.
+ */
+export async function draftLinkedInNote(
+  workspaceId: string,
+  introPathId: string,
+  senderName: string,
+): Promise<{ ok: true; note: string; linkedin_url: string | null } | { ok: false; error: string }> {
+  const path = await getPath(workspaceId, introPathId);
+  if (!path) return { ok: false, error: "Intro path not found." };
+  if (!path.founder_name.trim()) return { ok: false, error: "Add the founder's name first." };
+  if (!process.env.ANTHROPIC_API_KEY) return { ok: false, error: "AI isn't configured (ANTHROPIC_API_KEY missing)." };
+
+  const investor = await getInvestor(workspaceId, path.investor_id);
+  const vcFirm = investor?.name ?? "their investor";
+  const { brief } = await getPlanningContext(workspaceId);
+  try {
+    const { note } = await runWithUsage(workspaceId, "fundraise-linkedin-note", () =>
+      aiDraftLinkedInNote({
+        founderName: path.founder_name,
+        founderTitle: path.founder_title,
+        portfolioCompany: path.portfolio_company,
+        vcFirm,
+        brief,
+        senderName,
+      }),
+    );
+    return { ok: true, note, linkedin_url: path.linkedin_url };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't draft the note." };
+  }
 }

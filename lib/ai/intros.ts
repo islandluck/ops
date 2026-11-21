@@ -41,6 +41,8 @@ export interface PortfolioFounder {
   founder_title: string;
   /** A REAL published email if one was actually seen — never guessed. Else null (Hunter resolves it). */
   founder_email: string | null;
+  /** The founder's LinkedIn profile URL, when found. */
+  linkedin_url: string | null;
   /** One line on why this portfolio company is close to us. */
   relevance: string;
   /** 0-100 similarity to us. */
@@ -66,6 +68,7 @@ function coerceFounders(obj: Record<string, unknown> | null): PortfolioFounder[]
       founder_name: str(s.founder_name).trim().slice(0, 120),
       founder_title: str(s.founder_title).trim().slice(0, 160),
       founder_email: nstr(s.founder_email)?.slice(0, 200) ?? null,
+      linkedin_url: nstr(s.linkedin_url)?.slice(0, 400) ?? null,
       relevance: str(s.relevance).trim().slice(0, 400),
       relevance_score: num(s.relevance_score),
     }))
@@ -100,12 +103,13 @@ export async function findPortfolioFounders(input: {
     `2. Rank those portfolio companies by how CLOSE they are to ${me} — same sector, technology, stage, or thesis. Pick the ${n} closest.`,
     "3. For each, open the company's team/about page to find the FOUNDER or CEO — real name + exact title.",
     "4. founder_email: include ONLY a real address you actually SAW published — never guess, construct, or pattern-match one. Else null.",
+    "5. linkedin_url: the founder's LinkedIn profile URL if you find it (linkedin.com/in/...). Else null.",
     "",
-    "Give for each: company (real name), website (official homepage, for email lookup), founder_name, founder_title, founder_email (or null), relevance (one specific line on why this company is close to us), relevance_score (0-100 similarity to us).",
-    `Return the ${n} closest matches. Only real companies this VC actually backed and real founders you verified. Never invent a company, person, or email.`,
+    "Give for each: company (real name), website (official homepage, for email lookup), founder_name, founder_title, founder_email (or null), linkedin_url (or null), relevance (one specific line on why this company is close to us), relevance_score (0-100 similarity to us).",
+    `Return the ${n} closest matches. Only real companies this VC actually backed and real founders you verified. Never invent a company, person, email, or profile URL.`,
     input.exclude && input.exclude.length ? `Skip these (already found): ${input.exclude.slice(0, 40).join(", ")}.` : "",
     "",
-    'Respond with ONLY this JSON (no prose, no fences): {"founders": [{"company": string, "website": string|null, "founder_name": string, "founder_title": string, "founder_email": string|null, "relevance": string, "relevance_score": number}]}',
+    'Respond with ONLY this JSON (no prose, no fences): {"founders": [{"company": string, "website": string|null, "founder_name": string, "founder_title": string, "founder_email": string|null, "linkedin_url": string|null, "relevance": string, "relevance_score": number}]}',
   ]
     .filter(Boolean)
     .join("\n");
@@ -182,4 +186,68 @@ export async function draftIntroRequest(input: {
     subject: (obj && str(obj.subject).trim().slice(0, 200)) || `${me} — would love to connect`.slice(0, 200),
     body: (obj && str(obj.body).trim().slice(0, 4000)) || "",
   };
+}
+
+/** The hard cap on a LinkedIn connection-request note. */
+export const LINKEDIN_NOTE_MAX = 300;
+
+/**
+ * Draft a LinkedIn connection-request note to a portfolio founder: short, direct, and human —
+ * the way a busy founder actually types on their phone. Hard 300-char cap. The whole point is
+ * that it must NOT read as AI/marketing, so the prompt bans the tells and the result is trimmed.
+ */
+export async function draftLinkedInNote(input: {
+  founderName: string;
+  founderTitle: string;
+  portfolioCompany: string;
+  vcFirm: string;
+  brief: { company_name: string; business_description: string };
+  senderName: string;
+}): Promise<{ note: string }> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = getAnthropic();
+  const me = input.brief.company_name || "my company";
+  const first = (input.founderName || "").trim().split(/\s+/)[0] || "there";
+
+  const system = [
+    `You write LinkedIn connection-request notes the way a real, busy founder types them on their phone — short, plain, direct. Not marketing. Not AI.`,
+    `Sender: ${input.senderName || me}, building ${me}.`,
+    input.brief.business_description ? `What ${me} does: ${input.brief.business_description}` : "",
+    `Recipient: ${first}${input.founderTitle ? `, ${input.founderTitle}` : ""} at ${input.portfolioCompany} (a ${input.vcFirm} portfolio company).`,
+    "",
+    "HARD RULES:",
+    `- Max ${LINKEDIN_NOTE_MAX} characters, including spaces. Shorter is better. One or two short sentences.`,
+    `- Address them by first name only ("${first}").`,
+    "- Lead with the point. No warm-up, no preamble.",
+    "- Give ONE real, concrete reason you're reaching out — that you're in the same space, or that you noticed their company in " + input.vcFirm + "'s portfolio. Never generic praise.",
+    "- One line on who you are (what you're building), in plain words.",
+    "- A light, low-pressure ask: connect / swap notes / a quick call. Founder-to-founder.",
+    "- Do NOT ask for an introduction to the VC in this note. Do NOT mention fundraising. Just connect.",
+    "",
+    "IT MUST NOT SOUND AI. These are instant tells — NEVER use any of them:",
+    '- "I hope this finds you well", "I came across your profile", "I was impressed by", "your impressive/incredible/amazing/inspiring work", "I\'d love to", "excited about", "reaching out", "circle back", "touch base", "synergy", "leverage", "passionate about", "in the X space".',
+    "- No flattery. No buzzwords. No corporate tone. No em-dashes for drama. No three-part lists. No exclamation points. No hashtags. No emojis unless it genuinely fits one.",
+    "- Use contractions. Write like a person, not a brand. It's fine to be a little casual.",
+    "- Don't over-explain. Don't sign off formally (LinkedIn already shows your name) — at most end with your first name, or nothing.",
+    "",
+    'Return ONLY this JSON (no fences): {"note": string}. The note is plain text, ready to paste.',
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const userMsg = `Write the LinkedIn connection note to ${first} at ${input.portfolioCompany}. Keep it under ${LINKEDIN_NOTE_MAX} characters, direct, human. Return the JSON.`;
+
+  const msg = await client.messages.create({ model: MODEL, max_tokens: 400, system, messages: [{ role: "user", content: userMsg }] });
+  const text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+  const obj = parseJsonObject(text);
+  const str = (v: unknown): string => (typeof v === "string" ? v : "");
+  let note = (obj && str(obj.note).trim()) || "";
+  // Hard-enforce the cap (trim at a word boundary if the model ran long).
+  if (note.length > LINKEDIN_NOTE_MAX) {
+    note = note.slice(0, LINKEDIN_NOTE_MAX);
+    const lastSpace = note.lastIndexOf(" ");
+    if (lastSpace > LINKEDIN_NOTE_MAX - 40) note = note.slice(0, lastSpace);
+    note = note.trim();
+  }
+  return { note };
 }

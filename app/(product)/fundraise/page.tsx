@@ -7,11 +7,15 @@ import {
   AtSign,
   Check,
   Clock,
+  Copy,
   Download,
+  ExternalLink,
   Flag,
   Handshake,
+  Linkedin,
   Loader2,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
   Star,
@@ -19,6 +23,7 @@ import {
   Trash2,
   TrendingUp,
   Upload,
+  X,
 } from "lucide-react";
 import { PageHeader, PageBody } from "@/components/app/page-header";
 import { Card } from "@/components/ui/card";
@@ -33,6 +38,7 @@ import {
   frDeleteInvestorAction,
   frDeleteIntroPathAction,
   frDeleteRoundAction,
+  frDraftLinkedInNoteAction,
   frImportInvestorsAction,
   frListInvestorsAction,
   frListIntroPathsAction,
@@ -708,6 +714,7 @@ function AddPathForm({ investorId, onAdded }: { investorId: string; onAdded: () 
   const [founder, setFounder] = useState("");
   const [title, setTitle] = useState("");
   const [email, setEmail] = useState("");
+  const [linkedin, setLinkedin] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -724,6 +731,7 @@ function AddPathForm({ investorId, onAdded }: { investorId: string; onAdded: () 
       founder_name: founder,
       founder_title: title,
       founder_email: email || null,
+      linkedin_url: linkedin || null,
     });
     setSaving(false);
     if (r.ok) onAdded();
@@ -737,7 +745,8 @@ function AddPathForm({ investorId, onAdded }: { investorId: string; onAdded: () 
         <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="Website (for email lookup)" />
         <Input value={founder} onChange={(e) => setFounder(e.target.value)} placeholder="Founder name" />
         <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Founder title" />
-        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Founder email (optional)" className="sm:col-span-2" />
+        <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Founder email (optional)" />
+        <Input value={linkedin} onChange={(e) => setLinkedin(e.target.value)} placeholder="LinkedIn URL (optional)" />
       </div>
       {error && <p className="text-[12px] text-red-600">{error}</p>}
       <div className="flex justify-end">
@@ -750,11 +759,113 @@ function AddPathForm({ investorId, onAdded }: { investorId: string; onAdded: () 
   );
 }
 
+/** Inline LinkedIn note panel — drafts a short, human connection note to copy & send manually. */
+function LinkedInPanel({ path, onClose, onMarked }: { path: FundraiseIntroPath; onClose: () => void; onMarked: () => void }) {
+  const [note, setNote] = useState("");
+  const [url, setUrl] = useState(path.linkedin_url ?? "");
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const draft = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    const r = await frDraftLinkedInNoteAction(path.id);
+    setLoading(false);
+    if (!r.ok) setErr(r.error);
+    else {
+      setNote(r.note);
+      if (r.linkedin_url) setUrl(r.linkedin_url);
+    }
+  }, [path.id]);
+
+  useEffect(() => {
+    draft();
+  }, [draft]);
+
+  const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${path.founder_name} ${path.portfolio_company}`)}`;
+  const hasUrl = url.trim().length > 0;
+  const profileUrl = hasUrl ? url.trim() : searchUrl;
+  const over = note.length > 300;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(note);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the textarea is selectable as a fallback */
+    }
+  }
+  async function markMessaged() {
+    if (url.trim() && url.trim() !== (path.linkedin_url ?? "")) {
+      await frUpdateIntroPathAction(path.id, { linkedin_url: url.trim() });
+    }
+    await frUpdateIntroPathAction(path.id, { status: "requested" });
+    onMarked();
+  }
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/30 p-2.5">
+      <div className="flex items-center justify-between">
+        <span className="inline-flex items-center gap-1 text-[11.5px] font-medium">
+          <Linkedin className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" /> LinkedIn connection note
+        </span>
+        <button type="button" onClick={onClose} className="text-muted-foreground transition hover:text-foreground" title="Close">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {loading ? (
+        <div className="flex items-center gap-2 py-3 text-[12px] text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" /> Writing a short, human note…
+        </div>
+      ) : err ? (
+        <p className="text-[12px] text-red-600">{err}</p>
+      ) : (
+        <>
+          <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} className="text-[12.5px]" />
+          <div className="flex items-center justify-between text-[10.5px]">
+            <span className={cn("tabular-nums", over ? "font-medium text-red-600" : "text-muted-foreground")}>
+              {note.length}/300{over ? " — too long for a connection note" : ""}
+            </span>
+            <button type="button" onClick={draft} className="inline-flex items-center gap-1 text-muted-foreground transition hover:text-foreground">
+              <RefreshCw className="h-3 w-3" /> Regenerate
+            </button>
+          </div>
+          {!path.linkedin_url && (
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste their LinkedIn URL (optional)" className="text-[12px]" />
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" onClick={copy}>
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy note"}
+            </Button>
+            <a
+              href={profileUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-[12px] font-medium transition hover:bg-muted"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> {hasUrl ? "Open profile" : "Find on LinkedIn"}
+            </a>
+            <Button size="sm" className="ml-auto" onClick={markMessaged}>
+              <Check className="h-3.5 w-3.5" /> Mark as messaged
+            </Button>
+          </div>
+          <p className="text-[10.5px] text-muted-foreground">
+            Copy the note → open their profile → send a connection request with it pasted in → mark it messaged. You send it from your own LinkedIn.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function WarmIntrosDialog({ investor, onClose }: { investor: FundraiseInvestor | null; onClose: () => void }) {
   const [paths, setPaths] = useState<FundraiseIntroPath[] | null>(null);
   const [researching, setResearching] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [linkedInOpenId, setLinkedInOpenId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const investorId = investor?.id ?? null;
@@ -768,6 +879,7 @@ function WarmIntrosDialog({ investor, onClose }: { investor: FundraiseInvestor |
     setPaths(null);
     setMsg(null);
     setAddOpen(false);
+    setLinkedInOpenId(null);
     load();
   }, [investorId, load]);
 
@@ -899,6 +1011,9 @@ function WarmIntrosDialog({ investor, onClose }: { investor: FundraiseInvestor |
                         <Check className="h-3.5 w-3.5" /> Drafted → Email Manager
                       </span>
                     )}
+                    <Button size="sm" variant="outline" onClick={() => setLinkedInOpenId(linkedInOpenId === p.id ? null : p.id)}>
+                      <Linkedin className="h-3.5 w-3.5" /> LinkedIn
+                    </Button>
                     <select
                       value={p.status}
                       onChange={(e) => setStatus(p.id, e.target.value as FundraiseIntroStatus)}
@@ -911,6 +1026,17 @@ function WarmIntrosDialog({ investor, onClose }: { investor: FundraiseInvestor |
                       ))}
                     </select>
                   </div>
+                  {linkedInOpenId === p.id && (
+                    <LinkedInPanel
+                      path={p}
+                      onClose={() => setLinkedInOpenId(null)}
+                      onMarked={() => {
+                        setLinkedInOpenId(null);
+                        setMsg("Marked as messaged on LinkedIn.");
+                        load();
+                      }}
+                    />
+                  )}
                 </div>
               );
             })}

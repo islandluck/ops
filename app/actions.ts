@@ -507,6 +507,7 @@ import type { ImportResult as FrImportResult } from "@/lib/fundraise";
 import {
   addIntroPath as frAddIntroPath,
   deleteIntroPath as frDeleteIntroPath,
+  draftLinkedInNote as frDraftLinkedInNote,
   listIntroPaths as frListIntroPaths,
   requestIntro as frRequestIntro,
   researchIntroPaths as frResearchIntroPaths,
@@ -6281,6 +6282,7 @@ export async function frAddIntroPathAction(
     founder_name?: string;
     founder_title?: string;
     founder_email?: string | null;
+    linkedin_url?: string | null;
     relevance?: string;
     note?: string;
   },
@@ -6305,6 +6307,7 @@ export async function frUpdateIntroPathAction(
     founder_name?: string;
     founder_title?: string;
     founder_email?: string | null;
+    linkedin_url?: string | null;
     relevance?: string;
     status?: FundraiseIntroStatus;
     note?: string;
@@ -6358,6 +6361,19 @@ export async function frRequestIntroAction(introPathId: string) {
     return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the intro request." };
+  }
+}
+
+/** Draft a short, human LinkedIn connection note for a founder (≤300 chars) — you copy & send. */
+export async function frDraftLinkedInNoteAction(introPathId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    return await frDraftLinkedInNote(ws, introPathId, displayName(user));
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't draft the note." };
   }
 }
 

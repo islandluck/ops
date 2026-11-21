@@ -1,0 +1,1 @@
+ALTER TABLE "fundraise_intro_paths" ADD COLUMN "linkedin_url" text;
