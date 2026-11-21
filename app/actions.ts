@@ -497,11 +497,13 @@ import {
   createRound as frCreateRound,
   deleteInvestor as frDeleteInvestor,
   deleteRound as frDeleteRound,
+  importInvestors as frImportInvestors,
   listInvestors as frListInvestors,
   listRounds as frListRounds,
   updateInvestor as frUpdateInvestor,
   updateRound as frUpdateRound,
 } from "@/lib/fundraise";
+import type { ImportResult as FrImportResult } from "@/lib/fundraise";
 import type { FundraiseInvestor, FundraiseRound, FundraiseRoundStatus, FundraiseStage } from "@/lib/types";
 import type {
   AppState,
@@ -6185,6 +6187,8 @@ export async function frUpdateInvestorAction(
     stage?: FundraiseStage;
     check_amount?: number | null;
     is_lead?: boolean;
+    last_contact_date?: string | null;
+    needs_followup?: boolean;
     note?: string;
     contact_id?: string | null;
   },
@@ -6209,6 +6213,27 @@ export async function frDeleteInvestorAction(id: string) {
     return await frDeleteInvestor(ws, id);
   } catch {
     return { ok: false as const };
+  }
+}
+
+/**
+ * Import a parsed VC sheet (header row + data rows of cells) into a round's pipeline.
+ * dryRun=true returns a preview (new/update/skip counts) without writing. Mirrors to CRM.
+ */
+export async function frImportInvestorsAction(
+  roundId: string,
+  cells: string[][],
+  opts?: { dryRun?: boolean },
+): Promise<FrImportResult> {
+  const fail = (error: string): FrImportResult => ({ ok: false, dryRun: opts?.dryRun ?? false, error, total: 0, created: 0, updated: 0, skipped: 0, rows: [], unmapped: [] });
+  const user = await getCurrentUser();
+  if (!user) return fail("Not authenticated.");
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return fail("No workspace.");
+  try {
+    return await frImportInvestors(ws, roundId, cells, { dryRun: opts?.dryRun ?? false });
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Import failed.");
   }
 }
 

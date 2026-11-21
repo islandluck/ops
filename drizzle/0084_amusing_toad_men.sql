@@ -1,0 +1,2 @@
+ALTER TABLE "fundraise_investors" ADD COLUMN "last_contact_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "fundraise_investors" ADD COLUMN "needs_followup" boolean DEFAULT false NOT NULL;

@@ -1276,6 +1276,9 @@ export interface FundraiseInvestor {
   /** Check size, in dollars. */
   check_amount: number | null;
   is_lead: boolean;
+  /** Last contacted (ISO) and a follow-up flag — settable from an imported sheet. */
+  last_contact_date: string | null;
+  needs_followup: boolean;
   note: string;
   source: string;
   created_at: string;

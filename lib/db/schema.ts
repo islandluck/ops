@@ -1829,6 +1829,10 @@ export const fundraiseInvestors = pgTable(
     stage: text("stage").$type<FundraiseStage>().notNull().default("researching"),
     check_amount_cents: bigint("check_amount_cents", { mode: "number" }),
     is_lead: boolean("is_lead").notNull().default(false),
+    /** Last time this investor was contacted (imported or logged). */
+    last_contact_at: timestamp("last_contact_at", { withTimezone: true }),
+    /** Flagged for follow-up (from an imported "Follow Up" column or manually). */
+    needs_followup: boolean("needs_followup").notNull().default(false),
     note: text("note").notNull().default(""),
     source: text("source").notNull().default("manual"),
     created_at: createdAt,
