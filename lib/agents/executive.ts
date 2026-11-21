@@ -52,6 +52,7 @@ import {
   logMeetingToCrm as crmLogMeeting,
   updateDeal as crmUpdateDeal,
 } from "@/lib/crm";
+import { createInvestor as frAddInvestor, listRounds as frListRounds, raiseStatus as frRaiseStatus } from "@/lib/fundraise";
 import { computeKpis, computeMetricValues } from "@/lib/executive/kpis";
 import { computeNudges } from "@/lib/executive/nudges";
 import { executiveReply, generateBrief, organizeSaved, writeInvestorUpdate, type ExecImage, type ExecTool } from "@/lib/ai/executive";
@@ -81,6 +82,7 @@ import type {
   UpdateAudience,
   CrmDealStage,
   CrmRelationshipType,
+  FundraiseStage,
 } from "@/lib/types";
 
 /**
@@ -843,6 +845,72 @@ function buildTools(workspaceId: string): ExecTool[] {
           return { summary: `Nothing in the CRM matches "${q}".` };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't look that up." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "fundraise_add_investor",
+        description:
+          "Add an investor to the active fundraising round's pipeline (e.g. 'add Acme Ventures to the raise, $250k, meeting stage'). Also records them in the CRM as an investor. Use when the founder names an investor to track for the raise.",
+        input_schema: {
+          type: "object",
+          properties: {
+            investor: { type: "string", description: "Investor or firm name" },
+            check: { type: "number", description: "Check size in dollars (optional)" },
+            stage: {
+              type: "string",
+              description: "researching | contacted | meeting | pitched | diligence | term_sheet | committed | closed | passed (default researching)",
+            },
+            lead: { type: "boolean", description: "Whether they're a potential lead investor" },
+          },
+          required: ["investor"],
+        },
+      },
+      run: async (input) => {
+        const name = str(input.investor).trim();
+        if (!name) return { summary: "Which investor should I add?" };
+        try {
+          const rounds = await frListRounds(workspaceId);
+          const round = rounds.find((r) => r.status === "open") ?? rounds[0];
+          if (!round) return { summary: "No fundraising round yet — create one on the Fundraise page first.", href: "/fundraise" };
+          const STAGES = ["researching", "contacted", "meeting", "pitched", "diligence", "term_sheet", "committed", "closed", "passed"];
+          const stageRaw = str(input.stage).trim().toLowerCase().replace(/\s+/g, "_");
+          const stage = STAGES.includes(stageRaw) ? (stageRaw as FundraiseStage) : undefined;
+          const check = typeof input.check === "number" ? input.check : Number(input.check) || null;
+          const r = await frAddInvestor(workspaceId, {
+            round_id: round.id,
+            name,
+            check_amount: check,
+            stage,
+            is_lead: Boolean(input.lead),
+            source: "agent",
+          });
+          if (!r.ok) return { summary: r.error };
+          return { summary: `Added ${name} to the ${round.name} round${check ? ` ($${check.toLocaleString()})` : ""}.`, href: "/fundraise" };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't add the investor." };
+        }
+      },
+    },
+    {
+      silent: true,
+      definition: {
+        name: "fundraise_status",
+        description:
+          "Report the current fundraising round's status — committed vs target, % raised, investor counts. Use to answer 'how's the raise going?'.",
+        input_schema: { type: "object", properties: {}, required: [] },
+      },
+      run: async () => {
+        try {
+          const s = await frRaiseStatus(workspaceId);
+          if (!s.round) return { summary: "No fundraising round is set up yet.", href: "/fundraise" };
+          const parts = [`${s.round.name}: $${Math.round(s.committed).toLocaleString()} committed`];
+          if (s.target) parts.push(`of $${Math.round(s.target).toLocaleString()} (${s.pct}%)`);
+          parts.push(`— ${s.committedCount} committed, ${s.openInvestors} in pipeline.`);
+          return { summary: parts.join(" "), href: "/fundraise" };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't read the raise." };
         }
       },
     },

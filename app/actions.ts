@@ -492,6 +492,17 @@ import type {
   CrmRelationshipType,
   CrmStageKind,
 } from "@/lib/types";
+import {
+  createInvestor as frCreateInvestor,
+  createRound as frCreateRound,
+  deleteInvestor as frDeleteInvestor,
+  deleteRound as frDeleteRound,
+  listInvestors as frListInvestors,
+  listRounds as frListRounds,
+  updateInvestor as frUpdateInvestor,
+  updateRound as frUpdateRound,
+} from "@/lib/fundraise";
+import type { FundraiseInvestor, FundraiseRound, FundraiseRoundStatus, FundraiseStage } from "@/lib/types";
 import type {
   AppState,
   BoardSession,
@@ -6065,6 +6076,139 @@ export async function crmDeletePipelineAction(id: string): Promise<{ ok: boolean
     return await crmDeletePipeline(ws, id);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't delete." };
+  }
+}
+
+/* ------------------------------- fundraise ------------------------------- */
+
+export async function frListRoundsAction(): Promise<FundraiseRound[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await frListRounds(ws);
+  } catch {
+    return [];
+  }
+}
+
+export async function frCreateRoundAction(input: {
+  name: string;
+  target_amount?: number | null;
+  valuation?: number | null;
+  close_date?: string | null;
+  note?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await frCreateRound(ws, input);
+    return r.ok ? { ok: true as const, roundId: r.round.id } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't create the round." };
+  }
+}
+
+export async function frUpdateRoundAction(
+  id: string,
+  patch: {
+    name?: string;
+    target_amount?: number | null;
+    valuation?: number | null;
+    status?: FundraiseRoundStatus;
+    close_date?: string | null;
+    note?: string;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frUpdateRound(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function frDeleteRoundAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frDeleteRound(ws, id);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function frListInvestorsAction(roundId: string): Promise<FundraiseInvestor[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  try {
+    return await frListInvestors(ws, roundId);
+  } catch {
+    return [];
+  }
+}
+
+export async function frCreateInvestorAction(input: {
+  round_id: string;
+  name: string;
+  stage?: FundraiseStage;
+  check_amount?: number | null;
+  is_lead?: boolean;
+  note?: string;
+}) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const, error: "No workspace." };
+  try {
+    const r = await frCreateInvestor(ws, input);
+    return r.ok ? { ok: true as const } : { ok: false as const, error: r.error };
+  } catch (e) {
+    return { ok: false as const, error: e instanceof Error ? e.message : "Couldn't add the investor." };
+  }
+}
+
+export async function frUpdateInvestorAction(
+  id: string,
+  patch: {
+    name?: string;
+    stage?: FundraiseStage;
+    check_amount?: number | null;
+    is_lead?: boolean;
+    note?: string;
+    contact_id?: string | null;
+  },
+) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frUpdateInvestor(ws, id, patch);
+  } catch {
+    return { ok: false as const };
+  }
+}
+
+export async function frDeleteInvestorAction(id: string) {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false as const };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false as const };
+  try {
+    return await frDeleteInvestor(ws, id);
+  } catch {
+    return { ok: false as const };
   }
 }
 

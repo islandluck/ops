@@ -80,6 +80,8 @@ import type {
   CrmStage,
   CrmActivityType,
   CrmActivitySource,
+  FundraiseRoundStatus,
+  FundraiseStage,
   PermissionMode,
   PostStatus,
   Priority,
@@ -1780,6 +1782,57 @@ export const crmActivities = pgTable(
     index("crm_activities_ws_contact_idx").on(t.workspace_id, t.contact_id),
     index("crm_activities_ws_deal_idx").on(t.workspace_id, t.deal_id),
     index("crm_activities_ws_company_idx").on(t.workspace_id, t.company_id),
+  ],
+);
+
+/* ------------------------------- fundraise ------------------------------- */
+
+/** A fundraising round — the target + the investor pipeline moving through it. */
+export const fundraiseRounds = pgTable(
+  "fundraise_rounds",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull().default(""),
+    /** Target raise + valuation, in cents. */
+    target_amount_cents: integer("target_amount_cents"),
+    valuation_cents: integer("valuation_cents"),
+    status: text("status").$type<FundraiseRoundStatus>().notNull().default("open"),
+    close_date: timestamp("close_date", { withTimezone: true }),
+    note: text("note").notNull().default(""),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [index("fundraise_rounds_ws_idx").on(t.workspace_id, t.created_at)],
+);
+
+/** One investor in a round's pipeline, linked into the shared CRM ledger. */
+export const fundraiseInvestors = pgTable(
+  "fundraise_investors",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspace_id: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    round_id: uuid("round_id")
+      .notNull()
+      .references(() => fundraiseRounds.id, { onDelete: "cascade" }),
+    company_id: uuid("company_id").references(() => crmCompanies.id, { onDelete: "set null" }),
+    contact_id: uuid("contact_id").references(() => crmContacts.id, { onDelete: "set null" }),
+    name: text("name").notNull().default(""),
+    stage: text("stage").$type<FundraiseStage>().notNull().default("researching"),
+    check_amount_cents: integer("check_amount_cents"),
+    is_lead: boolean("is_lead").notNull().default(false),
+    note: text("note").notNull().default(""),
+    source: text("source").notNull().default("manual"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  },
+  (t) => [
+    index("fundraise_investors_ws_round_idx").on(t.workspace_id, t.round_id),
+    index("fundraise_investors_ws_stage_idx").on(t.workspace_id, t.stage),
   ],
 );
 

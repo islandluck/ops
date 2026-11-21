@@ -1226,6 +1226,65 @@ export interface CrmActivity {
   created_at: string;
 }
 
+/* ------------------------------- fundraise ------------------------------- */
+
+export type FundraiseRoundStatus = "planning" | "open" | "closed";
+/** An investor's place in the raise pipeline. */
+export type FundraiseStage =
+  | "researching"
+  | "contacted"
+  | "meeting"
+  | "pitched"
+  | "diligence"
+  | "term_sheet"
+  | "committed"
+  | "closed"
+  | "passed";
+
+/** A fundraising round — the target + the investors moving through it. */
+export interface FundraiseRound {
+  id: string;
+  workspace_id: string;
+  name: string;
+  /** Target raise, in dollars. */
+  target_amount: number | null;
+  /** Pre/post-money valuation, in dollars. */
+  valuation: number | null;
+  status: FundraiseRoundStatus;
+  close_date: string | null;
+  note: string;
+  created_at: string;
+  updated_at: string;
+  /** Rollups from list queries (dollars). */
+  committed?: number;
+  closed?: number;
+  in_pipeline?: number;
+  investor_count?: number;
+  committed_count?: number;
+}
+
+/** One investor in a round's pipeline, linked into the shared CRM ledger. */
+export interface FundraiseInvestor {
+  id: string;
+  workspace_id: string;
+  round_id: string;
+  /** The CRM company (firm) + contact (partner), when linked. */
+  company_id: string | null;
+  contact_id: string | null;
+  name: string;
+  stage: FundraiseStage;
+  /** Check size, in dollars. */
+  check_amount: number | null;
+  is_lead: boolean;
+  note: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  /** Joins. */
+  company_name?: string | null;
+  contact_name?: string | null;
+}
+
 /* ------------------------------- marketing ------------------------------- */
 
 /** A marketing distribution channel. X = auto-publish; linkedin + newsletter =

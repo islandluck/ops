@@ -43,6 +43,7 @@ export const PAGES: PageDef[] = [
   { key: "/quotes", label: "Quotes", group: "Intelligence", member: "grantable" },
   { key: "/outreach", label: "Outreach", group: "Intelligence", member: "grantable" },
   { key: "/crm", label: "CRM", group: "Intelligence", member: "grantable" },
+  { key: "/fundraise", label: "Fundraise", group: "Intelligence", member: "never" },
   { key: "/deep-dive", label: "Deep Dive", group: "Intelligence", member: "grantable" },
   { key: "/opportunities", label: "Opportunities", group: "Intelligence", member: "grantable" },
   // Setup
