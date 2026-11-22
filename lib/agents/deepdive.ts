@@ -40,6 +40,8 @@ import type {
   DeepDiveSource,
   DeepDiveSourceKind,
   DeepDiveStatus,
+  ExecKpi,
+  KpiSnapshotEntry,
   OperatingReview,
   OperatingReviewContent,
   ReviewAction,
@@ -555,10 +557,32 @@ export async function getReviewState(workspaceId: string): Promise<{
   return { latestRun, reviews, cadence };
 }
 
+/** Capture the current KPI set as a compact snapshot stored with the review. */
+function snapshotKpis(kpis: ExecKpi[]): KpiSnapshotEntry[] {
+  return kpis.map((k) => ({ key: String(k.key), label: k.label, value: k.value }));
+}
+
+/** Compare the prior review's KPI snapshot to the current one → "was → now" lines. */
+function kpiDeltaLines(prior: KpiSnapshotEntry[] | undefined, current: KpiSnapshotEntry[]): string[] {
+  if (!prior?.length) return [];
+  const byKey = new Map(prior.map((p) => [p.key, p]));
+  const lines: string[] = [];
+  for (const c of current) {
+    const p = byKey.get(c.key);
+    if (p && p.value !== c.value) lines.push(`- ${c.label}: ${p.value} → ${c.value}`);
+  }
+  return lines;
+}
+
 /** Assemble the cross-node dossier the review reasons over. Owner-plane only. */
 async function gatherReviewDossier(
   workspaceId: string,
-): Promise<{ dossier: string; companyName: string; priorReview: OperatingReviewContent | null }> {
+): Promise<{
+  dossier: string;
+  companyName: string;
+  priorReview: OperatingReviewContent | null;
+  kpiSnapshot: KpiSnapshotEntry[];
+}> {
   const now = Date.now();
   const weekAgo = now - WEEK_MS;
   const { brief } = await getPlanningContext(workspaceId);
@@ -627,6 +651,9 @@ async function gatherReviewDossier(
     getCurrentOperatingReview(workspaceId),
   ]);
 
+  const kpiSnapshot = snapshotKpis(kpis);
+  const deltaLines = kpiDeltaLines(prior?.content.kpi_snapshot, kpiSnapshot);
+
   const shipped = taskRows
     .filter((t) => t.status === "done" && !t.archived && new Date(t.updated_at).getTime() >= weekAgo)
     .map((t) => t.title)
@@ -655,6 +682,13 @@ async function gatherReviewDossier(
       ? kpis.map((k) => `- ${k.label}: ${k.value}${k.delta ? ` (${k.delta})` : ""}${k.hint ? ` — ${k.hint}` : ""}`)
       : ["- None computed."]),
     "",
+    ...(deltaLines.length
+      ? [
+          "SINCE LAST REVIEW (ACTUAL change in the numbers — ground 'what moved' in these exact deltas; don't restate metrics that didn't change):",
+          ...deltaLines,
+          "",
+        ]
+      : []),
     "GOALS / FOCUS (the north star — judge the week against these, flag drift):",
     ...(goals.length
       ? goals.map(
@@ -714,6 +748,7 @@ async function gatherReviewDossier(
     dossier: lines.filter((l) => l !== undefined).join("\n"),
     companyName: brief.company_name,
     priorReview: prior?.content ?? null,
+    kpiSnapshot,
   };
 }
 
@@ -841,7 +876,7 @@ async function runReviewTick(workspaceId: string, diveId: string): Promise<void>
     .set({ status: "synthesizing", started_at: new Date(), stage_detail: "Reading your week" })
     .where(eq(deepDives.id, diveId));
 
-  const { dossier, companyName, priorReview } = await gatherReviewDossier(workspaceId);
+  const { dossier, companyName, priorReview, kpiSnapshot } = await gatherReviewDossier(workspaceId);
   // Investigative reduce: give the review read-only tools (web / inbox / CRM) so it can
   // check what it's unsure about instead of guessing. Gated by what's connected.
   const tools = await buildReviewTools(workspaceId).catch(() => [] as ReviewTool[]);
@@ -871,7 +906,9 @@ async function runReviewTick(workspaceId: string, diveId: string): Promise<void>
     deep_dive_id: diveId,
     version: (priorRow?.version ?? 0) + 1,
     is_current: true,
-    content: result.content,
+    // Store the KPI snapshot alongside the model's content so the NEXT review can
+    // measure real movement (the outcome-feedback half of the loop).
+    content: { ...result.content, kpi_snapshot: kpiSnapshot },
     created_at: new Date(),
   });
 

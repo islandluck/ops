@@ -43,6 +43,7 @@ import type {
   ContextTimelineEntry,
   DeepDive,
   DeepDiveCadence,
+  KpiSnapshotEntry,
   OperatingReview,
   ReviewAction,
 } from "@/lib/types";
@@ -300,6 +301,9 @@ function ReviewsTab() {
 
   const reviews = state?.reviews ?? [];
   const selected = reviews.find((r) => r.id === selectedId) ?? reviews[0] ?? null;
+  // The next-older review's KPI snapshot — the baseline for this review's deltas.
+  const selectedIdx = selected ? reviews.findIndex((r) => r.id === selected.id) : -1;
+  const priorSnapshot = selectedIdx >= 0 ? reviews[selectedIdx + 1]?.content.kpi_snapshot : undefined;
 
   return (
     <div className="space-y-6">
@@ -315,7 +319,9 @@ function ReviewsTab() {
         <ProgressCard dive={active} note="Reading your week across email, projects, goals, and opportunities — connecting the dots." />
       )}
       {!active && run?.status === "failed" && <FailedReviewCard error={run.error} />}
-      {selected && <ReviewView review={selected} onAct={act} busyAction={busyAction} />}
+      {selected && (
+        <ReviewView review={selected} priorSnapshot={priorSnapshot} onAct={act} busyAction={busyAction} />
+      )}
       {!selected && !active && run?.status !== "failed" && <EmptyReviews />}
       {reviews.length > 1 && (
         <ReviewArchive reviews={reviews} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
@@ -428,16 +434,57 @@ const LEVEL_CLS: Record<string, string> = {
   low: "text-muted-foreground",
 };
 
+/** Deterministic KPI deltas (this review's snapshot vs. the prior review's). */
+function kpiDeltas(
+  current: KpiSnapshotEntry[] | undefined,
+  prior: KpiSnapshotEntry[] | undefined,
+): { label: string; from: string; to: string }[] {
+  if (!current?.length || !prior?.length) return [];
+  const byKey = new Map(prior.map((p) => [p.key, p]));
+  const out: { label: string; from: string; to: string }[] = [];
+  for (const c of current) {
+    const p = byKey.get(c.key);
+    if (p && p.value !== c.value) out.push({ label: c.label, from: p.value, to: c.value });
+  }
+  return out;
+}
+
+function SinceStrip({ deltas }: { deltas: { label: string; from: string; to: string }[] }) {
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Since last review
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {deltas.map((d, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-[12px]"
+          >
+            <span className="font-medium">{d.label}</span>
+            <span className="tabular-nums text-muted-foreground">{d.from}</span>
+            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+            <span className="font-semibold tabular-nums">{d.to}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReviewView({
   review,
+  priorSnapshot,
   onAct,
   busyAction,
 }: {
   review: OperatingReview;
+  priorSnapshot?: KpiSnapshotEntry[];
   onAct: (reviewId: string, actionId: string, kind: "approve" | "dismiss") => void;
   busyAction: string | null;
 }) {
   const c = review.content;
+  const deltas = kpiDeltas(c.kpi_snapshot, priorSnapshot);
   return (
     <section className="space-y-5 rounded-2xl border border-border bg-card p-5">
       <div>
@@ -451,6 +498,8 @@ function ReviewView({
           <p className="mt-2 text-balance text-[15px] font-medium leading-relaxed text-foreground/90">{c.headline}</p>
         )}
       </div>
+
+      {deltas.length > 0 && <SinceStrip deltas={deltas} />}
 
       {c.moved.length > 0 && (
         <PackBlock title="What moved" icon={<TrendingUp className="h-3.5 w-3.5" />} accent="text-sky-600">

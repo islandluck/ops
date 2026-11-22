@@ -2412,6 +2412,13 @@ export interface ReviewAction {
   ref_href?: string | null;
 }
 
+/** A KPI captured at review time, so the NEXT review can report real movement. */
+export interface KpiSnapshotEntry {
+  key: string;
+  label: string;
+  value: string;
+}
+
 /** The structured content of a weekly Operating Review — the "cofounder" session. */
 export interface OperatingReviewContent {
   /** Honest 2–3 sentence read on where the business stands. */
@@ -2426,6 +2433,9 @@ export interface OperatingReviewContent {
   opportunities: ReviewItem[];
   /** The ranked slate of proposed actions. */
   actions: ReviewAction[];
+  /** KPI values captured when this review ran — the baseline the next review's
+   *  "what moved" is measured against. Added by the engine, not the model. */
+  kpi_snapshot?: KpiSnapshotEntry[];
 }
 
 /** A completed Operating Review for a workspace (versioned, newest is current). */
