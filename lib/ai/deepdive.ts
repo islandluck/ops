@@ -56,9 +56,12 @@ function client(): Anthropic {
 }
 
 function stripFences(s: string): string {
-  const t = s.trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-  return (m ? m[1] : t).trim();
+  let t = s.trim();
+  // Remove a leading ```json / ``` fence and a trailing ``` — tolerant of a
+  // MISSING closing fence (e.g. a response truncated at max_tokens).
+  t = t.replace(/^```(?:json)?[ \t]*\r?\n?/i, "");
+  t = t.replace(/\r?\n?```\s*$/i, "");
+  return t.trim();
 }
 
 function textOf(msg: Anthropic.Message): string {
@@ -72,9 +75,20 @@ function str(x: unknown, max: number): string {
   return typeof x === "string" ? x.trim().slice(0, max) : "";
 }
 function safeParse(text: string): Record<string, unknown> {
+  const cleaned = stripFences(text);
   try {
-    return asRec(JSON.parse(stripFences(text)));
+    return asRec(JSON.parse(cleaned));
   } catch {
+    // Fall back to the outermost {...} if the model wrapped the JSON in prose.
+    const first = cleaned.indexOf("{");
+    const last = cleaned.lastIndexOf("}");
+    if (first !== -1 && last > first) {
+      try {
+        return asRec(JSON.parse(cleaned.slice(first, last + 1)));
+      } catch {
+        /* unrecoverable (e.g. genuinely truncated JSON) */
+      }
+    }
     return {};
   }
 }
@@ -327,6 +341,7 @@ export async function synthesizeOperatingReview(input: {
     "    kind ∈ email|project|outreach|crm|task|meeting (how it gets done). goal = the concrete instruction handed to the agent to execute it, written so it can act without more context. impact/effort ∈ low|medium|high. reversible = boolean.",
     "- memories: 0–8 durable, standalone facts worth remembering about the business (each {kind, content}, kind ∈ fact|preference|decision|insight). Only genuinely durable things, not this-week noise.",
     "",
+    "Be concise and specific — tight bullets, no padding — so the whole JSON stays complete and valid.",
     'Return ONLY this JSON (no markdown, no fences): {"headline": string, "moved": string[], "kpi_read": string, "risks": [{"title": string, "detail": string}], "opportunities": [{"title": string, "detail": string}], "actions": [{"title": string, "rationale": string, "kind": string, "goal": string, "impact": string, "effort": string, "reversible": boolean}], "memories": [{"kind": string, "content": string}]}',
   ].join("\n");
 
@@ -339,7 +354,9 @@ export async function synthesizeOperatingReview(input: {
 
   const msg = await client().messages.create({
     model: SYNTH_MODEL,
-    max_tokens: 4000,
+    // Generous ceiling: a rich dossier with a full action slate can run long, and a
+    // response truncated mid-JSON is unparseable. Keep headroom so it always completes.
+    max_tokens: 8000,
     system,
     messages: [
       {

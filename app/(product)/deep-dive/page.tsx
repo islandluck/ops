@@ -314,8 +314,9 @@ function ReviewsTab() {
       {active && (
         <ProgressCard dive={active} note="Reading your week across email, projects, goals, and opportunities — connecting the dots." />
       )}
-      {!selected && !active && <EmptyReviews />}
+      {!active && run?.status === "failed" && <FailedReviewCard error={run.error} />}
       {selected && <ReviewView review={selected} onAct={act} busyAction={busyAction} />}
+      {!selected && !active && run?.status !== "failed" && <EmptyReviews />}
       {reviews.length > 1 && (
         <ReviewArchive reviews={reviews} selectedId={selected?.id ?? null} onSelect={setSelectedId} />
       )}
@@ -379,6 +380,22 @@ function ReviewControls({
       {blocked && !error && (
         <p className="mt-2 text-[12px] text-muted-foreground">A review is already running — it'll appear here shortly.</p>
       )}
+    </section>
+  );
+}
+
+function FailedReviewCard({ error }: { error: string | null }) {
+  return (
+    <section className="rounded-2xl border border-rose-200/70 bg-rose-50/40 p-5">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+        <div>
+          <p className="text-[14px] font-semibold text-rose-900">Last review didn't finish</p>
+          <p className="mt-1 text-[12.5px] leading-snug text-rose-700/90">
+            {error || "Something went wrong generating the review."} Hit &ldquo;Run review now&rdquo; to try again.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }
