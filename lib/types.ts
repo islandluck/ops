@@ -2338,8 +2338,13 @@ export interface SourceDistillation {
   status_notes: string[];
 }
 
+/** context = ingest documents → understanding; review = sweep live nodes → Operating Review. */
+export type DeepDiveMode = "context" | "review";
+
 export interface DeepDive {
   id: string;
+  /** Which kind of run: document ingestion ("context") or the weekly Operating Review. */
+  mode: DeepDiveMode;
   title: string;
   status: DeepDiveStatus;
   stage_detail: string;
@@ -2367,6 +2372,67 @@ export interface CompanyContext {
   version: number;
   summary: string;
   pack: CompanyContextPack;
+  created_at: string;
+}
+
+/* ------------------ Deep Dive: weekly Operating Review ------------------- */
+
+/** How often the weekly Operating Review runs. */
+export type DeepDiveCadence = "off" | "weekly";
+
+/** A named concern or opening in the review (a risk, or a blind-spot/opportunity). */
+export interface ReviewItem {
+  title: string;
+  detail: string;
+}
+
+/** Which agent/tool an approved action routes to. */
+export type ReviewActionKind = "email" | "project" | "outreach" | "crm" | "task" | "meeting";
+export type ReviewActionStatus = "proposed" | "accepted" | "dismissed";
+/** A low/medium/high rating (impact or effort). */
+export type ReviewLevel = "low" | "medium" | "high";
+
+/** One proposed action in a review's ranked slate. Nothing happens until approved. */
+export interface ReviewAction {
+  id: string;
+  title: string;
+  /** Why the Deep Dive is proposing this now. */
+  rationale: string;
+  kind: ReviewActionKind;
+  /** The outcome handed to the executing task/tool when approved. */
+  goal: string;
+  /** For a task action — which department it belongs to. */
+  category?: Category | null;
+  impact: ReviewLevel;
+  effort: ReviewLevel;
+  /** Whether the action can be undone (informs the owner before approving). */
+  reversible: boolean;
+  status: ReviewActionStatus;
+  /** Deep link to the created project/task once approved. */
+  ref_href?: string | null;
+}
+
+/** The structured content of a weekly Operating Review — the "cofounder" session. */
+export interface OperatingReviewContent {
+  /** Honest 2–3 sentence read on where the business stands. */
+  headline: string;
+  /** What changed since the last review (wins + slippage). */
+  moved: string[];
+  /** Progress vs. goals/KPIs, with drift called out. */
+  kpi_read: string;
+  /** Things slipping, or about to. */
+  risks: ReviewItem[];
+  /** Blind spots & missed moves the owner may not be thinking about. */
+  opportunities: ReviewItem[];
+  /** The ranked slate of proposed actions. */
+  actions: ReviewAction[];
+}
+
+/** A completed Operating Review for a workspace (versioned, newest is current). */
+export interface OperatingReview {
+  id: string;
+  version: number;
+  content: OperatingReviewContent;
   created_at: string;
 }
 

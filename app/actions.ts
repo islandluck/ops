@@ -320,10 +320,15 @@ import type { PlanTier } from "@/lib/billing/plans";
 import { getTodayData, setDigestCadence, sendMorningDigest } from "@/lib/agents/today";
 import {
   advanceWorkspaceDeepDives,
+  approveReviewAction,
+  dismissReviewAction,
   getCurrentContext,
   getDeepDive,
+  getReviewState,
   listDeepDives,
+  setDeepDiveCadence,
   startDeepDive,
+  startReview,
   type NewDeepDiveSource,
 } from "@/lib/agents/deepdive";
 import {
@@ -533,6 +538,7 @@ import type {
   GoalHorizon,
   GoalMetric,
   CompanyContext,
+  DeepDiveCadence,
   DeepDive,
   DeepDiveSource,
   GoalStatus,
@@ -1462,6 +1468,59 @@ export async function pokeDeepDiveAction(): Promise<void> {
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return;
   await advanceWorkspaceDeepDives(ws);
+}
+
+/* ---------------- Deep Dive: weekly Operating Review -------------------- */
+
+/** Run a weekly Operating Review now (on-demand), or return the one already in flight. */
+export async function startReviewAction(): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  const res = await startReview(ws);
+  // Kick the worker immediately so the run makes progress without waiting for cron.
+  await advanceWorkspaceDeepDives(ws).catch(() => {});
+  return { ok: res.ok, error: res.error };
+}
+
+/** Everything the Reviews tab renders: the in-flight run, the archive, and the cadence. */
+export async function getReviewStateAction() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getReviewState(ws);
+}
+
+export async function approveReviewActionAction(
+  reviewId: string,
+  actionId: string,
+): Promise<{ ok: boolean; href?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return approveReviewAction(ws, reviewId, actionId);
+}
+
+export async function dismissReviewActionAction(
+  reviewId: string,
+  actionId: string,
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return dismissReviewAction(ws, reviewId, actionId);
+}
+
+export async function setDeepDiveCadenceAction(cadence: DeepDiveCadence): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return setDeepDiveCadence(ws, cadence);
 }
 
 /** Generate a fresh executive brief (daily snapshot or weekly review). */

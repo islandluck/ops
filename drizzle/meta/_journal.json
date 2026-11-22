@@ -617,6 +617,13 @@
       "when": 1795279934370,
       "tag": "0087_wealthy_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1795379224775,
+      "tag": "0088_late_iron_monger",
+      "breakpoints": true
     }
   ]
 }

@@ -36,11 +36,13 @@ import type {
   CompanyContextPack,
   CreatedByType,
   DecisionType,
+  DeepDiveMode,
   DeepDiveProgress,
   DeepDiveSourceKind,
   DeepDiveSourceStatus,
   DeepDiveStatus,
   DeepDiveUsage,
+  OperatingReviewContent,
   ApplicationEval,
   ApplicationStage,
   CandidateSource,
@@ -183,6 +185,10 @@ export const businessBriefs = pgTable("business_briefs", {
   // Proactive morning digest: "off" | "daily". last_sent dedups to once per day.
   digest_cadence: text("digest_cadence").notNull().default("off"),
   digest_last_sent_at: timestamp("digest_last_sent_at", { withTimezone: true }),
+  // Weekly Operating Review ("Deep Dive" cofounder): "off" | "weekly".
+  // last_review_at both dedups the weekly cron and marks the last completed run.
+  deep_dive_cadence: text("deep_dive_cadence").notNull().default("off"),
+  deep_dive_last_review_at: timestamp("deep_dive_last_review_at", { withTimezone: true }),
   updated_at: updatedAt,
 }, (t) => [index("business_briefs_ws_idx").on(t.workspace_id)]);
 
@@ -2033,6 +2039,8 @@ export const deepDives = pgTable("deep_dives", {
   workspace_id: uuid("workspace_id")
     .notNull()
     .references(() => workspaces.id, { onDelete: "cascade" }),
+  // "context" = document ingestion → Context Pack; "review" = live-node sweep → Operating Review.
+  mode: text("mode").$type<DeepDiveMode>().notNull().default("context"),
   title: text("title").notNull().default(""),
   status: text("status").$type<DeepDiveStatus>().notNull().default("queued"),
   stage_detail: text("stage_detail").notNull().default(""),
@@ -2087,6 +2095,24 @@ export const companyContext = pgTable("company_context", {
     .default({ people: [], timeline: [], themes: [], decisions: [], open_threads: [], risks: [], products: [] }),
   created_at: createdAt,
 }, (t) => [index("company_context_ws_current_idx").on(t.workspace_id, t.is_current)]);
+
+/** A completed weekly Operating Review (the "Deep Dive" cofounder session). Versioned
+ *  per workspace — newest is_current row is the latest review. Its action slate's
+ *  statuses + this workspace's KPI deltas feed the NEXT review (the feedback loop). */
+export const operatingReviews = pgTable("operating_reviews", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  deep_dive_id: uuid("deep_dive_id").references(() => deepDives.id, { onDelete: "set null" }),
+  version: integer("version").notNull().default(1),
+  is_current: boolean("is_current").notNull().default(true),
+  content: jsonb("content")
+    .$type<OperatingReviewContent>()
+    .notNull()
+    .default({ headline: "", moved: [], kpi_read: "", risks: [], opportunities: [], actions: [] }),
+  created_at: createdAt,
+}, (t) => [index("operating_reviews_ws_current_idx").on(t.workspace_id, t.is_current)]);
 
 /** A per-workspace opportunity scanner (grant / conference / event / competition).
  *  Runs on a cadence and surfaces ranked opportunities; one row per (workspace, type). */

@@ -3,6 +3,7 @@ import { runBackgroundAgents } from "@/lib/agents/run";
 import { advanceActiveProjects } from "@/lib/agents/project";
 import { refreshAllReplyRadars } from "@/lib/agents/reply-radar";
 import { generateDueBriefs } from "@/lib/agents/executive";
+import { generateDueReviews } from "@/lib/agents/deepdive";
 import { crmRadarSweep } from "@/lib/agents/crm";
 import { runDueEmailTriage } from "@/lib/agents/triage";
 import { runDueBoardScans } from "@/lib/agents/boardroom";
@@ -43,6 +44,9 @@ async function handle(request: NextRequest) {
     const board = await runDueBoardScans().catch(() => ({ scanned: 0, alerts: 0 }));
     // Proactive morning digest (Slack/email) for owners who opted in — once/day.
     const digests = await sendDueDigests().catch(() => ({ sent: 0 }));
+    // Queue the weekly Deep Dive Operating Review for workspaces whose last is stale.
+    // The /api/deep-dive/run worker then processes the queued runs.
+    const reviews = await generateDueReviews().catch(() => ({ queued: 0 }));
     return NextResponse.json({
       ok: true,
       ...result,
@@ -54,6 +58,7 @@ async function handle(request: NextRequest) {
       boardScans: board.scanned,
       boardAlerts: board.alerts,
       digestsSent: digests.sent,
+      reviewsQueued: reviews.queued,
     });
   } catch (e) {
     return NextResponse.json(
