@@ -21,11 +21,15 @@ import {
 import { getConnectedIntegrationNames, getPlanningContext } from "@/lib/db/queries";
 import { computeKpis } from "@/lib/executive/kpis";
 import { inferAffectedSystems } from "@/lib/agents/infer-systems";
+import { hasResearchKey, researchTopics } from "@/lib/ai/research";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { getMessageMeta, listInboxMessages } from "@/lib/integrations/google";
 import {
   distillSource,
   synthesizeContextPack,
   synthesizeOperatingReview,
   type AiUsage,
+  type ReviewTool,
 } from "@/lib/ai/deepdive";
 import type {
   Category,
@@ -713,7 +717,124 @@ async function gatherReviewDossier(
   };
 }
 
-/** The whole review in one locked tick: gather → synthesize → publish → complete. */
+/** Read-only tools the review can call to INVESTIGATE before writing — gated by what's
+ *  actually available so the model never wastes a turn on a disconnected integration. */
+async function buildReviewTools(workspaceId: string): Promise<ReviewTool[]> {
+  const connected = await getConnectedIntegrationNames(workspaceId).catch(() => [] as string[]);
+  const out: ReviewTool[] = [];
+
+  // Live web research (Tavily) — only when a key is configured.
+  if (hasResearchKey()) {
+    out.push({
+      definition: {
+        name: "research",
+        description:
+          "Look something up on the live web (recent news + web): a competitor, market move, company, price, or recent event. Returns a short synthesized answer with sources.",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "What to research, as a search query or question" } },
+          required: ["query"],
+        },
+      },
+      run: async (input) => {
+        const q = String(input.query ?? "").trim();
+        if (!q) return "No research query given.";
+        const res = await researchTopics(q);
+        if (!res) return "Live web research isn't configured.";
+        if (!res.answer && !res.sources.length) return `Nothing solid came back for "${q}".`;
+        const cites = res.sources.slice(0, 3).map((s) => `- ${s.title || s.url} (${s.url})`).join("\n");
+        return `${res.answer || "Here's what came back."}${cites ? `\n\nSources:\n${cites}` : ""}`.slice(0, 2000);
+      },
+    });
+  }
+
+  // Read-only Gmail search — only when Gmail is connected.
+  if (connected.includes("Gmail")) {
+    out.push({
+      definition: {
+        name: "search_inbox",
+        description:
+          "Read-only search of the founder's Gmail to ground your thinking in real threads. Returns sender, subject, and date only. Use Gmail search syntax (from:, subject:, newer_than:2w).",
+        input_schema: {
+          type: "object",
+          properties: { query: { type: "string", description: "Gmail search query" } },
+          required: ["query"],
+        },
+      },
+      run: async (input) => {
+        const q = String(input.query ?? "").trim();
+        if (!q) return "No search query given.";
+        const token = await getValidAccessToken(workspaceId, "Gmail");
+        if (!token) return "Gmail isn't connected.";
+        const ids = await listInboxMessages(token, { query: q, max: 5 });
+        if (!ids.length) return `No emails matched "${q}".`;
+        const metas = await Promise.all(ids.map((m) => getMessageMeta(token, m.id).catch(() => null)));
+        const lines = metas
+          .filter((m): m is NonNullable<typeof m> => Boolean(m))
+          .map((m) => `• ${m.from} — "${m.subject}" (${m.date})`);
+        return `Top matches for "${q}":\n${lines.join("\n")}`.slice(0, 2000);
+      },
+    });
+  }
+
+  // CRM lookup — include when the native CRM has anything (or HubSpot is connected).
+  try {
+    const { listCompanies, listContacts, listDeals } = await import("@/lib/crm");
+    const [companies0, deals0] = await Promise.all([listCompanies(workspaceId), listDeals(workspaceId)]);
+    if (companies0.length || deals0.length || connected.includes("HubSpot")) {
+      out.push({
+        definition: {
+          name: "crm_lookup",
+          description:
+            "Look up a company, contact, or deal in the CRM (open deals, value, last touch), or ask for 'pipeline' / 'cold deals' for a summary.",
+          input_schema: {
+            type: "object",
+            properties: { query: { type: "string", description: "A company, person, or deal name, or 'pipeline'/'cold'" } },
+            required: ["query"],
+          },
+        },
+        run: async (input) => {
+          const q = String(input.query ?? "").trim();
+          if (!q) return "Who or what should I look up?";
+          const ql = q.toLowerCase();
+          const [companies, contacts, deals] = await Promise.all([
+            listCompanies(workspaceId),
+            listContacts(workspaceId),
+            listDeals(workspaceId),
+          ]);
+          if (/\b(pipeline|cold|stale|open deals?|forecast|closing)\b/i.test(q)) {
+            const open = deals.filter((d) => d.stage_kind === "open");
+            const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
+            const cutoff = Date.now() - 14 * 86_400_000;
+            const cold = open.filter((d) => new Date(d.last_activity_at ?? d.created_at).getTime() < cutoff);
+            return `Pipeline: ${open.length} open deal(s) worth $${val.toLocaleString()}${cold.length ? `, ${cold.length} going cold` : ""}.`;
+          }
+          const company = companies.find((c) => c.name.toLowerCase().includes(ql));
+          const deal = deals.find((d) => d.title.toLowerCase().includes(ql));
+          const contact = contacts.find((c) => c.name.toLowerCase().includes(ql));
+          if (company) {
+            const open = deals.filter((d) => d.company_id === company.id && d.stage_kind === "open");
+            const val = open.reduce((n, d) => n + (d.amount ?? 0), 0);
+            return `${company.name} (${company.relationship_type}): ${company.contact_count ?? 0} contact(s), ${open.length} open deal(s)${val ? ` worth $${val.toLocaleString()}` : ""}.`;
+          }
+          if (deal) {
+            return `Deal "${deal.title}" (${deal.company_name ?? "—"}): ${deal.stage}${deal.amount != null ? `, $${deal.amount.toLocaleString()}` : ""}, last activity ${deal.last_activity_at ? new Date(deal.last_activity_at).toLocaleDateString() : "none"}.`;
+          }
+          if (contact) {
+            return `${contact.name}${contact.title ? `, ${contact.title}` : ""}${contact.company_name ? ` at ${contact.company_name}` : ""} — last touch ${contact.last_touch_at ? new Date(contact.last_touch_at).toLocaleDateString() : "never"}.`;
+          }
+          return `Nothing in the CRM matches "${q}".`;
+        },
+      });
+    }
+  } catch {
+    /* CRM module/data unavailable — skip the tool */
+  }
+
+  return out;
+}
+
+/** The whole review in one locked tick: gather → investigate + synthesize → publish → complete. */
 async function runReviewTick(workspaceId: string, diveId: string): Promise<void> {
   await db
     .update(deepDives)
@@ -721,7 +842,16 @@ async function runReviewTick(workspaceId: string, diveId: string): Promise<void>
     .where(eq(deepDives.id, diveId));
 
   const { dossier, companyName, priorReview } = await gatherReviewDossier(workspaceId);
-  const result = await synthesizeOperatingReview({ companyName, dossier, priorReview });
+  // Investigative reduce: give the review read-only tools (web / inbox / CRM) so it can
+  // check what it's unsure about instead of guessing. Gated by what's connected.
+  const tools = await buildReviewTools(workspaceId).catch(() => [] as ReviewTool[]);
+  if (tools.length) {
+    await db
+      .update(deepDives)
+      .set({ stage_detail: "Investigating & connecting the dots" })
+      .where(eq(deepDives.id, diveId));
+  }
+  const result = await synthesizeOperatingReview({ companyName, dossier, priorReview, tools });
   await bumpUsage(diveId, result.usage);
 
   // Publish the new current review (versioned — supersedes the prior one).
