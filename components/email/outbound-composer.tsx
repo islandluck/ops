@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ChangeEvent } from "react";
-import { ChevronDown, Clock, Loader2, Paperclip, RotateCcw, Send, Sparkles, Trash2, Wand2, X } from "lucide-react";
+import { Check, ChevronDown, Clock, Loader2, MailOpen, Paperclip, RotateCcw, Send, Sparkles, Trash2, Wand2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
@@ -11,6 +11,7 @@ import {
   discardOutboundDraftAction,
   flushDueOutboundDraftsAction,
   listOutboundDraftsAction,
+  listSentOutboundAction,
   refineOutboundDraftAction,
   regenerateOutboundDraftAction,
   removeOutboundAttachmentAction,
@@ -86,6 +87,7 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [refiningId, setRefiningId] = useState<string | null>(null);
   const [bulkSending, setBulkSending] = useState(false);
+  const [recentSent, setRecentSent] = useState<OutboundDraft[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,20 +110,25 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
       }
     }
 
-    // On open: send anything already past due, then load the queue.
+    // On open: send anything already past due, then load the queue + recently sent.
     void (async () => {
       const r = await flushDueOutboundDraftsAction().catch(() => null);
       const rows = await listOutboundDraftsAction();
+      const sentRows = await listSentOutboundAction().catch(() => [] as OutboundDraft[]);
       if (cancelled) return;
       setDrafts(rows);
+      setRecentSent(sentRows);
       setLoading(false);
       if (r) apply(r);
     })();
 
-    // While open: flush due scheduled emails every 30s (no cron needed locally).
+    // While open: flush due scheduled emails every 30s (no cron needed locally) and
+    // refresh the sent list so opens that land while you watch show up.
     const iv = setInterval(async () => {
       const r = await flushDueOutboundDraftsAction().catch(() => null);
       if (r) apply(r);
+      const sentRows = await listSentOutboundAction().catch(() => null);
+      if (sentRows && !cancelled) setRecentSent(sentRows);
     }, 30_000);
 
     return () => {
@@ -229,6 +236,7 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
     if (r.ok) {
       setDrafts((prev) => prev.filter((d) => d.id !== id));
       setNotice("Sent. ✓");
+      void listSentOutboundAction().then(setRecentSent).catch(() => {});
     } else {
       setError(r.error ?? "Couldn't send.");
       patchLocal(id, { status: "failed", error: r.error ?? "" });
@@ -251,6 +259,7 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
     setBulkSending(false);
     const rows = await listOutboundDraftsAction();
     setDrafts(rows);
+    void listSentOutboundAction().then(setRecentSent).catch(() => {});
     if (r.ok) setNotice(`Sent ${r.sent}${r.failed ? `, ${r.failed} failed` : ""}.`);
     else setError(r.error);
   }
@@ -344,6 +353,71 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </div>
+
+      {/* Recently sent — with open status */}
+      {recentSent.length > 0 && (
+        <div className="mt-5 border-t border-border pt-4">
+          <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+            Recently sent
+          </p>
+          <div className="space-y-1.5">
+            {recentSent.map((s) => (
+              <SentRow key={s.id} draft={s} />
+            ))}
+          </div>
+          <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground/70">
+            Opens are approximate — some mail apps (Apple Mail, Gmail) pre-load images, which can show
+            an open that didn&apos;t happen or hide repeat opens.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A relative "time ago" label for sent / opened timestamps. */
+function fmtAgo(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const s = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** One sent email with its open status. Opened → emerald pill; otherwise a muted "Sent". */
+function SentRow({ draft }: { draft: OutboundDraft }) {
+  const opened = Boolean(draft.opened_at);
+  const title = opened
+    ? `First opened ${fmtAgo(draft.opened_at)}` +
+      (draft.open_count > 1 ? ` · ${draft.open_count} loads · last ${fmtAgo(draft.last_opened_at)}` : "")
+    : "No open detected yet";
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[12.5px] font-medium">{draft.subject || "(no subject)"}</p>
+        <p className="truncate text-[11px] text-muted-foreground">
+          To {draft.recipient_name || draft.to_email}
+          {draft.sent_at ? ` · sent ${fmtAgo(draft.sent_at)}` : ""}
+        </p>
+      </div>
+      <span
+        title={title}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium",
+          opened ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground",
+        )}
+      >
+        {opened ? <MailOpen className="h-3 w-3" /> : <Check className="h-3 w-3" />}
+        {opened ? `Opened · ${fmtAgo(draft.opened_at)}` : "Sent"}
+        {opened && draft.open_count > 1 ? ` · ${draft.open_count}×` : ""}
+      </span>
     </div>
   );
 }

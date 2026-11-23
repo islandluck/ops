@@ -14,6 +14,7 @@ import {
   Linkedin,
   Loader2,
   Mail,
+  MailOpen,
   PenSquare,
   Plug,
   RefreshCw,
@@ -1044,6 +1045,7 @@ function SettingsPanel({
   const [signature, setSignature] = useState(initial.signature);
   const [replyStyle, setReplyStyle] = useState(initial.reply_style);
   const [cadence, setCadence] = useState<EmailCadence>(initial.cadence);
+  const [openTracking, setOpenTracking] = useState(initial.open_tracking ?? true);
   const [block, setBlock] = useState<SignatureBlock>(() => normalizeSignatureBlock(initial.signature_block));
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoErr, setLogoErr] = useState("");
@@ -1060,7 +1062,14 @@ function SettingsPanel({
 
   async function save() {
     setSaveState("saving");
-    const r = await saveEmailSettingsAction({ signature, reply_style: replyStyle, cadence, signature_block: block });
+    const r = await saveEmailSettingsAction({
+      signature,
+      reply_style: replyStyle,
+      cadence,
+      signature_block: block,
+      // Owner plane only — undefined for members, which the server leaves untouched.
+      open_tracking: initial.open_tracking === undefined ? undefined : openTracking,
+    });
     setSaveState(r.ok ? "saved" : "idle");
   }
 
@@ -1144,6 +1153,38 @@ function SettingsPanel({
           ))}
         </div>
       </div>
+
+      {/* Open tracking (owner plane only — the control is hidden for members) */}
+      {initial.open_tracking !== undefined && (
+        <div className="mb-4 rounded-lg border border-border bg-muted/30 p-3">
+          <button
+            type="button"
+            onClick={() => {
+              setOpenTracking((v) => !v);
+              dirtySave();
+            }}
+            className="flex w-full items-start gap-2 text-left"
+          >
+            <MailOpen className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-medium">Track email opens</p>
+              <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+                Add an invisible pixel to mail you send so you can see if it was opened, shown under
+                each sent email. Opens are approximate — some apps (Apple Mail, Gmail) pre-load images.
+                Applies to your outbox only.
+              </p>
+            </div>
+            <span
+              className={cn(
+                "ml-auto mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+                openTracking ? "justify-end border-primary bg-primary" : "justify-start border-border bg-muted",
+              )}
+            >
+              <span className="mx-0.5 h-4 w-4 rounded-full bg-white shadow-sm" />
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Learn from sent mail */}
       <div className="mb-3 flex flex-col gap-2 rounded-lg border border-dashed border-border px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
