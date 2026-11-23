@@ -294,6 +294,17 @@ import {
   updateWorkstream,
 } from "@/lib/workstreams";
 import type { ProjectWorkstream, WorkstreamDelegateKind, WorkstreamStatus } from "@/lib/types";
+import {
+  addSourcingSource,
+  deleteSourcingRequest,
+  deleteSourcingSource,
+  getSourcingRequest,
+  listSourcingRequests,
+  listSourcingSources,
+  runSourcing,
+  updateSourcingSource,
+} from "@/lib/sourcing";
+import type { SourcingRequest, SourcingSource } from "@/lib/types";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   addGoal,
@@ -1274,6 +1285,82 @@ export async function closeWorkspaceProjectAction(
   if (!ws) return { ok: false, error: "No workspace." };
   if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can close this project." };
   return closeWorkspaceProject(ws, projectId, input);
+}
+
+/* ------------------------------- sourcing -------------------------------- */
+
+/** Run a "source me a ___" request — shops the web + returns a reasoned best buy. */
+export async function runSourcingAction(
+  query: string,
+): Promise<{ ok: boolean; request?: SourcingRequest; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return runSourcing(ws, query);
+}
+
+export async function listSourcingRequestsAction(): Promise<SourcingRequest[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listSourcingRequests(ws);
+}
+
+export async function getSourcingRequestAction(id: string): Promise<SourcingRequest | null> {
+  const user = await getCurrentUser();
+  if (!user) return null;
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return null;
+  return getSourcingRequest(ws, id);
+}
+
+export async function deleteSourcingRequestAction(id: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return deleteSourcingRequest(ws, id);
+}
+
+export async function listSourcingSourcesAction(): Promise<SourcingSource[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listSourcingSources(ws);
+}
+
+export async function addSourcingSourceAction(input: {
+  label: string;
+  site: string;
+  note?: string;
+}): Promise<{ ok: boolean; source?: SourcingSource; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return addSourcingSource(ws, input);
+}
+
+export async function updateSourcingSourceAction(
+  id: string,
+  patch: { label?: string; site?: string; note?: string; enabled?: boolean },
+): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return updateSourcingSource(ws, id, patch);
+}
+
+export async function deleteSourcingSourceAction(id: string): Promise<{ ok: boolean }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false };
+  return deleteSourcingSource(ws, id);
 }
 
 /* --------------------------- growth campaigns ---------------------------- */

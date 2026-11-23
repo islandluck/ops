@@ -97,6 +97,8 @@ import type {
   ScreeningQuestion,
   SignatureBlock,
   SourceDistillation,
+  SourcingResult,
+  SourcingStatus,
   TaskStatus,
   WorkstreamDelegateKind,
   WorkstreamProposal,
@@ -1332,6 +1334,34 @@ export const projectWorkstreams = pgTable("project_workstreams", {
 }, (t) => [
   index("project_workstreams_ws_project_idx").on(t.workspace_id, t.project_id),
 ]);
+
+/** Preferred avenues the purchasing-manager sourcing tool should also check for
+ *  deals (eBay, Craigslist, auction sites, a specific retailer). */
+export const sourcingSources = pgTable("sourcing_sources", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  label: text("label").notNull(),
+  site: text("site").notNull(),
+  note: text("note").notNull().default(""),
+  enabled: boolean("enabled").notNull().default(true),
+  created_at: createdAt,
+}, (t) => [index("sourcing_sources_ws_idx").on(t.workspace_id)]);
+
+/** A "source me a ___" request + the purchasing manager's reasoned recommendation. */
+export const sourcingRequests = pgTable("sourcing_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  query: text("query").notNull(),
+  status: text("status").$type<SourcingStatus>().notNull().default("searching"),
+  result: jsonb("result").$type<SourcingResult>(),
+  error: text("error").notNull().default(""),
+  created_at: createdAt,
+  updated_at: updatedAt,
+}, (t) => [index("sourcing_requests_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** Follower-count snapshots for a growth campaign — the progress trend vs goal. */
 export const followerSnapshots = pgTable("follower_snapshots", {

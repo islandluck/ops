@@ -770,6 +770,67 @@ export interface ProjectWorkstream {
   updated_at: string;
 }
 
+/* --------------------------------- Sourcing -------------------------------- */
+
+/** A preferred avenue the purchasing-manager sourcing tool should also check for
+ *  deals — eBay, Craigslist, an auction site, a specific retailer. */
+export interface SourcingSource {
+  id: string;
+  workspace_id: string;
+  label: string;
+  /** A domain or URL to prioritize (e.g. "ebay.com", "craigslist.org"). */
+  site: string;
+  note: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export type SourcingTrust = "reputable" | "caution" | "unknown";
+
+/** One product option the sourcing tool found and evaluated. */
+export interface SourcingPick {
+  title: string;
+  /** Price exactly as seen (formatted string, e.g. "$24.99"), or "" if unlisted. */
+  price: string;
+  /** Where it's sold / the seller ("Amazon", "eBay — seller topdeals_99"). */
+  seller: string;
+  url: string | null;
+  /** Shipping + delivery in plain words ("Free, arrives in 2 days"). */
+  shipping: string;
+  /** Condition ("New", "Used – like new", "Refurbished"). */
+  condition: string;
+  trust: SourcingTrust;
+  /** Why it's the pick, or (for an alternative) why it lost. */
+  why: string;
+}
+
+export type SourcingStatus = "searching" | "complete" | "failed";
+
+/** The purchasing manager's reasoned recommendation for a sourcing request. */
+export interface SourcingResult {
+  /** The plain-English headline recommendation. */
+  headline: string;
+  best: SourcingPick | null;
+  alternatives: SourcingPick[];
+  /** The deal framing ("~30% cheaper than the typical $35 listing"). */
+  savings_note: string;
+  /** Risks / what to double-check before buying. */
+  caveats: string;
+  /** Which sites / avenues were checked. */
+  searched: string[];
+}
+
+export interface SourcingRequest {
+  id: string;
+  workspace_id: string;
+  query: string;
+  status: SourcingStatus;
+  result: SourcingResult | null;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A follower-count reading over the life of a growth campaign. */
 export interface FollowerSnapshot {
   followers: number;
