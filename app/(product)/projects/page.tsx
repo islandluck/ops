@@ -8,6 +8,8 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Compass,
+  Crown,
   FileDown,
   FileText,
   Globe,
@@ -15,6 +17,8 @@ import {
   MessageCircle,
   Plus,
   Repeat2,
+  Search,
+  Send,
   Sparkles,
   Trash2,
   TrendingUp,
@@ -42,10 +46,29 @@ import {
   getProjectsAction,
   assignProjectToMemberAction,
   listTeamMembersAction,
+  createWorkspaceProjectAction,
+  listWorkstreamsAction,
+  addWorkstreamAction,
+  updateWorkstreamAction,
+  deleteWorkstreamAction,
+  proposeWorkstreamAction,
+  cancelProposalAction,
+  runWorkstreamAction,
+  closeWorkspaceProjectAction,
 } from "@/app/actions";
 import { escapeHtml, markdownToHtml } from "@/lib/content/format";
 import type { ProjectPacket } from "@/lib/agents/project";
-import type { CampaignData, CampaignPost, Category, Project, ProjectStatus, TeamMember } from "@/lib/types";
+import type {
+  CampaignData,
+  CampaignPost,
+  Category,
+  Project,
+  ProjectStatus,
+  ProjectWorkstream,
+  TeamMember,
+  WorkstreamDelegateKind,
+  WorkstreamStatus,
+} from "@/lib/types";
 
 const STATUS_META: Record<ProjectStatus, { label: string; cls: string; dot: string }> = {
   planning: { label: "Plan ready to review", cls: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500" },
@@ -242,22 +265,36 @@ export default function ProjectsPage() {
           }}
         />
       )}
-      {selected && (
-        <ProjectDrawer
-          project={selected}
-          building={phaseBuildState(selected)}
-          onClose={() => setSelectedId(null)}
-          onChanged={async () => {
-            await reload();
-            reloadWorkspace(); // refresh the board with newly materialized tasks
-          }}
-          onDeleted={async () => {
-            setSelectedId(null);
-            await reload();
-            reloadWorkspace();
-          }}
-        />
-      )}
+      {selected &&
+        (selected.kind === "workspace" ? (
+          <WorkstreamDrawer
+            project={selected}
+            onClose={() => setSelectedId(null)}
+            onChanged={async () => {
+              await reload();
+            }}
+            onDeleted={async () => {
+              setSelectedId(null);
+              await reload();
+              reloadWorkspace();
+            }}
+          />
+        ) : (
+          <ProjectDrawer
+            project={selected}
+            building={phaseBuildState(selected)}
+            onClose={() => setSelectedId(null)}
+            onChanged={async () => {
+              await reload();
+              reloadWorkspace(); // refresh the board with newly materialized tasks
+            }}
+            onDeleted={async () => {
+              setSelectedId(null);
+              await reload();
+              reloadWorkspace();
+            }}
+          />
+        ))}
     </>
   );
 }
@@ -289,6 +326,7 @@ function ProjectCard({
 }) {
   const st = STATUS_META[project.status];
   const isGrowth = project.kind === "growth";
+  const isWorkbench = project.kind === "workspace";
   const phases = project.plan.phases.length;
   const unit = isGrowth ? "Week" : "Phase";
   const progress = project.progress ?? { total: 0, done: 0 };
@@ -344,6 +382,11 @@ function ProjectCard({
             <TrendingUp className="h-3 w-3" />
             Growth
           </span>
+        ) : isWorkbench ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+            <Compass className="h-3 w-3" />
+            You&apos;re driving
+          </span>
         ) : (
           <span className="text-[11px] capitalize text-muted-foreground">{project.owner_kind}</span>
         )}
@@ -357,7 +400,13 @@ function ProjectCard({
       )}
       <div className="mt-3 flex-1" />
       <div className="mt-3 space-y-2 border-t border-border pt-3">
-        {project.status === "planning" ? (
+        {isWorkbench ? (
+          <p className="text-[11px] text-muted-foreground">
+            {project.status === "done"
+              ? "Closed — direction chosen"
+              : "Open to lay out directions and hand parts to the Executive →"}
+          </p>
+        ) : project.status === "planning" ? (
           <p className="text-[12px] font-medium text-amber-700">
             {isGrowth ? "Review the campaign plan →" : "Review the plan →"}
           </p>
@@ -392,15 +441,27 @@ function NewProjectDrawer({
   onClose: () => void;
   onCreated: (projectId: string) => void;
 }) {
+  const [driver, setDriver] = useState<"agent" | "me">("agent");
   const [goal, setGoal] = useState("");
   const [owner, setOwner] = useState<"manager" | "executive">("manager");
+  const [title, setTitle] = useState("");
+  const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const ready = driver === "agent" ? goal.trim().length > 0 : title.trim().length > 0;
+
   async function submit() {
-    if (!goal.trim()) return;
+    if (!ready) return;
     setBusy(true);
     setError("");
+    if (driver === "me") {
+      const res = await createWorkspaceProjectAction({ title: title.trim(), goal: notes.trim() || undefined });
+      setBusy(false);
+      if (res.ok && res.projectId) onCreated(res.projectId);
+      else setError(res.error ?? "Couldn't create the project.");
+      return;
+    }
     const res = await createProjectAction(goal.trim(), owner);
     setBusy(false);
     if (res.ok && res.projectId) onCreated(res.projectId);
@@ -412,7 +473,7 @@ function NewProjectDrawer({
       <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-4">
         <div>
           <p className="text-[12px] font-medium text-muted-foreground">New project</p>
-          <h2 className="text-[17px] font-semibold">Set a goal</h2>
+          <h2 className="text-[17px] font-semibold">{driver === "me" ? "Start a project you drive" : "Set a goal"}</h2>
         </div>
         <button onClick={onClose} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent" aria-label="Close">
           ✕
@@ -420,40 +481,93 @@ function NewProjectDrawer({
       </div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
         <div className="space-y-1.5">
-          <label className="text-[13px] font-medium">What do you want to accomplish?</label>
-          <Textarea
-            autoFocus
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            className="min-h-[110px]"
-            placeholder="e.g. Build and launch a landing page for our new offer, with copy, a launch email, and social teasers."
-          />
-          <p className="text-[11.5px] text-muted-foreground">
-            Describe the outcome. The agent decides the steps, who does each, and which parts are yours.
-          </p>
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-[13px] font-medium">Who should run it?</label>
+          <label className="text-[13px] font-medium">Who drives this?</label>
           <Segmented
             options={[
-              { value: "manager", label: "Manager" },
-              { value: "executive", label: "Executive" },
+              { value: "agent", label: "An agent runs it" },
+              { value: "me", label: "I drive it" },
             ]}
-            value={owner}
-            onChange={(v) => setOwner(v as "manager" | "executive")}
+            value={driver}
+            onChange={(v) => setDriver(v as "agent" | "me")}
           />
           <p className="text-[11.5px] text-muted-foreground">
-            {owner === "manager"
-              ? "Manager — hands-on, for operational projects (a launch, a campaign, a site)."
-              : "Executive — strategic, for company-scale initiatives (a new product, a market push)."}
+            {driver === "agent"
+              ? "A leadership agent plans the phases, delegates the work, and runs it to completion — you approve the plan and each deliverable."
+              : "You lay out the directions you're weighing and work through them. Hand any one to the Executive to research, source quotes, or run outreach — it reports back; nothing sends without you."}
           </p>
         </div>
+
+        {driver === "agent" ? (
+          <>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium">What do you want to accomplish?</label>
+              <Textarea
+                autoFocus
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                className="min-h-[110px]"
+                placeholder="e.g. Build and launch a landing page for our new offer, with copy, a launch email, and social teasers."
+              />
+              <p className="text-[11.5px] text-muted-foreground">
+                Describe the outcome. The agent decides the steps, who does each, and which parts are yours.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium">Who should run it?</label>
+              <Segmented
+                options={[
+                  { value: "manager", label: "Manager" },
+                  { value: "executive", label: "Executive" },
+                ]}
+                value={owner}
+                onChange={(v) => setOwner(v as "manager" | "executive")}
+              />
+              <p className="text-[11.5px] text-muted-foreground">
+                {owner === "manager"
+                  ? "Manager — hands-on, for operational projects (a launch, a campaign, a site)."
+                  : "Executive — strategic, for company-scale initiatives (a new product, a market push)."}
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium">Project name</label>
+              <Input
+                autoFocus
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Framing for the reactor"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[13px] font-medium">
+                What are you trying to decide or get done? <span className="font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <Textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="min-h-[80px]"
+                placeholder="e.g. Settle how to build the frame — weld it, machine aluminum, or buy off-the-shelf."
+              />
+              <p className="text-[11.5px] text-muted-foreground">
+                You&apos;ll add the directions you&apos;re weighing as workstreams once it&apos;s created.
+              </p>
+            </div>
+          </>
+        )}
         {error && <p className="text-[12.5px] text-destructive">{error}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-2 border-t border-border px-5 py-3.5">
-        <Button variant="success" className="flex-1" onClick={submit} disabled={busy || !goal.trim()}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          {busy ? "Planning the project…" : "Draft the plan"}
+        <Button variant="success" className="flex-1" onClick={submit} disabled={busy || !ready}>
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : driver === "me" ? (
+            <Compass className="h-4 w-4" />
+          ) : (
+            <Sparkles className="h-4 w-4" />
+          )}
+          {busy ? (driver === "me" ? "Creating…" : "Planning the project…") : driver === "me" ? "Create project" : "Draft the plan"}
         </Button>
       </div>
     </Drawer>
@@ -1229,4 +1343,405 @@ function packetToMarkdown(p: ProjectPacket): string {
     });
   });
   return out.join("\n\n").trim() + "\n";
+}
+
+/* ------------------- owner-led projects: workstream board ---------------- */
+
+const WS_STATUS: Record<WorkstreamStatus, { label: string; cls: string }> = {
+  open: { label: "Open", cls: "bg-slate-100 text-slate-600 border-slate-200" },
+  proposed: { label: "Proposal ready", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  delegated: { label: "Executive working", cls: "bg-sky-50 text-sky-700 border-sky-200" },
+  answered: { label: "Answered", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  chosen: { label: "Chosen", cls: "bg-emerald-600 text-white border-emerald-600" },
+  parked: { label: "Parked", cls: "bg-slate-100 text-slate-400 border-slate-200" },
+};
+
+const DELEGATE_META: Record<WorkstreamDelegateKind, { label: string; icon: typeof Search; hint: string }> = {
+  research: { label: "Research it", icon: Search, hint: "Live web research → a summary here" },
+  quotes: { label: "Get quotes", icon: FileText, hint: "Source suppliers → RFQ drafts in the Email Manager" },
+  outreach: { label: "Reach out", icon: Send, hint: "Find the right contacts → outreach drafts in the Email Manager" },
+};
+
+function refHrefFor(type: ProjectWorkstream["delegate_ref_type"], id: string | null): string | null {
+  if (!type || !id) return null;
+  return type === "quote_request" ? `/quotes?open=${id}` : `/outreach?open=${id}`;
+}
+
+function WorkstreamDrawer({
+  project,
+  onClose,
+  onChanged,
+  onDeleted,
+}: {
+  project: Project;
+  onClose: () => void;
+  onChanged: () => Promise<void> | void;
+  onDeleted: () => Promise<void> | void;
+}) {
+  const [items, setItems] = useState<ProjectWorkstream[] | null>(null);
+  const [newTitle, setNewTitle] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [outcome, setOutcome] = useState("");
+  const [busyClose, setBusyClose] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const load = useCallback(async () => {
+    setItems(await listWorkstreamsAction(project.id));
+  }, [project.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const done = project.status === "done";
+  const all = items ?? [];
+  const active = all.filter((w) => w.status !== "parked");
+  const parkedCount = all.filter((w) => w.status === "parked").length;
+  const chosen = all.find((w) => w.status === "chosen") ?? null;
+
+  async function add() {
+    const t = newTitle.trim();
+    if (!t) return;
+    setAdding(true);
+    const res = await addWorkstreamAction(project.id, { title: t });
+    setAdding(false);
+    if (res.ok) {
+      setNewTitle("");
+      await load();
+    }
+  }
+
+  async function pickWinner(workstreamId: string) {
+    await closeWorkspaceProjectAction(project.id, { chosenWorkstreamId: workstreamId });
+    await load();
+    await onChanged();
+  }
+
+  async function del() {
+    setDeleting(true);
+    await deleteProjectAction(project.id);
+    await onDeleted();
+  }
+
+  return (
+    <Drawer open onClose={onClose}>
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+              <Compass className="h-3 w-3" /> You&apos;re driving
+            </span>
+            {done && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                <CheckCircle2 className="h-3 w-3" /> Closed
+              </span>
+            )}
+          </div>
+          <h2 className="mt-2 truncate text-[17px] font-semibold">{project.title}</h2>
+          {project.goal && project.goal !== project.title && (
+            <p className="mt-0.5 line-clamp-2 text-[12.5px] text-muted-foreground">{project.goal}</p>
+          )}
+        </div>
+        <button onClick={onClose} className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent" aria-label="Close">
+          ✕
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        {done && project.summary && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Outcome</p>
+            <p className="mt-1 text-[13px] text-foreground/80">{project.summary}</p>
+          </div>
+        )}
+
+        {items === null ? (
+          <div className="flex items-center justify-center py-12 text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : active.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-6 text-center">
+            <p className="text-[13px] font-medium">No directions yet</p>
+            <p className="mx-auto mt-1 max-w-sm text-[12px] text-muted-foreground">
+              Add the directions you&apos;re weighing — e.g. for a reactor frame: &ldquo;weld it&rdquo;, &ldquo;machine
+              aluminum&rdquo;, &ldquo;buy off-the-shelf&rdquo;. Hand any one to the Executive to accelerate it.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {active.map((w) => (
+              <WorkstreamCard
+                key={w.id}
+                w={w}
+                done={done}
+                onPickWinner={pickWinner}
+                onChanged={async () => {
+                  await load();
+                  await onChanged();
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {!done && (
+          <div className="flex items-center gap-2">
+            <Input
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void add();
+              }}
+              placeholder="Add a direction you're weighing…"
+            />
+            <Button size="sm" onClick={add} disabled={adding || !newTitle.trim()}>
+              {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Add
+            </Button>
+          </div>
+        )}
+
+        {parkedCount > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            {parkedCount} parked direction{parkedCount === 1 ? "" : "s"} hidden.
+          </p>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-5 py-3.5">
+        {confirmDelete ? (
+          <div className="flex w-full items-center justify-between gap-2">
+            <span className="text-[12px] text-muted-foreground">Delete this project and all its directions?</span>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="destructive" onClick={del} disabled={deleting}>
+                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)} disabled={deleting}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : done ? (
+          <>
+            <span className="truncate text-[12px] text-muted-foreground">{chosen ? `Chosen: ${chosen.title}` : "Closed"}</span>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </Button>
+          </>
+        ) : closing ? (
+          <div className="w-full space-y-2">
+            <Textarea
+              autoFocus
+              value={outcome}
+              onChange={(e) => setOutcome(e.target.value)}
+              className="min-h-[60px]"
+              placeholder="What did you decide? (optional — recorded on the project)"
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setClosing(false)} disabled={busyClose}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="success"
+                onClick={async () => {
+                  setBusyClose(true);
+                  await closeWorkspaceProjectAction(project.id, { outcome: outcome.trim() || undefined });
+                  setBusyClose(false);
+                  setClosing(false);
+                  await load();
+                  await onChanged();
+                }}
+                disabled={busyClose}
+              >
+                {busyClose ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Close project
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)}>
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setClosing(true)}>
+              <CheckCircle2 className="h-3.5 w-3.5" /> Close project
+            </Button>
+          </>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
+function WorkstreamCard({
+  w,
+  done,
+  onChanged,
+  onPickWinner,
+}: {
+  w: ProjectWorkstream;
+  done: boolean;
+  onChanged: () => Promise<void>;
+  onPickWinner: (id: string) => Promise<void>;
+}) {
+  const [notes, setNotes] = useState(w.notes);
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [busy, setBusy] = useState("");
+  const status = WS_STATUS[w.status];
+  const href = refHrefFor(w.delegate_ref_type, w.delegate_ref_id);
+
+  async function saveNotes() {
+    setEditingNotes(false);
+    if (notes === w.notes) return;
+    await updateWorkstreamAction(w.id, { notes });
+    await onChanged();
+  }
+  async function propose(kind: WorkstreamDelegateKind) {
+    setBusy("propose");
+    await proposeWorkstreamAction(w.id, kind);
+    setBusy("");
+    await onChanged();
+  }
+  async function runIt() {
+    setBusy("run");
+    await runWorkstreamAction(w.id);
+    setBusy("");
+    await onChanged();
+  }
+  async function cancelIt() {
+    setBusy("cancel");
+    await cancelProposalAction(w.id);
+    setBusy("");
+    await onChanged();
+  }
+  async function setStatus(s: WorkstreamStatus) {
+    setBusy("status");
+    await updateWorkstreamAction(w.id, { status: s });
+    setBusy("");
+    await onChanged();
+  }
+  async function remove() {
+    setBusy("delete");
+    await deleteWorkstreamAction(w.id);
+    await onChanged();
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-3.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h4 className="truncate text-[13.5px] font-semibold">{w.title}</h4>
+          <span className={cn("mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10.5px] font-medium", status.cls)}>
+            {w.status === "delegated" && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+            {status.label}
+            {w.delegate_kind && w.status !== "open" ? ` · ${DELEGATE_META[w.delegate_kind].label}` : ""}
+          </span>
+        </div>
+        {!done && w.status !== "chosen" && (
+          <button
+            onClick={remove}
+            disabled={busy === "delete"}
+            className="rounded-lg p-1 text-muted-foreground/50 hover:bg-accent hover:text-destructive"
+            aria-label="Remove direction"
+          >
+            {busy === "delete" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2">
+        {editingNotes ? (
+          <Textarea
+            autoFocus
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onBlur={saveNotes}
+            className="min-h-[60px] text-[12.5px]"
+            placeholder="Your notes on this direction…"
+          />
+        ) : w.notes ? (
+          <p
+            className={cn("whitespace-pre-wrap text-[12.5px] text-foreground/75", !done && "cursor-text")}
+            onClick={() => !done && setEditingNotes(true)}
+          >
+            {w.notes}
+          </p>
+        ) : !done ? (
+          <button onClick={() => setEditingNotes(true)} className="text-[12px] text-muted-foreground hover:text-foreground">
+            + Add notes
+          </button>
+        ) : null}
+      </div>
+
+      {w.status === "proposed" && w.proposal && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+            <Sparkles className="h-3 w-3" /> Executive proposes
+          </p>
+          <p className="mt-1 text-[12.5px] text-foreground/80">{w.proposal.approach}</p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <Button size="sm" variant="success" onClick={runIt} disabled={busy === "run"}>
+              {busy === "run" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+              Approve &amp; run
+            </Button>
+            <Button size="sm" variant="ghost" onClick={cancelIt} disabled={busy === "cancel"}>
+              Cancel
+            </Button>
+          </div>
+          <p className="mt-2 text-[10.5px] text-muted-foreground">Sources &amp; drafts only — nothing sends. Drafts land in the Email Manager.</p>
+        </div>
+      )}
+
+      {(w.status === "delegated" || w.status === "answered") && w.findings && (
+        <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Findings</p>
+          <p className="mt-1 whitespace-pre-wrap text-[12.5px] text-foreground/80">{w.findings}</p>
+          {href && (
+            <a href={href} className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline">
+              {w.delegate_ref_type === "quote_request" ? "Track quotes" : "Track replies"}
+              <ChevronRight className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      )}
+
+      {!done && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          {w.status === "open" && (
+            <>
+              <span className="text-[11px] text-muted-foreground">Hand to Executive:</span>
+              {(Object.keys(DELEGATE_META) as WorkstreamDelegateKind[]).map((k) => {
+                const m = DELEGATE_META[k];
+                const Icon = m.icon;
+                return (
+                  <Button key={k} size="sm" variant="outline" onClick={() => propose(k)} disabled={busy === "propose"} title={m.hint}>
+                    {busy === "propose" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
+                    {m.label}
+                  </Button>
+                );
+              })}
+            </>
+          )}
+          {w.status === "delegated" && (
+            <Button size="sm" variant="ghost" onClick={() => setStatus("answered")} disabled={busy === "status"}>
+              <Check className="h-3.5 w-3.5" /> Mark answered
+            </Button>
+          )}
+          {(w.status === "open" || w.status === "delegated" || w.status === "answered") && (
+            <Button size="sm" variant="ghost" onClick={() => setStatus("parked")} disabled={busy === "status"}>
+              <Ban className="h-3.5 w-3.5" /> Park
+            </Button>
+          )}
+          <div className="flex-1" />
+          <Button size="sm" variant="outline" onClick={() => onPickWinner(w.id)} disabled={busy !== ""}>
+            <Crown className="h-3.5 w-3.5" /> This is the one
+          </Button>
+        </div>
+      )}
+    </div>
+  );
 }
