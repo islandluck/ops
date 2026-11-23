@@ -39,6 +39,7 @@ import { composeOutboundDrafts } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { createQuoteRequest, draftAllRfqs, sourceSuppliers } from "@/lib/quotes";
 import { createOutreachCampaign, draftAllOutreach, sourceContacts } from "@/lib/outreach";
+import { runSourcing } from "@/lib/sourcing";
 import {
   createContact as crmCreateContact,
   createDeal as crmCreateDeal,
@@ -592,6 +593,39 @@ function buildTools(workspaceId: string): ExecTool[] {
           };
         } catch (e) {
           return { summary: e instanceof Error ? e.message : "Couldn't run outreach." };
+        }
+      },
+    },
+    {
+      definition: {
+        name: "source_product",
+        description:
+          "Source the best PRODUCT TO BUY for the founder — a real purchasing-manager search. Given an item to buy (e.g. 'source me a 2-slice toaster under $40', 'find the cheapest standing desk'), it shops reputable retailers + the founder's preferred avenues on the live web, compares price, shipping, delivery speed, and seller safety, and recommends the single best buy with alternatives. Does NOT buy anything — returns a recommendation + a link to the Sourcing page. Use this to BUY a specific purchasable item; use source_quotes instead for custom/bulk B2B quotes from suppliers (RFQs).",
+        input_schema: {
+          type: "object",
+          properties: {
+            what: {
+              type: "string",
+              description:
+                "The item to buy + any constraints (budget, condition, delivery speed, brand), e.g. 'a used standing desk under $300, ships to NY'",
+            },
+          },
+          required: ["what"],
+        },
+      },
+      run: async (input) => {
+        const what = str(input.what).trim();
+        if (!what) return { summary: "Tell me what you want to buy, and any constraints (budget, condition, speed)." };
+        try {
+          const res = await runSourcing(workspaceId, what);
+          if (!res.ok) return { summary: res.error };
+          const r = res.request;
+          if (r.status === "failed" || !r.result) {
+            return { summary: `I couldn't complete the search${r.error ? `: ${r.error}` : "."}`, href: `/sourcing?open=${r.id}` };
+          }
+          return { summary: r.result.headline || "I found some options — see the Sourcing page.", href: `/sourcing?open=${r.id}` };
+        } catch (e) {
+          return { summary: e instanceof Error ? e.message : "Couldn't source that." };
         }
       },
     },
