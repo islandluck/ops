@@ -1873,6 +1873,9 @@ export interface EmailSettings {
   cadence: EmailCadence;
   /** The formatted signature card (optional; normalized on read). */
   signature_block?: SignatureBlock | null;
+  /** Owner plane only: embed an open-tracking pixel in outbound mail. Undefined for
+   *  members (who are never tracked) — the settings UI shows the control only when set. */
+  open_tracking?: boolean;
 }
 
 export interface EmailManagerState {
@@ -1935,6 +1938,11 @@ export interface OutboundDraft {
   scheduled_at: string | null;
   created_at: string;
   sent_at: string | null;
+  // Open tracking (owner outbound). opened_at = first pixel load; null = not opened yet.
+  // Approximate — image proxies/privacy pre-fetch can inflate. null token = untracked.
+  opened_at: string | null;
+  open_count: number;
+  last_opened_at: string | null;
 }
 
 /* ------------------------------- boardroom ------------------------------- */

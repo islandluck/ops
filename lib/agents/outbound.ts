@@ -1,8 +1,9 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNotNull, lte, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { APP_URL } from "@/lib/config";
 import { activityEvents, businessBriefs, outboundDrafts } from "@/lib/db/schema";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { scopeFilter } from "@/lib/access/scope";
@@ -96,7 +97,35 @@ function toDraft(r: typeof outboundDrafts.$inferSelect): OutboundDraft {
     scheduled_at: r.scheduled_at ? iso(r.scheduled_at) : null,
     created_at: iso(r.created_at),
     sent_at: r.sent_at ? iso(r.sent_at) : null,
+    opened_at: r.opened_at ? iso(r.opened_at) : null,
+    open_count: r.open_count ?? 0,
+    last_opened_at: r.last_opened_at ? iso(r.last_opened_at) : null,
   };
+}
+
+/** HTML-escape plain text so a text-only body can be wrapped into an HTML alternative. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Add a 1x1 open-tracking pixel to an outgoing message's HTML. When the message has
+ * no HTML alternative yet (no signature block), the plain body is wrapped into minimal
+ * HTML so the pixel has a home — otherwise the pixel is tucked in before </body> (or
+ * appended). The pixel is invisible and loads from our own public endpoint.
+ */
+function withTrackingPixel(html: string | undefined, plainBody: string, token: string): string {
+  const src = `${APP_URL.replace(/\/$/, "")}/api/e/${token}.gif`;
+  const pixel = `<img src="${src}" width="1" height="1" alt="" style="display:none;max-width:0;max-height:0;overflow:hidden;opacity:0" />`;
+  if (html && html.trim()) {
+    return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${pixel}</body>`) : html + pixel;
+  }
+  const safe = escapeHtml(plainBody).replace(/\r?\n/g, "<br>");
+  return `<div style="white-space:pre-wrap;font-family:inherit">${safe}</div>${pixel}`;
 }
 
 /** Draft one email per intent (single or bulk): compose in-voice, resolve the
@@ -221,6 +250,27 @@ export async function listOutboundDrafts(
   return rows.map(toDraft);
 }
 
+/** Recently sent mail (newest first) with open-tracking status, for the viewer's plane. */
+export async function listSentOutbound(
+  workspaceId: string,
+  scopeUserId: string | null = null,
+  limit = 20,
+): Promise<OutboundDraft[]> {
+  const rows = await db
+    .select()
+    .from(outboundDrafts)
+    .where(
+      and(
+        eq(outboundDrafts.workspace_id, workspaceId),
+        scopeFilter(outboundDrafts.member_user_id, scopeUserId),
+        eq(outboundDrafts.status, "sent"),
+      ),
+    )
+    .orderBy(desc(outboundDrafts.sent_at))
+    .limit(limit);
+  return rows.map(toDraft);
+}
+
 /** Edit a draft's recipient / cc / bcc / subject / body before sending. Editing the
  *  address marks the recipient as manually set. */
 export async function updateOutboundDraft(
@@ -268,6 +318,8 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
   // MEMBER's own Gmail, never the owner's.
   const token = await getValidAccessToken(row.workspace_id, "Gmail", row.member_user_id);
   if (!token) return markFailed("Gmail isn't connected.");
+  // Set when the owner's outbound gets an open-tracking pixel; stored on the sent row.
+  let trackingToken: string | null = null;
   try {
     // Pull each attachment's bytes from storage; a missing file is skipped, not fatal.
     const atts = ((row.attachments ?? []) as OutboundAttachment[]).slice(0, 10);
@@ -283,13 +335,28 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
     );
     const attachments = loaded.filter((a): a is NonNullable<typeof a> => Boolean(a));
     const signed = await buildSignedEmail(row.workspace_id, row.member_user_id, row.body);
+    // Open tracking is owner-plane only, and only when the owner hasn't turned it off.
+    // A random, unguessable token embedded as a hidden pixel lets the public
+    // /api/e/<token>.gif endpoint stamp opens back onto this row.
+    let html = signed.html;
+    if (!row.member_user_id) {
+      const [brief] = await db
+        .select({ on: businessBriefs.email_open_tracking })
+        .from(businessBriefs)
+        .where(eq(businessBriefs.workspace_id, row.workspace_id))
+        .limit(1);
+      if (brief?.on ?? true) {
+        trackingToken = randomBytes(18).toString("hex");
+        html = withTrackingPixel(signed.html, signed.body, trackingToken);
+      }
+    }
     await sendGmail(token, {
       to,
       cc: row.cc || undefined,
       bcc: row.bcc || undefined,
       subject: row.subject || "(no subject)",
       body: signed.body,
-      html: signed.html,
+      html,
       inlineImages: signed.inlineImages,
       attachments: attachments.length ? attachments : undefined,
     });
@@ -299,7 +366,7 @@ async function deliverOutbound(row: typeof outboundDrafts.$inferSelect): Promise
   const now = new Date();
   await db
     .update(outboundDrafts)
-    .set({ status: "sent", error: "", scheduled_at: null, sent_at: now, updated_at: now })
+    .set({ status: "sent", error: "", scheduled_at: null, sent_at: now, updated_at: now, tracking_token: trackingToken })
     .where(eq(outboundDrafts.id, id));
   // Activity log is the owner plane — record only the owner's sends.
   if (!row.member_user_id) {

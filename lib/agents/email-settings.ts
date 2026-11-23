@@ -47,6 +47,7 @@ export async function getEmailSettingsFor(
       reply_style: businessBriefs.email_reply_style,
       cadence: businessBriefs.email_triage_cadence,
       signature_block: businessBriefs.email_signature_block,
+      open_tracking: businessBriefs.email_open_tracking,
     })
     .from(businessBriefs)
     .where(eq(businessBriefs.workspace_id, workspaceId))
@@ -56,6 +57,8 @@ export async function getEmailSettingsFor(
     reply_style: b?.reply_style ?? "",
     cadence: normCadence(b?.cadence),
     signature_block: normalizeSignatureBlock(b?.signature_block),
+    // Owner plane carries the open-tracking preference (default on). Members never get it.
+    open_tracking: b?.open_tracking ?? true,
   };
 }
 
@@ -94,6 +97,9 @@ export async function saveEmailSettingsFor(
       email_reply_style: reply_style,
       email_triage_cadence: cadence,
       email_signature_block: signature_block,
+      // Only touch the toggle when the caller carried it (the owner settings form) —
+      // a save that omits it (undefined) leaves the stored preference as-is.
+      ...(settings.open_tracking === undefined ? {} : { email_open_tracking: settings.open_tracking }),
       updated_at: new Date(),
     })
     .where(eq(businessBriefs.workspace_id, workspaceId));

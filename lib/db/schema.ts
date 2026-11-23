@@ -176,6 +176,9 @@ export const businessBriefs = pgTable("business_briefs", {
   // Auto-triage cadence: off | hourly | daily. Drives runDueEmailTriage (never auto-sends).
   email_triage_cadence: text("email_triage_cadence").notNull().default("off"),
   email_triage_last_run_at: timestamp("email_triage_last_run_at", { withTimezone: true }),
+  // Owner-plane toggle: embed a 1x1 open-tracking pixel in the owner's outbound mail.
+  // Opens are approximate (image proxies / privacy pre-fetch inflate them). Owner only.
+  email_open_tracking: boolean("email_open_tracking").notNull().default(true),
   approval_rules: jsonb("approval_rules").$type<ApprovalRule[]>().notNull().default([]),
   budget_limits: jsonb("budget_limits")
     .$type<{ label: string; amount: number; period: string }[]>()
@@ -479,8 +482,19 @@ export const outboundDrafts = pgTable(
     created_at: createdAt,
     updated_at: updatedAt,
     sent_at: timestamp("sent_at", { withTimezone: true }),
+    // Open tracking (owner plane only). A random, unguessable token is embedded in the
+    // sent email as a 1x1 pixel; the public /api/e/<token>.gif endpoint stamps these on
+    // load. Opens are APPROXIMATE — Apple Mail/Gmail image proxies pre-fetch and cache,
+    // so opened_at (first load) is the trustworthy signal, counts less so.
+    tracking_token: text("tracking_token"),
+    opened_at: timestamp("opened_at", { withTimezone: true }),
+    open_count: integer("open_count").notNull().default(0),
+    last_opened_at: timestamp("last_opened_at", { withTimezone: true }),
   },
-  (t) => [index("outbound_drafts_ws_idx").on(t.workspace_id, t.status)],
+  (t) => [
+    index("outbound_drafts_ws_idx").on(t.workspace_id, t.status),
+    uniqueIndex("outbound_drafts_token_uniq").on(t.tracking_token),
+  ],
 );
 
 /**

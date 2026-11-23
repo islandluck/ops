@@ -119,6 +119,7 @@ import {
   discardOutboundDraft,
   flushDueOutboundDrafts,
   listOutboundDrafts,
+  listSentOutbound,
   refineOutboundDraft,
   regenerateOutboundDraft,
   removeOutboundAttachment,
@@ -2871,6 +2872,16 @@ export async function listOutboundDraftsAction() {
   if (!ws) return [];
   const { scopeUserId } = await getViewer(user.id, ws);
   return listOutboundDrafts(ws, scopeUserId);
+}
+
+/** Recently sent mail with open-tracking status (owner outbound shows opens). */
+export async function listSentOutboundAction() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  const { scopeUserId } = await getViewer(user.id, ws);
+  return listSentOutbound(ws, scopeUserId);
 }
 
 /** Edit a draft's recipient / cc / bcc / subject / body before sending. */
