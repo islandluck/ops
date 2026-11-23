@@ -624,6 +624,13 @@
       "when": 1795379224775,
       "tag": "0088_late_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1795410454575,
+      "tag": "0089_last_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }

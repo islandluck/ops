@@ -91,12 +91,16 @@ import type {
   Priority,
   ProjectPlan,
   ProjectStatus,
+  ProjectWorkstream,
   RecipientCandidate,
   RiskLevel,
   ScreeningQuestion,
   SignatureBlock,
   SourceDistillation,
   TaskStatus,
+  WorkstreamDelegateKind,
+  WorkstreamProposal,
+  WorkstreamStatus,
 } from "@/lib/types";
 
 const createdAt = timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
@@ -1298,6 +1302,35 @@ export const projects = pgTable("projects", {
 }, (t) => [
   index("projects_ws_created_idx").on(t.workspace_id, t.created_at),
   index("projects_ws_status_idx").on(t.workspace_id, t.status),
+]);
+
+/** A parallel direction within an owner-led project (project.kind === "workspace").
+ *  The owner authors these; each can be handed to the Executive, which proposes an
+ *  approach, then (on approval) runs a read-only accelerator and writes findings back. */
+export const projectWorkstreams = pgTable("project_workstreams", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  project_id: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  notes: text("notes").notNull().default(""),
+  status: text("status").$type<WorkstreamStatus>().notNull().default("open"),
+  position: integer("position").notNull().default(0),
+  delegate_kind: text("delegate_kind").$type<WorkstreamDelegateKind>(),
+  /** The Executive's proposed approach, awaiting the owner's go (status "proposed"). */
+  proposal: jsonb("proposal").$type<WorkstreamProposal>(),
+  /** Linkage to the tracked entity a run created (a quote request / outreach campaign)
+   *  — ref_id is a plain text id (no cross-table FK), so its live status shows here. */
+  delegate_ref_type: text("delegate_ref_type").$type<"quote_request" | "outreach_campaign">(),
+  delegate_ref_id: text("delegate_ref_id"),
+  findings: text("findings").notNull().default(""),
+  created_at: createdAt,
+  updated_at: updatedAt,
+}, (t) => [
+  index("project_workstreams_ws_project_idx").on(t.workspace_id, t.project_id),
 ]);
 
 /** Follower-count snapshots for a growth campaign — the progress trend vs goal. */

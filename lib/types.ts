@@ -711,6 +711,65 @@ export interface ProjectPlan {
   growth?: GrowthConfig;
 }
 
+/* ----------------------------- Owner-led projects ----------------------------- */
+
+/** project.kind === "workspace" marks an owner-led project: the founder drives it
+ *  and hands individual workstreams to the Executive. (null = agent-run project,
+ *  "growth" = a follower-growth campaign.) */
+export const WORKSPACE_PROJECT_KIND = "workspace";
+
+/** How one workstream (a parallel direction the owner is weighing) is progressing. */
+export type WorkstreamStatus =
+  | "open" //       the owner is driving it themselves
+  | "proposed" //   the Executive proposed an approach, awaiting the owner's go
+  | "delegated" //  the Executive ran it — work is live (sourcing / drafts / research)
+  | "answered" //   results are in; the branch has what it needs for a decision
+  | "chosen" //     the winning direction — closing the project
+  | "parked"; //    set aside (a direction the owner decided against)
+
+/** Which Executive accelerator a workstream can be handed to. All three already
+ *  exist as Executive tools and never send — they draft/source, you approve. */
+export type WorkstreamDelegateKind = "research" | "quotes" | "outreach";
+
+/** The Executive's proposed approach for a delegated workstream, shown to the owner
+ *  to approve BEFORE anything is sourced or drafted (propose-first). The params are
+ *  exactly what the accelerator runs with on approval. */
+export interface WorkstreamProposal {
+  kind: WorkstreamDelegateKind;
+  /** Plain-English plan the owner reads ("I'll RFQ ~5 aluminum fabricators…"). */
+  approach: string;
+  title?: string; //        quotes / outreach: the entity title
+  spec?: string; //         quotes: the RFQ spec
+  target_count?: number; // quotes / outreach: how many to source
+  description?: string; //  outreach: campaign description
+  target_roles?: string; // outreach: who to reach (roles / titles)
+  query?: string; //        research: the question to look into
+  created_at: string; //    ISO timestamp
+}
+
+/** A parallel direction within an owner-led project (e.g. "weld it" vs "buy it"). */
+export interface ProjectWorkstream {
+  id: string;
+  project_id: string;
+  title: string;
+  /** The owner's own notes / thinking on this direction. */
+  notes: string;
+  status: WorkstreamStatus;
+  position: number;
+  /** Set once handed to the Executive. */
+  delegate_kind: WorkstreamDelegateKind | null;
+  /** The Executive's proposed approach, awaiting approval (status "proposed"). */
+  proposal: WorkstreamProposal | null;
+  /** The tracked entity a run created, linked back so its live status shows here. */
+  delegate_ref_type: "quote_request" | "outreach_campaign" | null;
+  delegate_ref_id: string | null;
+  /** The Executive's write-back once results exist (research summary, or a one-line
+   *  status of the sourced suppliers / contacts + drafted outreach). */
+  findings: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A follower-count reading over the life of a growth campaign. */
 export interface FollowerSnapshot {
   followers: number;

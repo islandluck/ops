@@ -282,6 +282,18 @@ import {
   getProject,
   listProjects,
 } from "@/lib/agents/project";
+import {
+  addWorkstream,
+  cancelProposal,
+  closeWorkspaceProject,
+  createWorkspaceProject,
+  deleteWorkstream,
+  listWorkstreams,
+  proposeWorkstream,
+  runWorkstream,
+  updateWorkstream,
+} from "@/lib/workstreams";
+import type { ProjectWorkstream, WorkstreamDelegateKind, WorkstreamStatus } from "@/lib/types";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   addGoal,
@@ -1157,6 +1169,111 @@ export async function getProjectAction(projectId: string): Promise<Project | nul
     return mine.find((p) => p.id === projectId) ?? null;
   }
   return getProject(ws, projectId);
+}
+
+/* ----------------------- owner-led projects (workstreams) ---------------- */
+
+/** Start an owner-led project — the founder drives it; agents assist per-branch. */
+export async function createWorkspaceProjectAction(input: {
+  title: string;
+  goal?: string;
+}): Promise<{ ok: boolean; projectId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can start new projects." };
+  return createWorkspaceProject(ws, input);
+}
+
+/** The directions (workstreams) under an owner-led project. */
+export async function listWorkstreamsAction(projectId: string): Promise<ProjectWorkstream[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return [];
+  return listWorkstreams(ws, projectId);
+}
+
+export async function addWorkstreamAction(
+  projectId: string,
+  input: { title: string; notes?: string },
+): Promise<{ ok: boolean; workstream?: ProjectWorkstream; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can edit this project." };
+  return addWorkstream(ws, projectId, input);
+}
+
+export async function updateWorkstreamAction(
+  id: string,
+  patch: { title?: string; notes?: string; status?: WorkstreamStatus },
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can edit this project." };
+  return updateWorkstream(ws, id, patch);
+}
+
+export async function deleteWorkstreamAction(id: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can edit this project." };
+  return deleteWorkstream(ws, id);
+}
+
+/** Ask the Executive to propose an approach for a branch (propose-first; nothing runs). */
+export async function proposeWorkstreamAction(
+  id: string,
+  kind: WorkstreamDelegateKind,
+): Promise<{ ok: boolean; workstream?: ProjectWorkstream; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can delegate." };
+  return proposeWorkstream(ws, id, kind);
+}
+
+/** Discard a pending proposal — back to the owner driving the branch. */
+export async function cancelProposalAction(id: string): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can delegate." };
+  return cancelProposal(ws, id);
+}
+
+/** Approve a proposal and run it — sources/drafts/researches, writes findings back. */
+export async function runWorkstreamAction(
+  id: string,
+): Promise<{ ok: boolean; summary?: string; href?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can delegate." };
+  return runWorkstream(ws, id);
+}
+
+/** Close an owner-led project, recording the chosen direction + outcome. */
+export async function closeWorkspaceProjectAction(
+  projectId: string,
+  input: { chosenWorkstreamId?: string; outcome?: string },
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can close this project." };
+  return closeWorkspaceProject(ws, projectId, input);
 }
 
 /* --------------------------- growth campaigns ---------------------------- */
