@@ -305,7 +305,16 @@ import {
   runSourcing,
   updateSourcingSource,
 } from "@/lib/sourcing";
-import type { SourcingRequest, SourcingSource } from "@/lib/types";
+import {
+  beginNetworkingPlan,
+  buildNetworkingPlan,
+  closeNetworkingTarget,
+  createNetworkingTarget,
+  deleteNetworkingTarget,
+  getNetworkingTarget,
+  listNetworkingTargets,
+} from "@/lib/networking";
+import type { NetworkingTarget, SourcingRequest, SourcingSource } from "@/lib/types";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   addGoal,
@@ -1287,6 +1296,62 @@ export async function closeWorkspaceProjectAction(
   if (!ws) return { ok: false, error: "No workspace." };
   if ((await getViewer(user.id, ws)).isMember) return { ok: false, error: "Only the workspace owner can close this project." };
   return closeWorkspaceProject(ws, projectId, input);
+}
+
+/* ------------------------------ networking ------------------------------ */
+// Owner-only: Networking stages owner-plane email drafts + reads the workspace CRM.
+
+async function networkingWs(): Promise<{ ws: string } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { error: "No workspace." };
+  if ((await getViewer(user.id, ws)).isMember) return { error: "Only the workspace owner can use Networking." };
+  return { ws };
+}
+
+export async function listNetworkingTargetsAction(): Promise<NetworkingTarget[]> {
+  const r = await networkingWs();
+  if ("error" in r) return [];
+  return listNetworkingTargets(r.ws);
+}
+
+export async function getNetworkingTargetAction(id: string): Promise<NetworkingTarget | null> {
+  const r = await networkingWs();
+  if ("error" in r) return null;
+  return getNetworkingTarget(r.ws, id);
+}
+
+export async function createNetworkingTargetAction(input: { who: string; context: string }) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return createNetworkingTarget(r.ws, input);
+}
+
+/** Research the target and draft (or redraft) the networking plan. */
+export async function buildNetworkingPlanAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return buildNetworkingPlan(r.ws, id);
+}
+
+/** Begin the plan — stage its friendly intros into the Email Manager to approve + send. */
+export async function beginNetworkingPlanAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return beginNetworkingPlan(r.ws, id);
+}
+
+export async function closeNetworkingTargetAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return closeNetworkingTarget(r.ws, id);
+}
+
+export async function deleteNetworkingTargetAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return deleteNetworkingTarget(r.ws, id);
 }
 
 /* ------------------------------- sourcing -------------------------------- */

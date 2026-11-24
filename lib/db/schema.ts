@@ -95,6 +95,7 @@ import type {
   RecipientCandidate,
   RiskLevel,
   ScreeningQuestion,
+  NetworkingPlan,
   SignatureBlock,
   SourceDistillation,
   SourcingResult,
@@ -1376,6 +1377,21 @@ export const sourcingRequests = pgTable("sourcing_requests", {
   created_at: createdAt,
   updated_at: updatedAt,
 }, (t) => [index("sourcing_requests_ws_created_idx").on(t.workspace_id, t.created_at)]);
+
+/** A networking target ("help me network my way to X") + the agent's drafted plan.
+ *  Guided only (v1); the plan is reviewed before anything runs. Never auto-sends. */
+export const networkingTargets = pgTable("networking_targets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  who: text("who").notNull().default(""),
+  context: text("context").notNull().default(""),
+  status: text("status").notNull().default("planning"),
+  plan: jsonb("plan").$type<NetworkingPlan | null>(),
+  created_at: createdAt,
+  updated_at: updatedAt,
+}, (t) => [index("networking_targets_ws_idx").on(t.workspace_id, t.status)]);
 
 /** Follower-count snapshots for a growth campaign — the progress trend vs goal. */
 export const followerSnapshots = pgTable("follower_snapshots", {

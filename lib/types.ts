@@ -2648,3 +2648,76 @@ export interface Opportunity {
   project_id: string | null;
   created_at: string;
 }
+
+/* ------------------------------ networking ------------------------------ */
+
+export type NetworkingStatus = "planning" | "planned" | "active" | "closed";
+
+/** A person surfaced in a networking plan. */
+export interface NetworkingPerson {
+  name: string;
+  /** Title / affiliation. */
+  role: string;
+  company: string;
+  relation: "target" | "warm_path" | "direct";
+  /** How you know them (warm path) or why they're relevant. */
+  note: string;
+  /** Their connection to the target (warm path). */
+  connection: string;
+}
+
+/** A direct way to reach the target or their org. */
+export interface NetworkingChannel {
+  kind: "email" | "x" | "linkedin" | "web";
+  /** Display label, e.g. "Email", "X / Twitter", "LinkedIn". */
+  label: string;
+  /** Email address or profile / contact URL. */
+  value: string;
+  /** Confidence / "accepts cold intros" / source note. */
+  note: string;
+}
+
+/** An event the target or adjacent people may attend. */
+export interface NetworkingEvent {
+  name: string;
+  when: string;
+  where: string;
+  why: string;
+  url: string | null;
+}
+
+/** A ready-to-stage friendly intro email (never sent automatically). */
+export interface NetworkingDraft {
+  to_name: string;
+  /** "" when there's no reachable email yet. */
+  to_email: string;
+  /** e.g. "Direct intro to Jeff Bezos", "Warm intro via Jane Doe". */
+  purpose: string;
+  subject: string;
+  body: string;
+  /** Set once staged into the Email Manager outbound queue. */
+  draft_id: string | null;
+}
+
+/** The networking plan the agent drafts for a target — reviewed before anything runs. */
+export interface NetworkingPlan {
+  summary: string;
+  target_research: string;
+  events: NetworkingEvent[];
+  warm_paths: NetworkingPerson[];
+  channels: NetworkingChannel[];
+  drafts: NetworkingDraft[];
+  steps: string[];
+}
+
+export interface NetworkingTarget {
+  id: string;
+  /** Who / what outcome you're networking toward, e.g. "Jeff Bezos". */
+  who: string;
+  /** Your angle / why / the ask (the guided intake). */
+  context: string;
+  status: NetworkingStatus;
+  plan: NetworkingPlan | null;
+  created_at: string;
+  updated_at: string;
+}
