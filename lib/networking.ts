@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { businessBriefs, networkingTargets, opportunities } from "@/lib/db/schema";
 import { listCompanies, listContacts } from "@/lib/crm";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
+import { stageDraftTweet } from "@/lib/agents/social-bulk";
 import { planNetworking } from "@/lib/ai/networking";
 import type { NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
 
@@ -121,10 +122,12 @@ async function gatherOpportunities(workspaceId: string): Promise<string> {
   }
 }
 
-/** Research the target and draft (or redraft) the networking plan. */
+/** Research the target and draft (or redraft) the networking plan. `direction` lets the
+ *  founder steer a regenerate ("focus on the warm path via X", "skip cold email"). */
 export async function buildNetworkingPlan(
   workspaceId: string,
   id: string,
+  direction?: string,
 ): Promise<{ ok: boolean; target?: NetworkingTarget; error?: string }> {
   const target = await getNetworkingTarget(workspaceId, id);
   if (!target) return { ok: false, error: "Target not found." };
@@ -151,6 +154,7 @@ export async function buildNetworkingPlan(
       companyDescription: brief?.desc ?? "",
       network,
       opportunities: opps,
+      direction,
     });
     const [row] = await db
       .update(networkingTargets)
@@ -181,11 +185,25 @@ export async function beginNetworkingPlan(
   if (!plan.drafts.length) return { ok: false, error: "This plan has no intro emails to stage." };
 
   let staged = 0;
+  const intent = (d: NetworkingPlan["drafts"][number]) =>
+    `Networking: ${target.who}${d.purpose ? ` — ${d.purpose}` : ""}`;
   const drafts = await Promise.all(
     plan.drafts.map(async (d) => {
       if (d.draft_id) return d; // already staged — don't duplicate
       if (!d.body.trim()) return d;
       try {
+        // A TWEET goes to the social agent's queue — NEVER the Email Manager.
+        if (d.channel === "x") {
+          const res = await stageDraftTweet(workspaceId, { text: d.body }, { name: "Networking" });
+          if (res.ok) {
+            staged++;
+            return { ...d, draft_id: res.taskId };
+          }
+          return d;
+        }
+        // LinkedIn has no API — leave it for the founder to send manually from the plan.
+        if (d.channel === "linkedin") return d;
+        // Email → the Email Manager outbound queue.
         const res = await stageOutboundDraft(
           workspaceId,
           {
@@ -193,7 +211,7 @@ export async function beginNetworkingPlan(
             subject: d.subject || "Quick hello",
             body: d.body,
             recipientName: d.to_name,
-            intent: `Networking: ${target.who}${d.purpose ? ` — ${d.purpose}` : ""}`,
+            intent: intent(d),
           },
           null,
         );
@@ -211,4 +229,62 @@ export async function beginNetworkingPlan(
     .where(and(eq(networkingTargets.workspace_id, workspaceId), eq(networkingTargets.id, id)))
     .returning();
   return { ok: true, target: toTarget(row), staged };
+}
+
+/** Clip a founder-edited plan to safe sizes before saving (owner-edited, so trusted —
+ *  this just guards storage). Preserves channels + any draft_id already set. */
+function normalizePlan(plan: NetworkingPlan): NetworkingPlan {
+  const s = (v: unknown, n: number) => String(v ?? "").slice(0, n);
+  const list = (v: unknown, n: number, each: number) =>
+    Array.isArray(v) ? v.map((x) => s(x, each)).filter(Boolean).slice(0, n) : [];
+  return {
+    summary: s(plan.summary, 1500),
+    target_research: s(plan.target_research, 2000),
+    events: (plan.events ?? []).slice(0, 10).map((e) => ({
+      name: s(e.name, 200),
+      when: s(e.when, 80),
+      where: s(e.where, 120),
+      why: s(e.why, 400),
+      url: e.url && /^https?:\/\//i.test(e.url) ? e.url.slice(0, 600) : null,
+    })),
+    warm_paths: (plan.warm_paths ?? []).slice(0, 12).map((p) => ({
+      name: s(p.name, 120),
+      role: s(p.role, 120),
+      company: s(p.company, 120),
+      relation: "warm_path" as const,
+      note: s(p.note, 400),
+      connection: s(p.connection, 400),
+    })),
+    channels: (plan.channels ?? []).slice(0, 10).map((c) => ({
+      kind: c.kind === "email" || c.kind === "x" || c.kind === "linkedin" ? c.kind : "web",
+      label: s(c.label, 40),
+      value: s(c.value, 600),
+      note: s(c.note, 300),
+    })),
+    drafts: (plan.drafts ?? []).slice(0, 6).map((d) => ({
+      channel: d.channel === "x" || d.channel === "linkedin" ? d.channel : "email",
+      to_name: s(d.to_name, 120),
+      to_email: s(d.to_email, 200),
+      purpose: s(d.purpose, 200),
+      subject: s(d.subject, 200),
+      body: s(d.body, 4000),
+      draft_id: d.draft_id ?? null,
+    })),
+    steps: list(plan.steps, 10, 300),
+  };
+}
+
+/** Save founder edits to a plan (editable drafts / tweaks) before it's begun. */
+export async function updateNetworkingPlan(
+  workspaceId: string,
+  id: string,
+  plan: NetworkingPlan,
+): Promise<{ ok: boolean; target?: NetworkingTarget; error?: string }> {
+  const [row] = await db
+    .update(networkingTargets)
+    .set({ plan: normalizePlan(plan), updated_at: new Date() })
+    .where(and(eq(networkingTargets.workspace_id, workspaceId), eq(networkingTargets.id, id)))
+    .returning();
+  if (!row) return { ok: false, error: "Target not found." };
+  return { ok: true, target: toTarget(row) };
 }

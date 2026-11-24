@@ -2686,16 +2686,21 @@ export interface NetworkingEvent {
   url: string | null;
 }
 
-/** A ready-to-stage friendly intro email (never sent automatically). */
+/** A ready-to-stage friendly intro (never sent automatically). Routed by `channel`:
+ *  email → Email Manager, x → the Social queue (as a draft tweet), linkedin → manual. */
 export interface NetworkingDraft {
+  /** Which surface this belongs on — decides where "Begin" stages it. */
+  channel: "email" | "x" | "linkedin";
   to_name: string;
-  /** "" when there's no reachable email yet. */
+  /** Email address for an email intro; "" otherwise. */
   to_email: string;
   /** e.g. "Direct intro to Jeff Bezos", "Warm intro via Jane Doe". */
   purpose: string;
+  /** Email subject (email channel only; "" for x/linkedin). */
   subject: string;
+  /** The message: a full email body, a ≤280-char tweet, or a short LinkedIn note. */
   body: string;
-  /** Set once staged into the Email Manager outbound queue. */
+  /** Set once staged — an Email Manager draft id (email) or a Social task id (x). */
   draft_id: string | null;
 }
 

@@ -313,8 +313,9 @@ import {
   deleteNetworkingTarget,
   getNetworkingTarget,
   listNetworkingTargets,
+  updateNetworkingPlan,
 } from "@/lib/networking";
-import type { NetworkingTarget, SourcingRequest, SourcingSource } from "@/lib/types";
+import type { NetworkingPlan, NetworkingTarget, SourcingRequest, SourcingSource } from "@/lib/types";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   addGoal,
@@ -1328,11 +1329,18 @@ export async function createNetworkingTargetAction(input: { who: string; context
   return createNetworkingTarget(r.ws, input);
 }
 
-/** Research the target and draft (or redraft) the networking plan. */
-export async function buildNetworkingPlanAction(id: string) {
+/** Research the target and draft (or redraft) the networking plan. `direction` steers a regenerate. */
+export async function buildNetworkingPlanAction(id: string, direction?: string) {
   const r = await networkingWs();
   if ("error" in r) return { ok: false as const, error: r.error };
-  return buildNetworkingPlan(r.ws, id);
+  return buildNetworkingPlan(r.ws, id, direction);
+}
+
+/** Save founder edits to the plan (editable drafts / tweaks) before beginning it. */
+export async function updateNetworkingPlanAction(id: string, plan: NetworkingPlan) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return updateNetworkingPlan(r.ws, id, plan);
 }
 
 /** Begin the plan — stage its friendly intros into the Email Manager to approve + send. */

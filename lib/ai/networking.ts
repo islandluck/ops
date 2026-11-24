@@ -86,12 +86,17 @@ function coerceDraft(o: Record<string, unknown>): NetworkingDraft | null {
   const subject = clip(o.subject, 200);
   const body = clip(o.body, 4000);
   if (!subject && !body) return null;
+  const rawCh = str(o.channel).trim().toLowerCase();
+  const channel: NetworkingDraft["channel"] =
+    rawCh === "x" || rawCh === "twitter" || rawCh === "tweet" ? "x" : rawCh === "linkedin" ? "linkedin" : "email";
   const email = clip(o.to_email, 200);
   return {
+    channel,
     to_name: clip(o.to_name, 120),
-    to_email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : "",
+    // An email address only makes sense for the email channel.
+    to_email: channel === "email" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : "",
     purpose: clip(o.purpose, 200),
-    subject,
+    subject: channel === "email" ? subject : "",
     body,
     draft_id: null,
   };
@@ -129,6 +134,8 @@ export interface PlanNetworkingInput {
   network: string;
   /** Compact list of the workspace's current opportunities/events, if any. */
   opportunities: string;
+  /** Optional founder steer for a REGENERATE — "focus on the warm path via X", etc. */
+  direction?: string;
 }
 
 /**
@@ -148,10 +155,12 @@ export async function planNetworking(input: PlanNetworkingInput): Promise<Networ
     "WARM PATHS: you are given the founder's existing network (CRM people + companies they deal with). Identify who in THAT network plausibly has a tie to the target (same company, shared board, same field, mutual event) and would make a natural intro. Prefer a warm intro over a cold one. Research a contact's tie when it's worth confirming.",
     input.network ? `The founder's existing network:\n${input.network}` : "The founder has no CRM network loaded yet — focus on direct channels and events; note that warm paths are limited.",
     input.opportunities ? `Opportunities/events already on the founder's radar (reuse any that fit):\n${input.opportunities}` : "",
-    "Draft 1–3 FRIENDLY intro emails to set up (one to the target directly if a reachable email exists, and/or one asking a warm-path contact for an intro). Voice: brief, human, no hard pitch — introduce who we are, the genuine reason for reaching out (use the founder's stated angle), and suggest a coffee if they're ever in town or a short call if they're open to it. The goal is to expand the relationship, not to sell.",
+    "Draft 1–4 FRIENDLY intros to set up (e.g. one to the target directly if a reachable email exists, and/or one asking a warm-path contact for an intro). Voice: brief, human, no hard pitch — introduce who we are, the genuine reason for reaching out (use the founder's stated angle), and suggest a coffee if they're ever in town or a short call if they're open to it. The goal is to expand the relationship, not to sell.",
+    "EACH draft MUST be tagged with the right `channel`: `email` for an email (give a subject + body); `x` for a tweet or X DM (a short, warm message ≤280 chars, no subject); `linkedin` for a LinkedIn connection note (a short message, no subject). Match the channel to how that person is actually reachable — do NOT write a tweet as an email or vice-versa.",
     `The founder's angle / why they're reaching out: ${input.context || "(not specified — infer a genuine, specific reason from the research and the company)"}.`,
+    input.direction?.trim() ? `REVISION — the founder wants you to adjust this plan: ${input.direction.trim()}. Honor it and re-plan around it.` : "",
     "",
-    'When done, respond with ONLY this JSON (no prose, no fences): {"summary": string (2-3 sentences: the approach), "target_research": string (who they are + where they show up), "events": [{"name","when","where","why","url"}], "warm_paths": [{"name","role","company","note" (how the founder knows them),"connection" (their tie to the target)}], "channels": [{"kind":"email"|"x"|"linkedin"|"web","label","value" (the email or profile URL),"note"}], "drafts": [{"to_name","to_email" (if a real reachable email, else ""),"purpose","subject","body"}], "steps": string[] (the ordered action plan)}',
+    'When done, respond with ONLY this JSON (no prose, no fences): {"summary": string (2-3 sentences: the approach), "target_research": string (who they are + where they show up), "events": [{"name","when","where","why","url"}], "warm_paths": [{"name","role","company","note" (how the founder knows them),"connection" (their tie to the target)}], "channels": [{"kind":"email"|"x"|"linkedin"|"web","label","value" (the email or profile URL),"note"}], "drafts": [{"channel":"email"|"x"|"linkedin","to_name","to_email" (a real reachable email for email channel, else ""),"purpose","subject" (email only, else ""),"body"}], "steps": string[] (the ordered action plan)}',
   ]
     .filter(Boolean)
     .join("\n");

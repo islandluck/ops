@@ -268,6 +268,70 @@ async function stageXTask(
   return { taskId, assetId };
 }
 
+/** Stage ONE DRAFT tweet into the /social queue — pending your approval, NOT scheduled
+ *  and NOT posted. Used by Networking to hand a tweet to the social agent to schedule/send,
+ *  instead of mis-routing it to the Email Manager. Shows up as a reviewable X draft. */
+export async function stageDraftTweet(
+  workspaceId: string,
+  input: { text: string },
+  actor: { name: string },
+): Promise<{ ok: true; taskId: string } | { ok: false; error: string }> {
+  const text = fitToX(input.text.trim());
+  if (!text) return { ok: false, error: "The tweet is empty." };
+  const now = new Date();
+  const taskId = randomUUID();
+  const heading = `X post: ${text.slice(0, 54)}`.slice(0, 120);
+  const [socialAgent] = await db
+    .select({ id: agents.id, folder: agents.folder })
+    .from(agents)
+    .where(and(eq(agents.workspace_id, workspaceId), eq(agents.kind, "social")))
+    .limit(1);
+  const folder = socialAgent?.folder || "Social";
+  await db.insert(tasks).values({
+    id: taskId,
+    workspace_id: workspaceId,
+    category: "content",
+    title: heading,
+    description: "Ready-to-post X/Twitter draft from Networking. Approving publishes it to X (once connected), or schedule it.",
+    rationale: `Drafted by the Networking agent (${actor.name}).`,
+    status: "ready",
+    risk_level: "low",
+    priority: "medium",
+    due_at: null,
+    scheduled_at: null,
+    agent_id: socialAgent?.id ?? null,
+    created_by_type: "agent",
+    requires_approval: true,
+    approval_status: "pending",
+    execution_status: "none",
+    affected_systems: ["X (Twitter)"],
+    proposed_actions: 1,
+    impact_score: 40,
+    created_at: now,
+    updated_at: now,
+  });
+  await db.insert(taskAssets).values({
+    id: randomUUID(),
+    task_id: taskId,
+    asset_type: "social_post",
+    title: "X post",
+    content: text,
+    metadata: { channel: "X (Twitter)", chars: text.length },
+  });
+  await saveDocument({
+    workspaceId,
+    agentId: socialAgent?.id ?? null,
+    authorName: actor.name,
+    taskId,
+    taskTitle: heading,
+    name: heading,
+    content: text,
+    folder,
+    docType: "social_post",
+  });
+  return { ok: true, taskId };
+}
+
 /**
  * Turn pasted long text into an X thread. Applies a growth-marketer viral pass
  * (unless boost=false), then atomizes into ordered, self-contained tweets in the

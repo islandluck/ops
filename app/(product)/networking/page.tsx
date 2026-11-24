@@ -9,6 +9,7 @@ import {
   Loader2,
   Mail,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Sparkles,
@@ -25,8 +26,16 @@ import {
   createNetworkingTargetAction,
   deleteNetworkingTargetAction,
   listNetworkingTargetsAction,
+  updateNetworkingPlanAction,
 } from "@/app/actions";
-import type { NetworkingChannel, NetworkingStatus, NetworkingTarget } from "@/lib/types";
+import type { NetworkingChannel, NetworkingDraft, NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
+
+const CHANNEL_LABEL: Record<NetworkingDraft["channel"], string> = { email: "Email", x: "X / Twitter", linkedin: "LinkedIn" };
+const CHANNEL_DEST: Record<NetworkingDraft["channel"], string> = {
+  email: "Email Manager",
+  x: "Social queue",
+  linkedin: "send manually on LinkedIn",
+};
 
 const CONTEXT_PLACEHOLDER = `Why are you reaching out, and what's the ask?
 e.g. We just won a Bezos Earth Fund award and want to thank him + introduce our startup — hoping for a 15-min call or a coffee if he's ever in Nassau.`;
@@ -226,22 +235,30 @@ function TargetDetail({
 }) {
   const [busy, setBusy] = useState<"build" | "begin" | "close" | null>(null);
   const [notice, setNotice] = useState("");
+  const [stagedKinds, setStagedKinds] = useState<{ email: boolean; x: boolean }>({ email: false, x: false });
   const [error, setError] = useState("");
+  const [refine, setRefine] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [draftPlan, setDraftPlan] = useState<NetworkingPlan | null>(null);
+  const [saving, setSaving] = useState(false);
   const plan = target.plan;
   const planning = target.status === "planning";
+  const locked = target.status === "closed";
 
-  async function rebuild() {
+  async function rebuild(direction?: string) {
     if (busy) return;
     setBusy("build");
     setError("");
     setNotice("");
-    const r = await buildNetworkingPlanAction(target.id);
+    const r = await buildNetworkingPlanAction(target.id, direction);
     setBusy(null);
-    if (r.ok && r.target) onChange(r.target);
-    else setError(r.error ?? "Couldn't draft the plan.");
+    if (r.ok && r.target) {
+      onChange(r.target);
+      setRefine("");
+    } else setError(r.error ?? "Couldn't draft the plan.");
   }
   async function begin() {
-    if (busy) return;
+    if (busy || !plan) return;
     setBusy("begin");
     setError("");
     setNotice("");
@@ -249,7 +266,15 @@ function TargetDetail({
     setBusy(null);
     if (r.ok && r.target) {
       onChange(r.target);
-      setNotice(`Staged ${r.staged ?? 0} intro${r.staged === 1 ? "" : "s"} into your Email Manager to review and send.`);
+      const emails = plan.drafts.filter((d) => d.channel === "email").length;
+      const tweets = plan.drafts.filter((d) => d.channel === "x").length;
+      const li = plan.drafts.filter((d) => d.channel === "linkedin").length;
+      setStagedKinds({ email: emails > 0, x: tweets > 0 });
+      const parts: string[] = [];
+      if (emails) parts.push(`${emails} email${emails === 1 ? "" : "s"} → Email Manager`);
+      if (tweets) parts.push(`${tweets} tweet${tweets === 1 ? "" : "s"} → Social queue`);
+      const tail = li ? ` ${li} LinkedIn note${li === 1 ? "" : "s"} are yours to send manually below.` : "";
+      setNotice(parts.length ? `Staged ${parts.join(" · ")}.${tail}` : tail.trim() || "Nothing to stage.");
     } else setError(r.error ?? "Couldn't begin the plan.");
   }
   async function close() {
@@ -265,6 +290,25 @@ function TargetDetail({
     await deleteNetworkingTargetAction(target.id);
     onRemove(target.id);
   }
+  function startEdit() {
+    if (!plan) return;
+    setDraftPlan(structuredClone(plan));
+    setEditing(true);
+    setError("");
+    setNotice("");
+  }
+  async function saveEdit() {
+    if (!draftPlan) return;
+    setSaving(true);
+    setError("");
+    const r = await updateNetworkingPlanAction(target.id, draftPlan);
+    setSaving(false);
+    if (r.ok && r.target) {
+      onChange(r.target);
+      setEditing(false);
+      setDraftPlan(null);
+    } else setError(r.error ?? "Couldn't save your changes.");
+  }
 
   return (
     <div>
@@ -273,24 +317,43 @@ function TargetDetail({
           <ArrowLeft className="h-4 w-4" /> All targets
         </button>
         <span className="ml-auto" />
-        {plan && target.status !== "closed" && (
-          <Button size="sm" onClick={begin} disabled={busy !== null || !plan.drafts.length}>
-            {busy === "begin" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-            Begin — stage intros
-          </Button>
+        {editing ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setDraftPlan(null); }} disabled={saving}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={saveEdit} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Save changes
+            </Button>
+          </>
+        ) : (
+          <>
+            {plan && !locked && (
+              <Button size="sm" onClick={begin} disabled={busy !== null || !plan.drafts.length}>
+                {busy === "begin" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                Begin — stage intros
+              </Button>
+            )}
+            {plan && !locked && (
+              <Button size="sm" variant="outline" onClick={startEdit} disabled={busy !== null}>
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={() => rebuild()} disabled={busy !== null}>
+              {busy === "build" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {plan ? "Regenerate" : "Draft plan"}
+            </Button>
+            {!locked && (
+              <Button size="sm" variant="ghost" onClick={close} disabled={busy !== null}>
+                <Check className="h-4 w-4" /> Close
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={del} disabled={busy !== null} title="Delete target">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </>
         )}
-        <Button size="sm" variant="outline" onClick={rebuild} disabled={busy !== null}>
-          {busy === "build" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {plan ? "Regenerate" : "Draft plan"}
-        </Button>
-        {target.status !== "closed" && (
-          <Button size="sm" variant="ghost" onClick={close} disabled={busy !== null}>
-            <Check className="h-4 w-4" /> Close
-          </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={del} disabled={busy !== null} title="Delete target">
-          <Trash2 className="h-4 w-4" />
-        </Button>
       </div>
 
       <div className="mb-4">
@@ -299,13 +362,37 @@ function TargetDetail({
       </div>
 
       {notice && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12.5px] text-emerald-800">
           <span>{notice}</span>
-          <a href="/email" className="shrink-0 font-semibold underline underline-offset-2">Open Email Manager</a>
+          <span className="flex shrink-0 gap-3">
+            {stagedKinds.email && <a href="/email" className="font-semibold underline underline-offset-2">Email Manager</a>}
+            {stagedKinds.x && <a href="/social" className="font-semibold underline underline-offset-2">Social queue</a>}
+          </span>
         </div>
       )}
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12.5px] text-red-700">{error}</div>
+      )}
+
+      {/* Suggest a different route / add direction, then regenerate — before it's locked in. */}
+      {plan && !editing && !locked && (
+        <div className="mb-5 rounded-xl border border-border bg-muted/30 p-3">
+          <label className="text-[12px] font-medium">Suggest a different route or add direction</label>
+          <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+            <Textarea
+              value={refine}
+              onChange={(e) => setRefine(e.target.value)}
+              rows={2}
+              placeholder="e.g. Skip cold email — focus on a warm intro through Dana, and add an X reply to his latest post."
+              className="flex-1 text-[12.5px]"
+            />
+            <Button size="sm" variant="outline" disabled={busy !== null || !refine.trim()} onClick={() => rebuild(refine)} className="self-start">
+              {busy === "build" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Regenerate with this
+            </Button>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Or click Edit above to tweak the drafts and steps directly.</p>
+        </div>
       )}
 
       {planning && !plan ? (
@@ -317,6 +404,8 @@ function TargetDetail({
         <p className="rounded-lg border border-dashed border-border py-10 text-center text-[12.5px] text-muted-foreground">
           No plan yet — click “Draft plan”.
         </p>
+      ) : editing && draftPlan ? (
+        <PlanEditor plan={draftPlan} onChange={setDraftPlan} />
       ) : (
         <PlanView plan={plan} />
       )}
@@ -396,16 +485,26 @@ function PlanView({ plan }: { plan: NonNullable<NetworkingTarget["plan"]> }) {
           <div className="space-y-2.5">
             {plan.drafts.map((d, i) => (
               <div key={i} className="rounded-lg border border-border bg-card p-3">
-                <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-wrap items-start justify-between gap-2">
                   <p className="text-[12px] font-medium text-muted-foreground">
+                    <span
+                      className={cn(
+                        "mr-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                        d.channel === "x" ? "bg-sky-100 text-sky-700" : d.channel === "linkedin" ? "bg-blue-100 text-blue-700" : "bg-indigo-100 text-indigo-700",
+                      )}
+                    >
+                      {CHANNEL_LABEL[d.channel]}
+                    </span>
                     {d.purpose || "Intro"}
                     {d.to_name ? ` · to ${d.to_name}` : ""}
                     {d.to_email ? ` (${d.to_email})` : ""}
                   </p>
                   {d.draft_id ? (
                     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                      <Check className="h-3 w-3" /> Staged
+                      <Check className="h-3 w-3" /> In {CHANNEL_DEST[d.channel]}
                     </span>
+                  ) : d.channel === "linkedin" ? (
+                    <span className="shrink-0 text-[10px] font-medium text-muted-foreground">send manually</span>
                   ) : null}
                 </div>
                 {d.subject && <p className="mt-1.5 text-[13px] font-semibold">{d.subject}</p>}
@@ -414,7 +513,8 @@ function PlanView({ plan }: { plan: NonNullable<NetworkingTarget["plan"]> }) {
             ))}
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            “Begin” stages these into your Email Manager as editable drafts — nothing sends until you approve it there.
+            “Begin” routes each draft to the right place — emails to your Email Manager, tweets to your Social queue —
+            as editable drafts. LinkedIn notes are yours to send manually. Nothing sends until you approve it.
           </p>
         </Section>
       )}
@@ -433,6 +533,91 @@ function PlanView({ plan }: { plan: NonNullable<NetworkingTarget["plan"]> }) {
           </ol>
         </Section>
       )}
+    </div>
+  );
+}
+
+/** Edit the plan before locking it in — tweak/add/remove the intro drafts, the approach, the steps. */
+function PlanEditor({ plan, onChange }: { plan: NetworkingPlan; onChange: (p: NetworkingPlan) => void }) {
+  const set = (partial: Partial<NetworkingPlan>) => onChange({ ...plan, ...partial });
+  const setDraft = (i: number, partial: Partial<NetworkingDraft>) =>
+    set({ drafts: plan.drafts.map((d, j) => (j === i ? { ...d, ...partial } : d)) });
+  const removeDraft = (i: number) => set({ drafts: plan.drafts.filter((_, j) => j !== i) });
+  const addDraft = () =>
+    set({
+      drafts: [
+        ...plan.drafts,
+        { channel: "email", to_name: "", to_email: "", purpose: "", subject: "", body: "", draft_id: null },
+      ],
+    });
+  return (
+    <div className="space-y-6">
+      <div className="space-y-1.5">
+        <label className="text-[12px] font-medium">The approach</label>
+        <Textarea value={plan.summary} onChange={(e) => set({ summary: e.target.value })} rows={3} className="text-[12.5px]" />
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-600">Intro drafts</p>
+          <Button size="sm" variant="outline" onClick={addDraft}>
+            <Plus className="h-3.5 w-3.5" /> Add intro
+          </Button>
+        </div>
+        <div className="space-y-3">
+          {plan.drafts.map((d, i) => (
+            <div key={i} className="rounded-lg border border-border bg-card p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={d.channel}
+                  onChange={(e) => setDraft(i, { channel: e.target.value as NetworkingDraft["channel"] })}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-[12px]"
+                >
+                  <option value="email">Email</option>
+                  <option value="x">X / Twitter</option>
+                  <option value="linkedin">LinkedIn</option>
+                </select>
+                <Input value={d.to_name} onChange={(e) => setDraft(i, { to_name: e.target.value })} placeholder="To (name)" className="h-8 min-w-[120px] flex-1 text-[12.5px]" />
+                {d.channel === "email" && (
+                  <Input value={d.to_email} onChange={(e) => setDraft(i, { to_email: e.target.value })} placeholder="email@…" className="h-8 min-w-[140px] flex-1 text-[12.5px]" />
+                )}
+                <button onClick={() => removeDraft(i)} className="rounded p-1 text-muted-foreground hover:text-red-600" title="Remove">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+              <Input value={d.purpose} onChange={(e) => setDraft(i, { purpose: e.target.value })} placeholder="Purpose (e.g. Warm intro via Dana)" className="mt-2 h-8 text-[12px]" />
+              {d.channel === "email" && (
+                <Input value={d.subject} onChange={(e) => setDraft(i, { subject: e.target.value })} placeholder="Subject" className="mt-2 h-8 text-[13px] font-medium" />
+              )}
+              <Textarea
+                value={d.body}
+                onChange={(e) => setDraft(i, { body: e.target.value })}
+                rows={d.channel === "email" ? 6 : 3}
+                placeholder={d.channel === "x" ? "Tweet (≤280 chars)…" : d.channel === "linkedin" ? "Short LinkedIn note…" : "Email body…"}
+                className="mt-2 text-[12.5px]"
+              />
+              {d.draft_id && (
+                <p className="mt-1 text-[11px] text-muted-foreground">Already staged — edits here won’t change what’s already in {CHANNEL_DEST[d.channel]}.</p>
+              )}
+            </div>
+          ))}
+          {plan.drafts.length === 0 && (
+            <p className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[12px] text-muted-foreground">No drafts — add one.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-[12px] font-medium">The plan (one step per line)</label>
+        <Textarea
+          value={plan.steps.join("\n")}
+          onChange={(e) => set({ steps: e.target.value.split("\n") })}
+          rows={Math.max(3, plan.steps.length + 1)}
+          className="text-[12.5px]"
+        />
+      </div>
+
+      <p className="text-[11px] text-muted-foreground">Save changes above, then Begin to route the drafts to the right place.</p>
     </div>
   );
 }
