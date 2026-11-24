@@ -120,7 +120,10 @@ function escapeHtml(s: string): string {
  */
 function withTrackingPixel(html: string | undefined, plainBody: string, token: string): string {
   const src = `${APP_URL.replace(/\/$/, "")}/api/e/${token}.gif`;
-  const pixel = `<img src="${src}" width="1" height="1" alt="" style="display:none;max-width:0;max-height:0;overflow:hidden;opacity:0" />`;
+  // NOTE: never `display:none` / `width:0` — Gmail and many clients skip loading hidden
+  // images, which silently breaks open tracking. A 1x1 transparent gif is invisible on
+  // its own; we keep it displayed so proxies actually fetch it.
+  const pixel = `<img src="${src}" width="1" height="1" alt="" style="width:1px;height:1px;max-width:1px;max-height:1px;border:0;outline:none;opacity:0;overflow:hidden" />`;
   if (html && html.trim()) {
     return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${pixel}</body>`) : html + pixel;
   }

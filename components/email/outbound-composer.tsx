@@ -88,6 +88,7 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
   const [refiningId, setRefiningId] = useState<string | null>(null);
   const [bulkSending, setBulkSending] = useState(false);
   const [recentSent, setRecentSent] = useState<OutboundDraft[]>([]);
+  const [sentOpen, setSentOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,21 +355,37 @@ export function OutboundComposer({ onClose }: { onClose: () => void }) {
         )}
       </div>
 
-      {/* Recently sent — with open status */}
+      {/* Recently sent — collapsible, with open status */}
       {recentSent.length > 0 && (
         <div className="mt-5 border-t border-border pt-4">
-          <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-            Recently sent
-          </p>
-          <div className="space-y-1.5">
-            {recentSent.map((s) => (
-              <SentRow key={s.id} draft={s} />
-            ))}
-          </div>
-          <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground/70">
-            Opens are approximate — some mail apps (Apple Mail, Gmail) pre-load images, which can show
-            an open that didn&apos;t happen or hide repeat opens.
-          </p>
+          <button
+            type="button"
+            onClick={() => setSentOpen((v) => !v)}
+            className="flex w-full items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70 hover:text-foreground"
+          >
+            <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", sentOpen ? "" : "-rotate-90")} />
+            Recently sent ({recentSent.length})
+            {recentSent.some((s) => s.opened_at) && (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-emerald-700">
+                <MailOpen className="h-3 w-3" />
+                {recentSent.filter((s) => s.opened_at).length} opened
+              </span>
+            )}
+          </button>
+          {sentOpen && (
+            <>
+              <div className="mt-2 space-y-1.5">
+                {recentSent.map((s) => (
+                  <SentRow key={s.id} draft={s} />
+                ))}
+              </div>
+              <p className="mt-2 text-[10.5px] leading-snug text-muted-foreground/70">
+                Opens are approximate — some mail apps (Apple Mail, Gmail) pre-load images, which can show
+                an open that didn&apos;t happen or hide repeat opens. Tracking only works for mail sent from
+                the live app, not a local preview.
+              </p>
+            </>
+          )}
         </div>
       )}
     </div>
