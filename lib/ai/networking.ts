@@ -95,9 +95,11 @@ function coerceDraft(o: Record<string, unknown>): NetworkingDraft | null {
     to_name: clip(o.to_name, 120),
     // An email address only makes sense for the email channel.
     to_email: channel === "email" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : "",
+    to_company: clip(o.to_company, 120),
     purpose: clip(o.purpose, 200),
     subject: channel === "email" ? subject : "",
     body,
+    note: clip(o.note, 300),
     draft_id: null,
   };
 }
@@ -107,6 +109,8 @@ function coercePlan(obj: Record<string, unknown> | null, fallbackText: string): 
     return {
       summary: fallbackText.slice(0, 1500),
       target_research: "",
+      target_company: "",
+      target_domain: "",
       events: [],
       warm_paths: [],
       channels: [],
@@ -117,6 +121,8 @@ function coercePlan(obj: Record<string, unknown> | null, fallbackText: string): 
   return {
     summary: clip(obj.summary, 1500),
     target_research: clip(obj.target_research, 2000),
+    target_company: clip(obj.target_company, 120),
+    target_domain: clip(obj.target_domain, 120).replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/^www\./i, ""),
     events: arr(obj.events).map(coerceEvent).filter((e): e is NetworkingEvent => e !== null).slice(0, 8),
     warm_paths: arr(obj.warm_paths).map((o) => coercePerson(o, "warm_path")).filter((p): p is NetworkingPerson => p !== null).slice(0, 10),
     channels: arr(obj.channels).map(coerceChannel).filter((c): c is NetworkingChannel => c !== null).slice(0, 8),
@@ -157,10 +163,11 @@ export async function planNetworking(input: PlanNetworkingInput): Promise<Networ
     input.opportunities ? `Opportunities/events already on the founder's radar (reuse any that fit):\n${input.opportunities}` : "",
     "Draft 1–4 FRIENDLY intros to set up (e.g. one to the target directly if a reachable email exists, and/or one asking a warm-path contact for an intro). Voice: brief, human, no hard pitch — introduce who we are, the genuine reason for reaching out (use the founder's stated angle), and suggest a coffee if they're ever in town or a short call if they're open to it. The goal is to expand the relationship, not to sell.",
     "EACH draft MUST be tagged with the right `channel`: `email` for an email (give a subject + body); `x` for a tweet or X DM (a short, warm message ≤280 chars, no subject); `linkedin` for a LinkedIn connection note (a short message, no subject). Match the channel to how that person is actually reachable — do NOT write a tweet as an email or vice-versa.",
+    "For EVERY email draft, fill `to_company` with the recipient's organization (and put a real email in `to_email` only if you actually found one). A Hunter.io email lookup runs AFTER you — it uses the recipient's name + `to_company` to resolve a real address — so always give the org even when you don't have the email. Also set `target_company` and `target_domain` (bare domain like `amazon.com`) for the target's primary org so their org can be probed for reachable contacts.",
     `The founder's angle / why they're reaching out: ${input.context || "(not specified — infer a genuine, specific reason from the research and the company)"}.`,
     input.direction?.trim() ? `REVISION — the founder wants you to adjust this plan: ${input.direction.trim()}. Honor it and re-plan around it.` : "",
     "",
-    'When done, respond with ONLY this JSON (no prose, no fences): {"summary": string (2-3 sentences: the approach), "target_research": string (who they are + where they show up), "events": [{"name","when","where","why","url"}], "warm_paths": [{"name","role","company","note" (how the founder knows them),"connection" (their tie to the target)}], "channels": [{"kind":"email"|"x"|"linkedin"|"web","label","value" (the email or profile URL),"note"}], "drafts": [{"channel":"email"|"x"|"linkedin","to_name","to_email" (a real reachable email for email channel, else ""),"purpose","subject" (email only, else ""),"body"}], "steps": string[] (the ordered action plan)}',
+    'When done, respond with ONLY this JSON (no prose, no fences): {"summary": string (2-3 sentences: the approach), "target_research": string (who they are + where they show up), "target_company": string (their primary org), "target_domain": string (bare domain, e.g. "amazon.com"), "events": [{"name","when","where","why","url"}], "warm_paths": [{"name","role","company","note" (how the founder knows them),"connection" (their tie to the target)}], "channels": [{"kind":"email"|"x"|"linkedin"|"web","label","value" (the email or profile URL),"note"}], "drafts": [{"channel":"email"|"x"|"linkedin","to_name","to_company" (recipient org, for email),"to_email" (a real reachable email if you found one, else ""),"purpose","subject" (email only, else ""),"body"}], "steps": string[] (the ordered action plan)}',
   ]
     .filter(Boolean)
     .join("\n");

@@ -6,8 +6,9 @@ import { businessBriefs, networkingTargets, opportunities } from "@/lib/db/schem
 import { listCompanies, listContacts } from "@/lib/crm";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { stageDraftTweet } from "@/lib/agents/social-bulk";
+import { HUNTER_MIN_SCORE, domainSearch, findEmail, hunterConfigured } from "@/lib/integrations/hunter";
 import { planNetworking } from "@/lib/ai/networking";
-import type { NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
+import type { NetworkingChannel, NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
 
 /**
  * Networking (Intelligence → Networking), guided mode (v1). The founder points the agent
@@ -95,7 +96,7 @@ async function gatherNetwork(workspaceId: string): Promise<string> {
       .slice(0, 60)
       .map((c) => {
         const co = c.company_id ? nameById.get(c.company_id) : "";
-        return `- ${c.name}${c.title ? `, ${c.title}` : ""}${co ? ` @ ${co}` : ""}`;
+        return `- ${c.name}${c.title ? `, ${c.title}` : ""}${co ? ` @ ${co}` : ""}${c.email ? ` <${c.email}>` : ""}`;
       })
       .join("\n");
     const cos = companies.slice(0, 40).map((c) => `- ${c.name}`).join("\n");
@@ -120,6 +121,72 @@ async function gatherOpportunities(workspaceId: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+/**
+ * Do real Hunter.io work on a freshly drafted plan (when HUNTER_API_KEY is set): probe
+ * the target's org for a few reachable contacts, and resolve each email draft's recipient
+ * to a REAL address by name + company — so intros don't go to the Email Manager with a
+ * blank/guessed recipient. Best-effort + budgeted (protects Hunter credits); records what
+ * it found (or "no match") on each draft so the founder can see the work.
+ */
+async function hunterEnrich(plan: NetworkingPlan): Promise<NetworkingPlan> {
+  if (!hunterConfigured()) return plan;
+  const MAX_CALLS = 6;
+  let calls = 0;
+  const emailRe = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+  // 1) Probe the target's org for reachable execs/contacts → add as channels.
+  const channels: NetworkingChannel[] = [...plan.channels];
+  if ((plan.target_domain || plan.target_company) && calls < MAX_CALLS) {
+    calls++;
+    try {
+      const people = await domainSearch({
+        domain: plan.target_domain || null,
+        company: plan.target_company || null,
+        limit: 5,
+        seniority: "executive",
+      });
+      for (const p of people.slice(0, 3)) {
+        if (!p.email || channels.some((c) => c.value.toLowerCase() === p.email.toLowerCase())) continue;
+        const who = [p.first_name, p.last_name].filter(Boolean).join(" ");
+        channels.push({
+          kind: "email",
+          label: "Email",
+          value: p.email,
+          note: `Hunter · ${who || "contact"}${p.position ? `, ${p.position}` : ""}${p.confidence != null ? ` · ${p.confidence}%` : ""}`,
+        });
+      }
+    } catch {
+      /* best effort */
+    }
+  }
+
+  // 2) Resolve each email draft's recipient when we don't already have a real address.
+  const drafts = await Promise.all(
+    plan.drafts.map(async (d) => {
+      if (d.channel !== "email" || emailRe.test(d.to_email) || !d.to_name.trim()) return d;
+      const company = (d.to_company || plan.target_company).trim();
+      const domain = plan.target_domain.trim();
+      if (!company && !domain) return d;
+      if (calls >= MAX_CALLS) return { ...d, note: d.note || "Hunter lookup skipped (budget reached) — add an email." };
+      calls++;
+      try {
+        const hit = await findEmail({ fullName: d.to_name, company: company || null, domain: company ? null : domain || null });
+        if (hit.email && (hit.score == null || hit.score >= HUNTER_MIN_SCORE)) {
+          return { ...d, to_email: hit.email, note: `Hunter found ${hit.email}${hit.score != null ? ` (${hit.score}% confidence)` : ""}.` };
+        }
+        if (hit.email) {
+          return { ...d, note: `Hunter: low-confidence ${hit.email} (${hit.score ?? "?"}%) — verify before sending.` };
+        }
+        return { ...d, note: `Hunter: no confident email for ${d.to_name}${company ? ` at ${company}` : ""}.` };
+      } catch {
+        return d;
+      }
+    }),
+  );
+
+  return { ...plan, channels, drafts };
 }
 
 /** Research the target and draft (or redraft) the networking plan. `direction` lets the
@@ -156,9 +223,11 @@ export async function buildNetworkingPlan(
       opportunities: opps,
       direction,
     });
+    // Do real Hunter work: resolve recipients + probe the target's org (best-effort, budgeted).
+    const enriched = await hunterEnrich(plan);
     const [row] = await db
       .update(networkingTargets)
-      .set({ plan, status: "planned", updated_at: new Date() })
+      .set({ plan: enriched, status: "planned", updated_at: new Date() })
       .where(and(eq(networkingTargets.workspace_id, workspaceId), eq(networkingTargets.id, id)))
       .returning();
     return { ok: true, target: toTarget(row) };
@@ -240,6 +309,8 @@ function normalizePlan(plan: NetworkingPlan): NetworkingPlan {
   return {
     summary: s(plan.summary, 1500),
     target_research: s(plan.target_research, 2000),
+    target_company: s(plan.target_company, 120),
+    target_domain: s(plan.target_domain, 120),
     events: (plan.events ?? []).slice(0, 10).map((e) => ({
       name: s(e.name, 200),
       when: s(e.when, 80),
@@ -265,9 +336,11 @@ function normalizePlan(plan: NetworkingPlan): NetworkingPlan {
       channel: d.channel === "x" || d.channel === "linkedin" ? d.channel : "email",
       to_name: s(d.to_name, 120),
       to_email: s(d.to_email, 200),
+      to_company: s(d.to_company, 120),
       purpose: s(d.purpose, 200),
       subject: s(d.subject, 200),
       body: s(d.body, 4000),
+      note: s(d.note, 300),
       draft_id: d.draft_id ?? null,
     })),
     steps: list(plan.steps, 10, 300),

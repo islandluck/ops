@@ -507,6 +507,7 @@ function PlanView({ plan }: { plan: NonNullable<NetworkingTarget["plan"]> }) {
                     <span className="shrink-0 text-[10px] font-medium text-muted-foreground">send manually</span>
                   ) : null}
                 </div>
+                {d.note && <p className="mt-1 text-[11px] text-muted-foreground">🔎 {d.note}</p>}
                 {d.subject && <p className="mt-1.5 text-[13px] font-semibold">{d.subject}</p>}
                 <p className="mt-1 whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/90">{d.body}</p>
               </div>
@@ -547,7 +548,7 @@ function PlanEditor({ plan, onChange }: { plan: NetworkingPlan; onChange: (p: Ne
     set({
       drafts: [
         ...plan.drafts,
-        { channel: "email", to_name: "", to_email: "", purpose: "", subject: "", body: "", draft_id: null },
+        { channel: "email", to_name: "", to_email: "", to_company: "", purpose: "", subject: "", body: "", note: "", draft_id: null },
       ],
     });
   return (
@@ -577,9 +578,12 @@ function PlanEditor({ plan, onChange }: { plan: NetworkingPlan; onChange: (p: Ne
                   <option value="x">X / Twitter</option>
                   <option value="linkedin">LinkedIn</option>
                 </select>
-                <Input value={d.to_name} onChange={(e) => setDraft(i, { to_name: e.target.value })} placeholder="To (name)" className="h-8 min-w-[120px] flex-1 text-[12.5px]" />
+                <Input value={d.to_name} onChange={(e) => setDraft(i, { to_name: e.target.value })} placeholder="To (name)" className="h-8 min-w-[110px] flex-1 text-[12.5px]" />
                 {d.channel === "email" && (
-                  <Input value={d.to_email} onChange={(e) => setDraft(i, { to_email: e.target.value })} placeholder="email@…" className="h-8 min-w-[140px] flex-1 text-[12.5px]" />
+                  <>
+                    <Input value={d.to_company} onChange={(e) => setDraft(i, { to_company: e.target.value })} placeholder="Org (for Hunter)" className="h-8 min-w-[110px] flex-1 text-[12.5px]" />
+                    <Input value={d.to_email} onChange={(e) => setDraft(i, { to_email: e.target.value })} placeholder="email@…" className="h-8 min-w-[140px] flex-1 text-[12.5px]" />
+                  </>
                 )}
                 <button onClick={() => removeDraft(i)} className="rounded p-1 text-muted-foreground hover:text-red-600" title="Remove">
                   <Trash2 className="h-4 w-4" />
@@ -596,6 +600,7 @@ function PlanEditor({ plan, onChange }: { plan: NetworkingPlan; onChange: (p: Ne
                 placeholder={d.channel === "x" ? "Tweet (≤280 chars)…" : d.channel === "linkedin" ? "Short LinkedIn note…" : "Email body…"}
                 className="mt-2 text-[12.5px]"
               />
+              {d.note && <p className="mt-1 text-[11px] text-muted-foreground">🔎 {d.note}</p>}
               {d.draft_id && (
                 <p className="mt-1 text-[11px] text-muted-foreground">Already staged — edits here won’t change what’s already in {CHANNEL_DEST[d.channel]}.</p>
               )}

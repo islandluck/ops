@@ -2692,14 +2692,18 @@ export interface NetworkingDraft {
   /** Which surface this belongs on — decides where "Begin" stages it. */
   channel: "email" | "x" | "linkedin";
   to_name: string;
-  /** Email address for an email intro; "" otherwise. */
+  /** Email address for an email intro; "" otherwise (resolved via Hunter when possible). */
   to_email: string;
+  /** The recipient's org — used to resolve their email via Hunter (email channel). */
+  to_company: string;
   /** e.g. "Direct intro to Jeff Bezos", "Warm intro via Jane Doe". */
   purpose: string;
   /** Email subject (email channel only; "" for x/linkedin). */
   subject: string;
   /** The message: a full email body, a ≤280-char tweet, or a short LinkedIn note. */
   body: string;
+  /** Agent evidence about the recipient — e.g. the Hunter lookup result or "no match". */
+  note: string;
   /** Set once staged — an Email Manager draft id (email) or a Social task id (x). */
   draft_id: string | null;
 }
@@ -2708,6 +2712,9 @@ export interface NetworkingDraft {
 export interface NetworkingPlan {
   summary: string;
   target_research: string;
+  /** The target's primary org + domain (used to probe Hunter for reachable contacts). */
+  target_company: string;
+  target_domain: string;
   events: NetworkingEvent[];
   warm_paths: NetworkingPerson[];
   channels: NetworkingChannel[];
