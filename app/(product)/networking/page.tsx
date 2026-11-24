@@ -113,6 +113,7 @@ export default function NetworkingPage() {
   }
 
   return (
+    <div className="min-h-0 flex-1 overflow-y-auto">
     <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
       <div className="mb-5 flex items-start gap-3">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-sky-600 text-white">
@@ -207,6 +208,7 @@ export default function NetworkingPage() {
           </div>
         </>
       )}
+    </div>
     </div>
   );
 }
