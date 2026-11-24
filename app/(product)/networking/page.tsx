@@ -7,11 +7,15 @@ import {
   Check,
   ExternalLink,
   Loader2,
+  CalendarClock,
   Mail,
   Network,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
+  Target,
   Sparkles,
   Trash2,
   Users,
@@ -21,14 +25,30 @@ import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import {
   beginNetworkingPlanAction,
+  bookNetworkingBlockAction,
   buildNetworkingPlanAction,
+  cancelNetworkingBlockAction,
   closeNetworkingTargetAction,
+  createNetworkingGoalAction,
   createNetworkingTargetAction,
+  deleteNetworkingGoalAction,
   deleteNetworkingTargetAction,
+  getNetworkingBackgroundAction,
   listNetworkingTargetsAction,
+  runNetworkingGoalAction,
+  updateNetworkingGoalAction,
   updateNetworkingPlanAction,
 } from "@/app/actions";
-import type { NetworkingChannel, NetworkingDraft, NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
+import type {
+  NetworkingBackground,
+  NetworkingChannel,
+  NetworkingDraft,
+  NetworkingGoal,
+  NetworkingGoalCadence,
+  NetworkingPlan,
+  NetworkingStatus,
+  NetworkingTarget,
+} from "@/lib/types";
 
 const CHANNEL_LABEL: Record<NetworkingDraft["channel"], string> = { email: "Email", x: "X / Twitter", linkedin: "LinkedIn" };
 const CHANNEL_DEST: Record<NetworkingDraft["channel"], string> = {
@@ -73,19 +93,34 @@ export default function NetworkingPage() {
   const [context, setContext] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState("");
+  const [bg, setBg] = useState<NetworkingBackground | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const rows = await listNetworkingTargetsAction().catch(() => [] as NetworkingTarget[]);
+      const [rows, b] = await Promise.all([
+        listNetworkingTargetsAction().catch(() => [] as NetworkingTarget[]),
+        getNetworkingBackgroundAction().catch(() => null),
+      ]);
       if (cancelled) return;
       setTargets(rows);
+      setBg(b);
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Reload targets + background after a goal run / block change picks up new work.
+  async function refreshAll() {
+    const [rows, b] = await Promise.all([
+      listNetworkingTargetsAction().catch(() => [] as NetworkingTarget[]),
+      getNetworkingBackgroundAction().catch(() => null),
+    ]);
+    setTargets(rows);
+    if (b) setBg(b);
+  }
 
   const selected = targets.find((t) => t.id === selectedId) ?? null;
 
@@ -181,6 +216,8 @@ export default function NetworkingPage() {
             )}
           </div>
 
+          {bg && <BackgroundPanel bg={bg} onReload={refreshAll} />}
+
           {/* Targets */}
           <div className="mt-6">
             <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground/70">
@@ -206,6 +243,7 @@ export default function NetworkingPage() {
                       <p className="truncate text-[13.5px] font-medium">{t.who}</p>
                       {t.context && <p className="truncate text-[11.5px] text-muted-foreground">{t.context}</p>}
                     </div>
+                    {t.goal_id && <Target className="h-3.5 w-3.5 shrink-0 text-indigo-500" aria-label="From a background goal" />}
                     <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-medium", STATUS_STYLE[t.status])}>
                       {STATUS_LABEL[t.status]}
                     </span>
@@ -218,6 +256,150 @@ export default function NetworkingPage() {
         </>
       )}
     </div>
+    </div>
+  );
+}
+
+/** Background networking: the daily calendar hour + standing goals the agent works. */
+function BackgroundPanel({ bg, onReload }: { bg: NetworkingBackground; onReload: () => Promise<void> }) {
+  const [goal, setGoal] = useState("");
+  const [cadence, setCadence] = useState<NetworkingGoalCadence>("weekly");
+  const [busy, setBusy] = useState<string | null>(null); // goal id | "add" | "block"
+  const [error, setError] = useState("");
+
+  async function addGoal() {
+    const g = goal.trim();
+    if (!g || busy) return;
+    setBusy("add");
+    setError("");
+    const r = await createNetworkingGoalAction(g, cadence);
+    setBusy(null);
+    if (r.ok) {
+      setGoal("");
+      await onReload();
+    } else setError(r.error ?? "Couldn't add the goal.");
+  }
+  async function runGoal(id: string) {
+    if (busy) return;
+    setBusy(id);
+    setError("");
+    const r = await runNetworkingGoalAction(id);
+    setBusy(null);
+    if (!r.ok) setError(r.error ?? "Couldn't run the goal.");
+    await onReload();
+  }
+  async function toggleGoal(g: NetworkingGoal) {
+    if (busy) return;
+    setBusy(g.id);
+    await updateNetworkingGoalAction(g.id, { status: g.status === "paused" ? "active" : "paused" });
+    setBusy(null);
+    await onReload();
+  }
+  async function delGoal(id: string) {
+    if (busy) return;
+    setBusy(id);
+    await deleteNetworkingGoalAction(id);
+    setBusy(null);
+    await onReload();
+  }
+  async function toggleBlock() {
+    if (busy) return;
+    setBusy("block");
+    setError("");
+    const r = bg.blockBooked ? await cancelNetworkingBlockAction() : await bookNetworkingBlockAction(9);
+    setBusy(null);
+    if (!r.ok) setError((r as { error?: string }).error ?? "Couldn't update the calendar block.");
+    await onReload();
+  }
+
+  return (
+    <div className="mt-6 rounded-xl border border-indigo-200/60 bg-indigo-50/30 p-4">
+      <div className="flex items-start gap-2">
+        <Target className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-semibold">Work it in the background</p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground">
+            Set standing goals and the agent chips away on a cadence — finding people, researching, resolving emails,
+            and prepping approve-ready intros. Nothing sends on its own; you review and send during your hour.
+          </p>
+        </div>
+      </div>
+
+      {/* Daily hour */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+        <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="text-[12.5px] font-medium">Daily network-expansion hour</span>
+        <span className="text-[11.5px] text-muted-foreground">
+          {bg.blockBooked ? "Booked — a recurring 1-hour block is on your calendar." : "Book a recurring 1-hour block to review + send."}
+        </span>
+        <Button size="sm" variant={bg.blockBooked ? "ghost" : "outline"} className="ml-auto" disabled={busy === "block"} onClick={toggleBlock}>
+          {busy === "block" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4" />}
+          {bg.blockBooked ? "Cancel block" : "Book my hour"}
+        </Button>
+      </div>
+
+      {/* Add a goal */}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <Input
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          placeholder="A standing goal — e.g. get us on the cover of Forbes"
+          className="flex-1 text-[12.5px]"
+          onKeyDown={(e) => e.key === "Enter" && addGoal()}
+        />
+        <select
+          value={cadence}
+          onChange={(e) => setCadence(e.target.value as NetworkingGoalCadence)}
+          className="h-9 rounded-lg border border-input bg-background px-2 text-[12.5px]"
+        >
+          <option value="weekly">Weekly</option>
+          <option value="daily">Daily</option>
+        </select>
+        <Button size="sm" disabled={busy === "add" || !goal.trim()} onClick={addGoal}>
+          {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+          Add goal
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-[11.5px] text-red-600">{error}</p>}
+
+      {/* Goals */}
+      {bg.goals.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {bg.goals.map((g) => (
+            <div key={g.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[12.5px] font-medium">{g.goal}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {g.cadence === "daily" ? "Daily" : "Weekly"}
+                  {g.status === "paused" ? " · paused" : ""}
+                  {g.target_count > 0 ? ` · ${g.target_count} ${g.target_count === 1 ? "person" : "people"} found` : ""}
+                  {g.last_run_at ? ` · last run ${fmtAgo(g.last_run_at)}` : " · not run yet"}
+                </p>
+              </div>
+              <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => runGoal(g.id)} title="Find the next people now">
+                {busy === g.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                Run now
+              </Button>
+              <button
+                onClick={() => toggleGoal(g)}
+                disabled={busy !== null}
+                className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={g.status === "paused" ? "Resume" : "Pause"}
+              >
+                {g.status === "paused" ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={() => delGoal(g.id)}
+                disabled={busy !== null}
+                className="rounded p-1.5 text-muted-foreground hover:text-red-600"
+                title="Delete goal"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
