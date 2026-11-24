@@ -35,7 +35,7 @@ import { createZoomMeeting } from "@/lib/integrations/zoom";
 import { notifySlack } from "@/lib/integrations/slack";
 import { getValidAccessToken } from "@/lib/integrations/tokens";
 import { resolveRecipientCandidates } from "@/lib/agents/recipient";
-import { composeOutboundDrafts } from "@/lib/agents/outbound";
+import { composeOutboundDrafts, stageOutboundDraft } from "@/lib/agents/outbound";
 import { researchTopics } from "@/lib/ai/research";
 import { createQuoteRequest, draftAllRfqs, sourceSuppliers } from "@/lib/quotes";
 import { createOutreachCampaign, draftAllOutreach, sourceContacts } from "@/lib/outreach";
@@ -1858,6 +1858,15 @@ function monthLabel(): string {
   return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date());
 }
 
+/** "Week of Nov 24, 2026" — the period label for the weekly team email. */
+function weekLabel(): string {
+  const now = new Date();
+  const monday = new Date(now);
+  const dow = (now.getDay() + 6) % 7; // 0 = Monday
+  monday.setDate(now.getDate() - dow);
+  return `Week of ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(monday)}`;
+}
+
 type InvestorRow = typeof investorUpdates.$inferSelect;
 
 function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
@@ -1877,6 +1886,7 @@ function toInvestorUpdate(row: InvestorRow): InvestorUpdate {
       asks: c.asks ?? [],
       closing: c.closing ?? "",
       image_url: c.image_url,
+      team_segments: c.team_segments,
     },
   };
 }
@@ -1903,6 +1913,13 @@ function normalizeInvestorContent(input: Partial<InvestorUpdateContent>): Invest
     asks: strList(input.asks),
     closing: String(input.closing ?? "").trim(),
     image_url: input.image_url ? String(input.image_url) : undefined,
+    team_segments: input.team_segments
+      ? {
+          top_of_mind: String(input.team_segments.top_of_mind ?? "").trim(),
+          performance: strList(input.team_segments.performance),
+          miscellaneous: strList(input.team_segments.miscellaneous),
+        }
+      : undefined,
   };
 }
 
@@ -1985,16 +2002,18 @@ async function gatherInvestorDossier(
   return { dossier: lines.join("\n"), companyName: brief.company_name };
 }
 
-/** Generate + store a monthly stakeholder update for an audience (on-demand only). */
+/** Generate + store a monthly stakeholder update for an audience (on-demand only).
+ *  `direction` lets the founder steer the content (esp. the team weekly email). */
 export async function generateInvestorUpdate(
   workspaceId: string,
   audience: UpdateAudience = "investor",
+  direction?: string,
 ): Promise<{ ok: boolean; update?: InvestorUpdate; error?: string }> {
-  const period = monthLabel();
+  const period = audience === "team" ? weekLabel() : monthLabel();
   const { dossier, companyName } = await gatherInvestorDossier(workspaceId, audience);
   let content;
   try {
-    content = await writeInvestorUpdate(dossier, companyName, period, audience);
+    content = await writeInvestorUpdate(dossier, companyName, period, audience, direction);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't generate the update." };
   }
@@ -2058,6 +2077,72 @@ export async function updateInvestorUpdate(
     return { ok: true, update: toInvestorUpdate(row) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Couldn't save the update." };
+  }
+}
+
+/** Render a stakeholder update to a plain-text email (subject + body) for the Email Manager. */
+function renderBriefEmail(u: InvestorUpdate): { subject: string; body: string } {
+  const c = u.content;
+  const label =
+    u.audience === "team" ? "Team update" : u.audience === "advisor" ? "Advisor update" : "Investor update";
+  const metricLines = c.metrics
+    .filter((m) => m.label && m.value)
+    .map((m) => `• ${m.label}: ${m.value}${m.note ? ` — ${m.note}` : ""}`);
+  const lines: string[] = [];
+  const bullets = (title: string, items: string[]) => {
+    const real = items.map((i) => i.trim()).filter(Boolean);
+    if (real.length) lines.push(title, ...real.map((i) => `• ${i}`), "");
+  };
+
+  if (u.audience === "team" && c.team_segments) {
+    const t = c.team_segments;
+    if (t.top_of_mind.trim()) lines.push("TOP OF MIND", t.top_of_mind.trim(), "");
+    const perf = t.performance.map((i) => i.trim()).filter(Boolean);
+    if (perf.length || metricLines.length) {
+      lines.push("PERFORMANCE UPDATE");
+      perf.forEach((i) => lines.push(`• ${i}`));
+      metricLines.forEach((l) => lines.push(l));
+      lines.push("");
+    }
+    bullets("MISCELLANEOUS", t.miscellaneous);
+  } else {
+    if (c.tldr.trim()) lines.push(c.tldr.trim(), "");
+    bullets("Highlights", c.highlights);
+    if (metricLines.length) lines.push("Metrics", ...metricLines, "");
+    bullets("Challenges", c.lowlights);
+    bullets("What's next", c.whats_next);
+    bullets("Asks", c.asks);
+  }
+  if (c.closing.trim()) lines.push(c.closing.trim());
+  return { subject: `${label} — ${c.period}`, body: lines.join("\n").trim() };
+}
+
+/** Stage a stakeholder update into the Email Manager outbound queue (owner plane),
+ *  ready for the founder to add recipients, edit, and send. Never sends on its own. */
+export async function stageBriefAsEmail(
+  workspaceId: string,
+  id: string,
+): Promise<{ ok: boolean; draftId?: string; error?: string }> {
+  const [row] = await db
+    .select()
+    .from(investorUpdates)
+    .where(and(eq(investorUpdates.id, id), eq(investorUpdates.workspace_id, workspaceId)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Update not found." };
+  const update = toInvestorUpdate(row);
+  const { subject, body } = renderBriefEmail(update);
+  if (!body.trim()) return { ok: false, error: "This update is empty — generate it first." };
+  try {
+    const noun =
+      update.audience === "team" ? "team update" : update.audience === "advisor" ? "advisor update" : "investor update";
+    const res = await stageOutboundDraft(
+      workspaceId,
+      { subject, body, intent: `${noun} — ${update.content.period}` },
+      null,
+    );
+    return { ok: true, draftId: res.draft.id };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't stage the email." };
   }
 }
 

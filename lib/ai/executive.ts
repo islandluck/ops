@@ -287,30 +287,41 @@ export async function generateBrief(
  * revenue, or outcomes, and must not expose internal ops.
  */
 /** Per-audience framing for a stakeholder update. Same JSON shape; different voice + section intent. */
-function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, period: string): string {
+function stakeholderUpdatePrompt(
+  audience: UpdateAudience,
+  companyName: string,
+  period: string,
+  direction?: string,
+): string {
   const co = companyName || "the company";
   const json =
     'Respond with ONLY this JSON (no markdown, no code fences): {"tldr": string, "highlights": string[], "metrics": [{"label": string, "value": string, "note": string}], "lowlights": string[], "whats_next": string[], "asks": string[], "closing": string}';
   const groundingOutward =
     "Ground EVERYTHING in the DATA dossier — never invent metrics, customers, revenue, partnerships, or outcomes. If the company is pre-revenue or very early, state exactly where it stands; do not inflate. Do NOT expose raw internal plumbing (task queues, agent memory, tooling) — translate the work into what this audience actually cares about.";
+  const dir = (direction ?? "").trim();
+  const focus = dir
+    ? `The founder specifically wants this update to focus on: ${dir}. Make that the spine of the update and weave it through the sections where it fits.`
+    : "";
 
   if (audience === "team") {
+    // Gokul Rajaram's weekly-CEO-email structure: Top of Mind / Performance / Misc.
+    // Tight and send-ready — this becomes an email the founder drops into the inbox.
     return [
-      `You are writing a monthly TEAM UPDATE for ${co}, covering ${period}.`,
-      "Audience: the whole team (internal). Voice: a founder leveling with the people building the company — candid, direct, and motivating. Use 'we'. Celebrate real wins, name what needs work honestly (no blame), keep it informative and grounded.",
-      "This is internal, so operational specifics are welcome — what shipped, what's in flight, what's stuck. Still, ground EVERYTHING in the DATA dossier; never invent metrics or outcomes.",
+      `You are writing ${co}'s WEEKLY TEAM EMAIL covering ${period}, in the style Gokul Rajaram recommends for CEOs.`,
+      "Audience: the whole team (internal). Voice: the founder writing directly to the people building the company — candid, warm, concise, motivating. Use 'we'. This is an EMAIL people read in two minutes, NOT a report — keep it genuinely short and skimmable.",
+      "Ground EVERYTHING in the DATA dossier — never invent metrics, outcomes, or events. If something is early or zero, say so plainly. Translate internal plumbing (task queues, agents, tooling) into what the team actually cares about.",
+      focus,
       "",
-      "Produce:",
-      "- tldr: 2–3 sentences — where we are and the tenor of the month.",
-      "- highlights: what we did well — concrete wins to celebrate; give the work credit.",
+      "Structure it in exactly three segments:",
+      "- top_of_mind: the 1–3 things most on the founder's mind right now — the single most important priority, a decision, or a shift in focus. 2–4 sentences of plain prose. This is the heart of the email.",
+      "- performance: how we're tracking — progress, wins, and honest status. 3–6 SHORT bullets.",
       "- metrics: the numbers that matter internally — each {label, value, note}. Real numbers only; empty array if none.",
-      "- lowlights: what we need to work on — honest gaps, misses, or areas to improve, framed constructively.",
-      "- whats_next: priorities and the plan for next period, tied to our goals.",
-      "- asks: where we need the team to step up — specific focus areas or help needed across the team.",
-      "- closing: one motivating, brief closing line.",
+      "- miscellaneous: the odds and ends — shoutouts, reminders, FYIs, small asks, upcoming dates. 2–5 SHORT bullets.",
+      "- closing: one short, motivating sign-off line.",
       "",
-      json,
-    ].join("\n");
+      'Respond with ONLY this JSON (no markdown, no code fences): {"top_of_mind": string, "performance": string[], "metrics": [{"label": string, "value": string, "note": string}], "miscellaneous": string[], "closing": string}',
+    ]
+      .join("\n");
   }
 
   if (audience === "advisor") {
@@ -318,6 +329,7 @@ function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, 
       `You are writing a monthly ADVISOR UPDATE for ${co}, covering ${period}.`,
       "Audience: the company's advisors (trusted, close). Voice: honest, concise, specific — like an investor update, but the POINT is to enlist their help. Make direct, concrete call-outs where an advisor's expertise, intros, or judgment would move the needle.",
       groundingOutward,
+      focus,
       "",
       "Produce:",
       "- tldr: 2–3 sentences — the headline of the month.",
@@ -329,7 +341,8 @@ function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, 
       "- closing: one warm, brief closing line.",
       "",
       json,
-    ].join("\n");
+    ]
+      .join("\n");
   }
 
   return [
@@ -337,6 +350,7 @@ function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, 
     "Audience: the founder's investors (outward-facing). Voice: how the best founders write — honest, confident, concise, specific. No hype, no filler, no jargon-as-smokescreen.",
     "Investors value CANDOR — include the real challenges and risks, not just wins; that's what builds trust.",
     groundingOutward,
+    focus,
     "",
     "Produce:",
     "- tldr: 2–3 sentences — the headline of the month.",
@@ -348,7 +362,8 @@ function stakeholderUpdatePrompt(audience: UpdateAudience, companyName: string, 
     "- closing: one warm, brief closing line.",
     "",
     json,
-  ].join("\n");
+  ]
+    .join("\n");
 }
 
 export async function writeInvestorUpdate(
@@ -356,12 +371,13 @@ export async function writeInvestorUpdate(
   companyName: string,
   period: string,
   audience: UpdateAudience = "investor",
+  direction?: string,
 ): Promise<InvestorUpdateContent> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
   const client = getAnthropic();
 
-  const system = stakeholderUpdatePrompt(audience, companyName, period);
+  const system = stakeholderUpdatePrompt(audience, companyName, period, direction);
   const noun = audience === "team" ? "team update" : audience === "advisor" ? "advisor update" : "investor update";
 
   const msg = await client.messages.create({
@@ -390,6 +406,28 @@ export async function writeInvestorUpdate(
         .slice(0, 8)
     : [];
 
+  const closing = typeof raw.closing === "string" ? raw.closing.trim().slice(0, 400) : "";
+
+  // Team updates use the Gokul 3-segment shape; the legacy investor fields stay empty
+  // and the UI renders from team_segments. Metrics are shared (shown under Performance).
+  if (audience === "team") {
+    return {
+      period,
+      tldr: "",
+      highlights: [],
+      metrics,
+      lowlights: [],
+      whats_next: [],
+      asks: [],
+      closing,
+      team_segments: {
+        top_of_mind: typeof raw.top_of_mind === "string" ? raw.top_of_mind.trim().slice(0, 1200) : "",
+        performance: strArray(raw.performance, 8),
+        miscellaneous: strArray(raw.miscellaneous, 8),
+      },
+    };
+  }
+
   return {
     period,
     tldr: typeof raw.tldr === "string" ? raw.tldr.trim().slice(0, 700) : "",
@@ -398,6 +436,6 @@ export async function writeInvestorUpdate(
     lowlights: strArray(raw.lowlights, 6),
     whats_next: strArray(raw.whats_next, 8),
     asks: strArray(raw.asks, 5),
-    closing: typeof raw.closing === "string" ? raw.closing.trim().slice(0, 400) : "",
+    closing,
   };
 }

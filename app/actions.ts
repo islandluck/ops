@@ -317,6 +317,7 @@ import {
   generateDailyBrief,
   deleteInvestorUpdate,
   generateInvestorUpdate,
+  stageBriefAsEmail,
   getExecutiveBundle,
   sendExecutiveMessage,
   getThreadMessages,
@@ -1555,8 +1556,12 @@ export async function getExecutiveAttentionAction(): Promise<number> {
   return countAttention(ws);
 }
 
-/** Generate a monthly stakeholder update for an audience (on-demand). */
-export async function generateInvestorUpdateAction(audience: UpdateAudience = "investor"): Promise<{
+/** Generate a stakeholder update for an audience (on-demand). `direction` lets the
+ *  founder steer it — especially the weekly team email. */
+export async function generateInvestorUpdateAction(
+  audience: UpdateAudience = "investor",
+  direction?: string,
+): Promise<{
   ok: boolean;
   update?: InvestorUpdate;
   error?: string;
@@ -1565,7 +1570,18 @@ export async function generateInvestorUpdateAction(audience: UpdateAudience = "i
   if (!user) return { ok: false, error: "Not authenticated." };
   const ws = await workspaceIdForUser(user.id);
   if (!ws) return { ok: false, error: "No workspace." };
-  return generateInvestorUpdate(ws, audience);
+  return generateInvestorUpdate(ws, audience, direction);
+}
+
+/** Drop a stakeholder update into the Email Manager outbound queue to edit + send. */
+export async function sendBriefToEmailManagerAction(
+  id: string,
+): Promise<{ ok: boolean; draftId?: string; error?: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "Not authenticated." };
+  const ws = await workspaceIdForUser(user.id);
+  if (!ws) return { ok: false, error: "No workspace." };
+  return stageBriefAsEmail(ws, id);
 }
 
 /** Save founder edits to an investor update (content + optional hero image). */

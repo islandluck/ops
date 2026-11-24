@@ -63,6 +63,7 @@ import {
   dismissBriefSuggestionAction,
   generateBriefAction,
   generateInvestorUpdateAction,
+  sendBriefToEmailManagerAction,
   getExecutiveBundleAction,
   getKpiTrendsAction,
   sendExecutiveMessageAction,
@@ -94,6 +95,7 @@ import type {
   InvestorUpdate,
   InvestorUpdateContent,
   KpiTrendSeries,
+  TeamBriefSegments,
   UpdateAudience,
 } from "@/lib/types";
 
@@ -302,9 +304,9 @@ export default function ExecutivePage() {
     [loadBundle],
   );
 
-  const generateUpdate = useCallback(async (audience: UpdateAudience) => {
+  const generateUpdate = useCallback(async (audience: UpdateAudience, direction?: string) => {
     setGenUpdate(true);
-    const res = await generateInvestorUpdateAction(audience);
+    const res = await generateInvestorUpdateAction(audience, direction);
     setGenUpdate(false);
     if (res.ok && res.update) {
       await loadBundle();
@@ -682,12 +684,13 @@ export default function ExecutivePage() {
           currentAudience && (
             <InvestorView
               key={currentAudience}
+              audience={currentAudience}
               config={AUDIENCE_CONFIG[currentAudience]}
               update={shownUpdate}
               updates={audienceUpdates}
               onSelect={setSelectedUpdateId}
               generating={genUpdate}
-              onGenerate={() => generateUpdate(currentAudience)}
+              onGenerate={(direction) => generateUpdate(currentAudience, direction)}
               onSave={saveUpdate}
               onArchive={archiveUpdate}
               onDelete={deleteUpdate}
@@ -1278,6 +1281,25 @@ const AUDIENCE_CONFIG: Record<UpdateAudience, AudienceConfig> = {
 function investorUpdateToMarkdown(u: InvestorUpdate): string {
   const c = u.content;
   const cfg = AUDIENCE_CONFIG[u.audience];
+  if (u.audience === "team" && c.team_segments) {
+    const t = c.team_segments;
+    const lines: string[] = [`# ${cfg.title} — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
+    if (c.image_url) lines.push(`![](${c.image_url})`, "");
+    if (t.top_of_mind.trim()) lines.push("## Top of mind", t.top_of_mind.trim(), "");
+    if (t.performance.length || c.metrics.length) {
+      lines.push("## Performance update");
+      t.performance.forEach((i) => lines.push(`- ${i}`));
+      c.metrics.forEach((m) => lines.push(`- **${m.label}:** ${m.value}${m.note ? ` — ${m.note}` : ""}`));
+      lines.push("");
+    }
+    if (t.miscellaneous.length) {
+      lines.push("## Miscellaneous");
+      t.miscellaneous.forEach((i) => lines.push(`- ${i}`));
+      lines.push("");
+    }
+    if (c.closing) lines.push("---", "", c.closing, "");
+    return lines.join("\n").trim() + "\n";
+  }
   const out: string[] = [`# ${cfg.title} — ${c.period}`, `_Prepared ${fmtBriefDate(u.created_at)}_`, ""];
   if (c.image_url) out.push(`![](${c.image_url})`, "");
   if (c.tldr) out.push(c.tldr, "");
@@ -1359,6 +1381,49 @@ function investorUpdateEmailHtml(u: InvestorUpdate): string {
     parts.push(
       `<img src="${escapeHtml(c.image_url)}" alt="" style="width:100%;max-width:600px;border-radius:12px;margin:0 0 20px;display:block;" />`,
     );
+
+  if (u.audience === "team" && c.team_segments) {
+    const t = c.team_segments;
+    if (t.top_of_mind.trim()) {
+      parts.push(H2("Top of mind"));
+      parts.push(
+        `<p style="font-size:15px;line-height:1.6;margin:0 0 8px;color:#0f172a;white-space:pre-wrap;">${escapeHtml(t.top_of_mind.trim())}</p>`,
+      );
+    }
+    if (t.performance.length || c.metrics.length) {
+      parts.push(H2("Performance update"));
+      if (t.performance.length)
+        parts.push(
+          `<ul style="margin:0 0 10px;padding-left:20px;">${t.performance
+            .map((i) => `<li style="margin:4px 0;">${escapeHtml(i)}</li>`)
+            .join("")}</ul>`,
+        );
+      if (c.metrics.length)
+        parts.push(
+          `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:0;">${c.metrics
+            .map(
+              (m) =>
+                `<tr><td style="padding:6px 0;border-bottom:1px solid #e2e8f0;font-weight:600;color:#0f172a;">${escapeHtml(
+                  m.label,
+                )}</td><td style="padding:6px 0;border-bottom:1px solid #e2e8f0;text-align:right;color:#0f172a;white-space:nowrap;">${escapeHtml(
+                  m.value,
+                )}${m.note ? ` <span style="color:#94a3b8;font-weight:400;">(${escapeHtml(m.note)})</span>` : ""}</td></tr>`,
+            )
+            .join("")}</table>`,
+        );
+    }
+    list("Miscellaneous", t.miscellaneous);
+    if (c.closing)
+      parts.push(
+        `<p style="margin:28px 0 0;padding-top:16px;border-top:1px solid #e2e8f0;font-style:italic;color:#475569;line-height:1.6;">${escapeHtml(
+          c.closing,
+        )}</p>`,
+      );
+    return `<div style="max-width:600px;margin:0 auto;font-family:${EMAIL_FONT};color:#0f172a;line-height:1.6;font-size:15px;">${parts.join(
+      "",
+    )}</div>`;
+  }
+
   if (c.tldr) parts.push(`<p style="font-size:16px;line-height:1.6;margin:0 0 8px;color:#0f172a;">${escapeHtml(c.tldr)}</p>`);
 
   list(cfg.labels.highlights, c.highlights);
@@ -1423,6 +1488,7 @@ async function copyRichText(html: string, plain: string): Promise<boolean> {
 }
 
 function InvestorView({
+  audience,
   config,
   update,
   updates,
@@ -1435,12 +1501,13 @@ function InvestorView({
   companyName,
   agentName,
 }: {
+  audience: UpdateAudience;
   config: AudienceConfig;
   update: InvestorUpdate | null;
   updates: InvestorUpdate[];
   onSelect: (id: string) => void;
   generating: boolean;
-  onGenerate: () => void;
+  onGenerate: (direction?: string) => void;
   onSave: (
     id: string,
     content: InvestorUpdateContent,
@@ -1450,6 +1517,10 @@ function InvestorView({
   companyName: string;
   agentName: string;
 }) {
+  const isTeam = audience === "team";
+  const [direction, setDirection] = useState("");
+  const [stagedMsg, setStagedMsg] = useState("");
+  const [staging, setStaging] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<InvestorUpdateContent | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1518,6 +1589,18 @@ function InvestorView({
     await onDelete(update.id);
     setBusyMenu(false);
   }
+  async function sendToEmail() {
+    if (!update) return;
+    setStaging(true);
+    setStagedMsg("");
+    const res = await sendBriefToEmailManagerAction(update.id);
+    setStaging(false);
+    setStagedMsg(
+      res.ok
+        ? "✓ Added to the Email Manager — open it to add recipients, edit, and send."
+        : res.error ?? "Couldn't add it to the Email Manager.",
+    );
+  }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
@@ -1578,6 +1661,16 @@ function InvestorView({
                 )}
                 {update && (
                   <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={sendToEmail}
+                      disabled={staging}
+                      title="Add to the Email Manager to edit and send"
+                    >
+                      {staging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                      <span className="hidden sm:inline">Send to Email Manager</span>
+                    </Button>
                     <Button size="sm" variant="outline" onClick={copyEmail} title="Copy as a formatted email">
                       {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Mail className="h-4 w-4" />}
                       <span className="hidden sm:inline">{copied ? "Copied" : "Copy email"}</span>
@@ -1629,7 +1722,12 @@ function InvestorView({
                     />
                   </>
                 )}
-                <Button size="sm" variant={update ? "outline" : "primary"} onClick={onGenerate} disabled={generating}>
+                <Button
+                  size="sm"
+                  variant={update ? "outline" : "primary"}
+                  onClick={() => onGenerate(isTeam ? direction : undefined)}
+                  disabled={generating}
+                >
                   {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                   {generating ? "Drafting…" : update ? "Regenerate" : "Generate update"}
                 </Button>
@@ -1637,6 +1735,43 @@ function InvestorView({
             )}
           </div>
         </div>
+
+        {stagedMsg && (
+          <div
+            className={cn(
+              "mt-4 flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-[12.5px]",
+              stagedMsg.startsWith("✓")
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-destructive/30 bg-destructive/5 text-destructive",
+            )}
+          >
+            <span>{stagedMsg}</span>
+            {stagedMsg.startsWith("✓") && (
+              <a href="/email" className="shrink-0 font-semibold underline underline-offset-2">
+                Open Email Manager
+              </a>
+            )}
+          </div>
+        )}
+
+        {isTeam && !editing && (
+          <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3">
+            <label className="text-[12px] font-medium">
+              Steer this week&apos;s email <span className="font-normal text-muted-foreground">(optional)</span>
+            </label>
+            <Textarea
+              value={direction}
+              onChange={(e) => setDirection(e.target.value)}
+              placeholder="e.g. Center it on the fundraise close and the new hire; keep performance light this week."
+              className="mt-1.5 min-h-[56px] text-[12.5px]"
+            />
+            <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+              {agentName} writes it in Gokul Rajaram&apos;s weekly format — Top of Mind, Performance, Miscellaneous —
+              pulling the rest from your live data. Then {update ? "Regenerate" : "Generate"}, review, and Send to the
+              Email Manager.
+            </p>
+          </div>
+        )}
 
         {generating && !update ? (
           <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
@@ -1665,8 +1800,8 @@ function InvestorView({
                 Have {agentName} {config.emptyLead}
               </p>
             </div>
-            <Button size="sm" onClick={onGenerate} disabled={generating}>
-              <EmptyIcon className="h-4 w-4" /> Generate this month&apos;s update
+            <Button size="sm" onClick={() => onGenerate(isTeam ? direction : undefined)} disabled={generating}>
+              <EmptyIcon className="h-4 w-4" /> {isTeam ? "Generate this week's email" : "Generate this month's update"}
             </Button>
           </div>
         )}
@@ -1685,6 +1820,7 @@ function InvestorBody({
   config: AudienceConfig;
 }) {
   const c = update.content;
+  if (update.audience === "team" && c.team_segments) return <TeamBriefBody update={update} subject={subject} />;
   return (
     <div className="mt-5 space-y-6">
       <SubjectRow subject={subject} />
@@ -1738,6 +1874,70 @@ function InvestorBody({
         </div>
       )}
 
+      {c.closing && (
+        <p className="border-t border-border pt-4 text-[13.5px] italic leading-relaxed text-muted-foreground">
+          {c.closing}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The team weekly email, Gokul-style: Top of Mind / Performance / Miscellaneous. */
+function TeamBriefBody({ update, subject }: { update: InvestorUpdate; subject: string }) {
+  const c = update.content;
+  const t = c.team_segments ?? { top_of_mind: "", performance: [], miscellaneous: [] };
+  return (
+    <div className="mt-5 space-y-6">
+      <SubjectRow subject={subject} />
+      {c.image_url && (
+        <div className="overflow-hidden rounded-2xl border border-border bg-muted">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={c.image_url} alt="" className="aspect-[16/9] w-full object-cover" />
+        </div>
+      )}
+      {t.top_of_mind.trim() && (
+        <div className="rounded-2xl border border-sky-200/70 bg-gradient-to-b from-sky-50/70 to-transparent p-4">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-sky-700">Top of mind</p>
+          <p className="whitespace-pre-wrap text-[14.5px] leading-relaxed text-foreground/90">{t.top_of_mind}</p>
+        </div>
+      )}
+      <div>
+        <p className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-600">
+          <TrendingUp className="h-3.5 w-3.5" /> Performance update
+        </p>
+        {t.performance.length > 0 && (
+          <ul className="space-y-1.5">
+            {t.performance.map((i, k) => (
+              <li key={k} className="flex items-start gap-2 text-[13.5px] leading-relaxed">
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                <span>{i}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {c.metrics.length > 0 && (
+          <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+            {c.metrics.map((m, i) => (
+              <div key={i} className="rounded-xl border border-border bg-card p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{m.label}</p>
+                <p className="mt-0.5 text-[19px] font-semibold tabular-nums leading-tight">{m.value}</p>
+                {m.note && <p className="mt-0.5 text-[11.5px] leading-snug text-muted-foreground">{m.note}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+        {t.performance.length === 0 && c.metrics.length === 0 && (
+          <p className="text-[12.5px] text-muted-foreground">Nothing captured here.</p>
+        )}
+      </div>
+      <InvestorList
+        title="Miscellaneous"
+        icon={<ArrowRight className="h-3.5 w-3.5" />}
+        items={t.miscellaneous}
+        accent="text-sky-600"
+        empty="Nothing else this week."
+      />
       {c.closing && (
         <p className="border-t border-border pt-4 text-[13.5px] italic leading-relaxed text-muted-foreground">
           {c.closing}
@@ -1920,6 +2120,7 @@ function InvestorEditor({
   config: AudienceConfig;
 }) {
   const set = (partial: Partial<InvestorUpdateContent>) => onChange({ ...draft, ...partial });
+  if (draft.team_segments) return <TeamBriefEditor draft={draft} onChange={onChange} />;
   return (
     <div className="mt-5 space-y-6">
       <EditGroup label="Period">
@@ -1971,6 +2172,58 @@ function InvestorEditor({
           onChange={(e) => set({ closing: e.target.value })}
           className="min-h-[70px]"
           placeholder="A brief, warm sign-off (optional)."
+        />
+      </EditGroup>
+    </div>
+  );
+}
+
+/** Editor for the team weekly email — the three Gokul segments + shared period/image/metrics. */
+function TeamBriefEditor({
+  draft,
+  onChange,
+}: {
+  draft: InvestorUpdateContent;
+  onChange: (next: InvestorUpdateContent) => void;
+}) {
+  const seg: TeamBriefSegments = draft.team_segments ?? { top_of_mind: "", performance: [], miscellaneous: [] };
+  const set = (partial: Partial<InvestorUpdateContent>) => onChange({ ...draft, ...partial });
+  const setSeg = (partial: Partial<TeamBriefSegments>) => onChange({ ...draft, team_segments: { ...seg, ...partial } });
+  return (
+    <div className="mt-5 space-y-6">
+      <EditGroup label="Period">
+        <Input value={draft.period} onChange={(e) => set({ period: e.target.value })} placeholder="e.g. Week of Nov 24, 2026" />
+      </EditGroup>
+      <EditGroup label="Hero image" hint="Optional — shown at the top and in the email.">
+        <ImageSlot label="hero image" value={draft.image_url} onChange={(url) => set({ image_url: url ?? undefined })} />
+      </EditGroup>
+      <EditGroup label="Top of mind" hint="The 1–3 things most on your mind — the heart of the email.">
+        <Textarea
+          value={seg.top_of_mind}
+          onChange={(e) => setSeg({ top_of_mind: e.target.value })}
+          className="min-h-[96px]"
+          placeholder="What matters most this week."
+        />
+      </EditGroup>
+      <ListEditor
+        label="Performance update"
+        items={seg.performance}
+        onChange={(v) => setSeg({ performance: v })}
+        placeholder="How we're tracking — a win or status."
+      />
+      <MetricsEditor metrics={draft.metrics} onChange={(v) => set({ metrics: v })} />
+      <ListEditor
+        label="Miscellaneous"
+        items={seg.miscellaneous}
+        onChange={(v) => setSeg({ miscellaneous: v })}
+        placeholder="A shoutout, reminder, FYI, or small ask."
+      />
+      <EditGroup label="Closing note">
+        <Textarea
+          value={draft.closing}
+          onChange={(e) => set({ closing: e.target.value })}
+          className="min-h-[70px]"
+          placeholder="A short, motivating sign-off."
         />
       </EditGroup>
     </div>

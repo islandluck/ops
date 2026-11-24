@@ -2324,6 +2324,20 @@ export interface InvestorMetric {
   note?: string;
 }
 
+/**
+ * The TEAM update follows Gokul Rajaram's weekly-CEO-email structure — three tight
+ * segments meant to be read in two minutes and sent as-is. Only set for the "team"
+ * audience; investor/advisor updates leave it undefined and use the fields below.
+ */
+export interface TeamBriefSegments {
+  /** Top of Mind — the 1–3 things most on the founder's mind now (short prose). */
+  top_of_mind: string;
+  /** Performance update — progress + how we're tracking (short bullets; numbers live in `metrics`). */
+  performance: string[];
+  /** Miscellaneous — odds & ends: shoutouts, reminders, FYIs, small asks (short bullets). */
+  miscellaneous: string[];
+}
+
 /** The structured content of a monthly investor / stakeholder update. */
 export interface InvestorUpdateContent {
   /** The period the update covers, e.g. "August 2026". */
@@ -2344,6 +2358,8 @@ export interface InvestorUpdateContent {
   closing: string;
   /** Optional hero image (uploaded or stock), shown at the top and in the email. */
   image_url?: string;
+  /** Team audience only: the Gokul 3-segment structure (Top of Mind / Performance / Misc). */
+  team_segments?: TeamBriefSegments;
 }
 
 export interface InvestorUpdate {
