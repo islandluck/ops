@@ -199,3 +199,61 @@ export async function planNetworking(input: PlanNetworkingInput): Promise<Networ
   }
   return coercePlan(parseJsonObject(text), text);
 }
+
+export interface GoalPerson {
+  /** The person + their role/org, e.g. "Alex Konrad, senior editor at Forbes". */
+  who: string;
+  /** The specific angle — why them, why now. */
+  why: string;
+}
+
+/**
+ * For a standing networking GOAL, pick the NEXT 1-2 specific, reachable people to approach
+ * this cycle (a steady drip, not a dump). Web-search grounded. Returns [] on any failure.
+ */
+export async function findGoalPeople(input: {
+  goal: string;
+  company: string;
+  companyDescription: string;
+  network: string;
+  avoid: string[];
+}): Promise<GoalPerson[]> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error("AI is not configured (ANTHROPIC_API_KEY missing).");
+  const client = getAnthropic();
+  const system = [
+    "You are a sharp networking strategist helping a founder make STEADY progress toward a standing networking goal. Each cycle you pick the NEXT 1-2 specific, reachable, NAMED people to approach — real humans whose connection would move the goal forward, not vague orgs.",
+    input.companyDescription ? `The founder's company: ${input.company} — ${input.companyDescription}.` : input.company ? `The founder's company: ${input.company}.` : "",
+    "Use web_search to find real, current, named people tied to the goal (e.g. 'get on the cover of Forbes' → specific Forbes editors/writers who cover this space; 'connect to the head of Koch' → the actual exec and/or a plausible warm connector).",
+    input.network ? `The founder's existing network (prefer someone reachable through it):\n${input.network}` : "",
+    input.avoid.length ? `Do NOT repeat anyone already being worked: ${input.avoid.join("; ")}.` : "",
+    "Pick 1-2 people MAX. Each with a genuine, specific angle for why to reach them now.",
+    "",
+    'Respond with ONLY this JSON (no prose, no fences): {"people": [{"who": string (person + role/org), "why": string (the angle — why them, why now)}]}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const messages: Anthropic.MessageParam[] = [
+    { role: "user", content: `Networking goal: ${input.goal}\n\nFind the next 1-2 people to approach, then return the JSON.` },
+  ];
+  let text = "";
+  try {
+    for (let i = 0; i < 5; i++) {
+      const msg = await client.messages.create({ model: MODEL, max_tokens: 1500, system, tools: [WEB_SEARCH_TOOL], messages });
+      text = msg.content.map((b) => (b.type === "text" ? b.text : "")).join("").trim();
+      if (msg.stop_reason === "pause_turn") {
+        messages.push({ role: "assistant", content: msg.content });
+        continue;
+      }
+      break;
+    }
+  } catch {
+    return [];
+  }
+  const obj = parseJsonObject(text);
+  const people = obj && Array.isArray(obj.people) ? obj.people : [];
+  return people
+    .filter((p): p is Record<string, unknown> => Boolean(p) && typeof p === "object")
+    .map((p) => ({ who: clip(p.who, 200), why: clip(p.why, 400) }))
+    .filter((p) => p.who)
+    .slice(0, 2);
+}

@@ -307,15 +307,30 @@ import {
 } from "@/lib/sourcing";
 import {
   beginNetworkingPlan,
+  bookNetworkingBlock,
   buildNetworkingPlan,
+  cancelNetworkingBlock,
   closeNetworkingTarget,
+  createNetworkingGoal,
   createNetworkingTarget,
+  deleteNetworkingGoal,
   deleteNetworkingTarget,
+  getNetworkingBackground,
   getNetworkingTarget,
   listNetworkingTargets,
+  runNetworkingGoal,
+  updateNetworkingGoal,
   updateNetworkingPlan,
 } from "@/lib/networking";
-import type { NetworkingPlan, NetworkingTarget, SourcingRequest, SourcingSource } from "@/lib/types";
+import type {
+  NetworkingBackground,
+  NetworkingGoalCadence,
+  NetworkingGoalStatus,
+  NetworkingPlan,
+  NetworkingTarget,
+  SourcingRequest,
+  SourcingSource,
+} from "@/lib/types";
 import { approveAllCampaignPosts, createGrowthCampaign, getCampaignData } from "@/lib/agents/growth";
 import {
   addGoal,
@@ -1360,6 +1375,54 @@ export async function deleteNetworkingTargetAction(id: string) {
   const r = await networkingWs();
   if ("error" in r) return { ok: false as const, error: r.error };
   return deleteNetworkingTarget(r.ws, id);
+}
+
+/* --- Networking background: standing goals + the daily calendar hour --- */
+
+export async function getNetworkingBackgroundAction(): Promise<NetworkingBackground> {
+  const r = await networkingWs();
+  if ("error" in r) return { goals: [], blockBooked: false };
+  return getNetworkingBackground(r.ws);
+}
+
+export async function createNetworkingGoalAction(goal: string, cadence: NetworkingGoalCadence) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return createNetworkingGoal(r.ws, { goal, cadence });
+}
+
+export async function updateNetworkingGoalAction(
+  id: string,
+  patch: { status?: NetworkingGoalStatus; cadence?: NetworkingGoalCadence },
+) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return updateNetworkingGoal(r.ws, id, patch);
+}
+
+export async function deleteNetworkingGoalAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return deleteNetworkingGoal(r.ws, id);
+}
+
+/** Work a goal on demand (find the next 1-2 people + draft their plans). */
+export async function runNetworkingGoalAction(id: string) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, created: 0, error: r.error };
+  return runNetworkingGoal(r.ws, id);
+}
+
+export async function bookNetworkingBlockAction(hour?: number) {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return bookNetworkingBlock(r.ws, hour ?? 9);
+}
+
+export async function cancelNetworkingBlockAction() {
+  const r = await networkingWs();
+  if ("error" in r) return { ok: false as const, error: r.error };
+  return cancelNetworkingBlock(r.ws);
 }
 
 /* ------------------------------- sourcing -------------------------------- */

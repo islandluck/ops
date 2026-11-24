@@ -180,6 +180,9 @@ export const businessBriefs = pgTable("business_briefs", {
   // Owner-plane toggle: embed a 1x1 open-tracking pixel in the owner's outbound mail.
   // Opens are approximate (image proxies / privacy pre-fetch inflate them). Owner only.
   email_open_tracking: boolean("email_open_tracking").notNull().default(true),
+  // Google Calendar event id of the recurring daily "Network expansion" block (Networking
+  // Phase 2). Null = not booked. Presence = booked; delete the event to cancel.
+  networking_block_event_id: text("networking_block_event_id"),
   approval_rules: jsonb("approval_rules").$type<ApprovalRule[]>().notNull().default([]),
   budget_limits: jsonb("budget_limits")
     .$type<{ label: string; amount: number; period: string }[]>()
@@ -1379,7 +1382,8 @@ export const sourcingRequests = pgTable("sourcing_requests", {
 }, (t) => [index("sourcing_requests_ws_created_idx").on(t.workspace_id, t.created_at)]);
 
 /** A networking target ("help me network my way to X") + the agent's drafted plan.
- *  Guided only (v1); the plan is reviewed before anything runs. Never auto-sends. */
+ *  Guided (founder-created) or spawned by a background networking goal. The plan is
+ *  reviewed before anything runs. Never auto-sends. */
 export const networkingTargets = pgTable("networking_targets", {
   id: uuid("id").primaryKey().defaultRandom(),
   workspace_id: uuid("workspace_id")
@@ -1389,9 +1393,28 @@ export const networkingTargets = pgTable("networking_targets", {
   context: text("context").notNull().default(""),
   status: text("status").notNull().default("planning"),
   plan: jsonb("plan").$type<NetworkingPlan | null>(),
+  // Set when a background goal spawned this target; null = founder-created (guided).
+  goal_id: uuid("goal_id").references(() => networkingGoals.id, { onDelete: "set null" }),
   created_at: createdAt,
   updated_at: updatedAt,
 }, (t) => [index("networking_targets_ws_idx").on(t.workspace_id, t.status)]);
+
+/** A standing networking GOAL the agent works in the background ("get us on the cover
+ *  of Forbes"). On its cadence it finds 1-2 new people to approach and spawns a
+ *  networking_target + plan for each — approve-first, never auto-sends. */
+export const networkingGoals = pgTable("networking_goals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  workspace_id: uuid("workspace_id")
+    .notNull()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull().default(""),
+  cadence: text("cadence").notNull().default("weekly"), // daily | weekly
+  status: text("status").notNull().default("active"), // active | paused | done
+  last_run_at: timestamp("last_run_at", { withTimezone: true }),
+  next_run_at: timestamp("next_run_at", { withTimezone: true }),
+  created_at: createdAt,
+  updated_at: updatedAt,
+}, (t) => [index("networking_goals_ws_idx").on(t.workspace_id, t.status)]);
 
 /** Follower-count snapshots for a growth campaign — the progress trend vs goal. */
 export const followerSnapshots = pgTable("follower_snapshots", {

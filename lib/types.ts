@@ -2730,6 +2730,31 @@ export interface NetworkingTarget {
   context: string;
   status: NetworkingStatus;
   plan: NetworkingPlan | null;
+  /** Set when a background goal spawned this target; null = founder-created (guided). */
+  goal_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type NetworkingGoalCadence = "daily" | "weekly";
+export type NetworkingGoalStatus = "active" | "paused" | "done";
+
+/** A standing networking goal the agent works in the background ("get us on Forbes"). */
+export interface NetworkingGoal {
+  id: string;
+  goal: string;
+  cadence: NetworkingGoalCadence;
+  status: NetworkingGoalStatus;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  /** How many targets this goal has spawned so far (rollup). */
+  target_count: number;
+  created_at: string;
+}
+
+/** Everything the Networking background panel needs: goals + whether the daily hour is booked. */
+export interface NetworkingBackground {
+  goals: NetworkingGoal[];
+  /** True when the recurring "Network expansion" calendar block exists. */
+  blockBooked: boolean;
 }

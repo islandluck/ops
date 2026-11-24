@@ -8,6 +8,7 @@ import { crmRadarSweep } from "@/lib/agents/crm";
 import { runDueEmailTriage } from "@/lib/agents/triage";
 import { runDueBoardScans } from "@/lib/agents/boardroom";
 import { sendDueDigests } from "@/lib/agents/today";
+import { advanceDueNetworkingGoals } from "@/lib/networking";
 
 /**
  * Cron entry point — runs background-enabled agents across workspaces.
@@ -47,6 +48,8 @@ async function handle(request: NextRequest) {
     // Queue the weekly Deep Dive Operating Review for workspaces whose last is stale.
     // The /api/deep-dive/run worker then processes the queued runs.
     const reviews = await generateDueReviews().catch(() => ({ queued: 0 }));
+    // Background networking: work active standing goals whose cadence is due (approve-first).
+    const networking = await advanceDueNetworkingGoals().catch(() => ({ ran: 0, created: 0 }));
     return NextResponse.json({
       ok: true,
       ...result,
@@ -59,6 +62,8 @@ async function handle(request: NextRequest) {
       boardAlerts: board.alerts,
       digestsSent: digests.sent,
       reviewsQueued: reviews.queued,
+      networkingGoalsRan: networking.ran,
+      networkingTargetsCreated: networking.created,
     });
   } catch (e) {
     return NextResponse.json(

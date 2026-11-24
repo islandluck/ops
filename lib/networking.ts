@@ -1,14 +1,25 @@
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { businessBriefs, networkingTargets, opportunities } from "@/lib/db/schema";
+import { businessBriefs, networkingGoals, networkingTargets, opportunities } from "@/lib/db/schema";
 import { listCompanies, listContacts } from "@/lib/crm";
 import { stageOutboundDraft } from "@/lib/agents/outbound";
 import { stageDraftTweet } from "@/lib/agents/social-bulk";
 import { HUNTER_MIN_SCORE, domainSearch, findEmail, hunterConfigured } from "@/lib/integrations/hunter";
-import { planNetworking } from "@/lib/ai/networking";
-import type { NetworkingChannel, NetworkingPlan, NetworkingStatus, NetworkingTarget } from "@/lib/types";
+import { getValidAccessToken } from "@/lib/integrations/tokens";
+import { createCalendarEvent, deleteCalendarEvent } from "@/lib/integrations/google";
+import { findGoalPeople, planNetworking } from "@/lib/ai/networking";
+import type {
+  NetworkingBackground,
+  NetworkingChannel,
+  NetworkingGoal,
+  NetworkingGoalCadence,
+  NetworkingGoalStatus,
+  NetworkingPlan,
+  NetworkingStatus,
+  NetworkingTarget,
+} from "@/lib/types";
 
 /**
  * Networking (Intelligence → Networking), guided mode (v1). The founder points the agent
@@ -31,6 +42,7 @@ function toTarget(row: Row): NetworkingTarget {
     context: row.context,
     status: row.status as NetworkingStatus,
     plan: (row.plan ?? null) as NetworkingPlan | null,
+    goal_id: row.goal_id ?? null,
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
   };
@@ -55,16 +67,24 @@ export async function getNetworkingTarget(workspaceId: string, id: string): Prom
   return row ? toTarget(row) : null;
 }
 
-/** Create a target from the guided intake (who + the founder's angle/context). */
+/** Create a target from the guided intake (who + the founder's angle/context), or from a
+ *  background goal when `goalId` is set. */
 export async function createNetworkingTarget(
   workspaceId: string,
   input: { who: string; context: string },
+  goalId?: string | null,
 ): Promise<{ ok: true; target: NetworkingTarget } | { ok: false; error: string }> {
   const who = input.who.trim().slice(0, 200);
   if (!who) return { ok: false, error: "Who do you want to reach?" };
   const [row] = await db
     .insert(networkingTargets)
-    .values({ workspace_id: workspaceId, who, context: input.context.trim().slice(0, 2000), status: "planning" })
+    .values({
+      workspace_id: workspaceId,
+      who,
+      context: input.context.trim().slice(0, 2000),
+      status: "planning",
+      goal_id: goalId ?? null,
+    })
     .returning();
   return { ok: true, target: toTarget(row) };
 }
@@ -360,4 +380,239 @@ export async function updateNetworkingPlan(
     .returning();
   if (!row) return { ok: false, error: "Target not found." };
   return { ok: true, target: toTarget(row) };
+}
+
+/* ------------------------- background: standing goals ------------------------- */
+
+type GoalRow = typeof networkingGoals.$inferSelect;
+
+function cadenceMs(c: string): number {
+  return c === "daily" ? 24 * 3600_000 : 7 * 24 * 3600_000;
+}
+function normGoalCadence(c: string): NetworkingGoalCadence {
+  return c === "daily" ? "daily" : "weekly";
+}
+function normGoalStatus(s: string): NetworkingGoalStatus {
+  return s === "paused" || s === "done" ? s : "active";
+}
+function toGoal(row: GoalRow, targetCount: number): NetworkingGoal {
+  return {
+    id: row.id,
+    goal: row.goal,
+    cadence: normGoalCadence(row.cadence),
+    status: normGoalStatus(row.status),
+    last_run_at: row.last_run_at ? iso(row.last_run_at) : null,
+    next_run_at: row.next_run_at ? iso(row.next_run_at) : null,
+    target_count: targetCount,
+    created_at: iso(row.created_at),
+  };
+}
+
+export async function listNetworkingGoals(workspaceId: string): Promise<NetworkingGoal[]> {
+  const rows = await db
+    .select()
+    .from(networkingGoals)
+    .where(eq(networkingGoals.workspace_id, workspaceId))
+    .orderBy(desc(networkingGoals.created_at))
+    .limit(40);
+  if (!rows.length) return [];
+  const counts = await db
+    .select({ goal_id: networkingTargets.goal_id, n: count() })
+    .from(networkingTargets)
+    .where(eq(networkingTargets.workspace_id, workspaceId))
+    .groupBy(networkingTargets.goal_id);
+  const byGoal = new Map(counts.map((c) => [c.goal_id, Number(c.n)]));
+  return rows.map((r) => toGoal(r, byGoal.get(r.id) ?? 0));
+}
+
+export async function createNetworkingGoal(
+  workspaceId: string,
+  input: { goal: string; cadence: NetworkingGoalCadence },
+): Promise<{ ok: boolean; error?: string }> {
+  const goal = input.goal.trim().slice(0, 300);
+  if (!goal) return { ok: false, error: "Describe the goal (e.g. get us on the cover of Forbes)." };
+  // next_run_at = now so the first pass happens on the next cadence tick (or Run now).
+  await db
+    .insert(networkingGoals)
+    .values({ workspace_id: workspaceId, goal, cadence: normGoalCadence(input.cadence), status: "active", next_run_at: new Date() });
+  return { ok: true };
+}
+
+export async function updateNetworkingGoal(
+  workspaceId: string,
+  id: string,
+  patch: { status?: NetworkingGoalStatus; cadence?: NetworkingGoalCadence },
+): Promise<{ ok: boolean; error?: string }> {
+  const set: Record<string, unknown> = { updated_at: new Date() };
+  if (patch.status) set.status = normGoalStatus(patch.status);
+  if (patch.cadence) set.cadence = normGoalCadence(patch.cadence);
+  const [row] = await db
+    .update(networkingGoals)
+    .set(set)
+    .where(and(eq(networkingGoals.workspace_id, workspaceId), eq(networkingGoals.id, id)))
+    .returning();
+  return row ? { ok: true } : { ok: false, error: "Goal not found." };
+}
+
+export async function deleteNetworkingGoal(workspaceId: string, id: string): Promise<{ ok: boolean }> {
+  await db.delete(networkingGoals).where(and(eq(networkingGoals.workspace_id, workspaceId), eq(networkingGoals.id, id)));
+  return { ok: true };
+}
+
+/** Work a goal once: find the next 1-2 people and spawn a researched + Hunter-resolved
+ *  target/plan for each (approve-first — the founder reviews + begins). */
+export async function runNetworkingGoal(
+  workspaceId: string,
+  goalId: string,
+): Promise<{ ok: boolean; created: number; error?: string }> {
+  const [goal] = await db
+    .select()
+    .from(networkingGoals)
+    .where(and(eq(networkingGoals.workspace_id, workspaceId), eq(networkingGoals.id, goalId)))
+    .limit(1);
+  if (!goal) return { ok: false, created: 0, error: "Goal not found." };
+  // Claim the slot up front (bump last/next run) so overlapping cron ticks never double-run.
+  const now = new Date();
+  await db
+    .update(networkingGoals)
+    .set({ last_run_at: now, next_run_at: new Date(now.getTime() + cadenceMs(goal.cadence)), updated_at: now })
+    .where(eq(networkingGoals.id, goalId));
+  try {
+    const [[brief], network, existing] = await Promise.all([
+      db
+        .select({ company: businessBriefs.company_name, desc: businessBriefs.business_description })
+        .from(businessBriefs)
+        .where(eq(businessBriefs.workspace_id, workspaceId))
+        .limit(1),
+      gatherNetwork(workspaceId),
+      db
+        .select({ who: networkingTargets.who })
+        .from(networkingTargets)
+        .where(and(eq(networkingTargets.workspace_id, workspaceId), eq(networkingTargets.goal_id, goalId))),
+    ]);
+    const avoid = existing.map((e) => e.who).filter(Boolean).slice(0, 40);
+    const people = await findGoalPeople({
+      goal: goal.goal,
+      company: brief?.company ?? "",
+      companyDescription: brief?.desc ?? "",
+      network,
+      avoid,
+    });
+    let created = 0;
+    for (const p of people) {
+      if (avoid.some((a) => a.toLowerCase() === p.who.toLowerCase())) continue;
+      const res = await createNetworkingTarget(workspaceId, { who: p.who, context: `${p.why}\n\n(Goal: ${goal.goal})` }, goalId);
+      if (res.ok) {
+        await buildNetworkingPlan(workspaceId, res.target.id); // research + Hunter, approve-first
+        created += 1;
+      }
+    }
+    return { ok: true, created };
+  } catch (e) {
+    return { ok: false, created: 0, error: e instanceof Error ? e.message : "Couldn't work the goal." };
+  }
+}
+
+/** Cron sweep — work active goals whose cadence is due, across all workspaces. */
+export async function advanceDueNetworkingGoals(limit = 3): Promise<{ ran: number; created: number }> {
+  const now = new Date();
+  // tenant-scope-exempt: cron flushing DUE goals across ALL workspaces; each goal row
+  // carries its own workspace_id and runNetworkingGoal re-scopes every read/write to it.
+  const due = await db
+    .select({ id: networkingGoals.id, workspace_id: networkingGoals.workspace_id })
+    .from(networkingGoals)
+    .where(and(eq(networkingGoals.status, "active"), or(isNull(networkingGoals.next_run_at), lte(networkingGoals.next_run_at, now))))
+    .orderBy(asc(networkingGoals.next_run_at))
+    .limit(limit);
+  let ran = 0;
+  let created = 0;
+  for (const g of due) {
+    const r = await runNetworkingGoal(g.workspace_id, g.id);
+    ran += 1;
+    created += r.created;
+  }
+  return { ran, created };
+}
+
+/* --------------------- background: the daily calendar hour --------------------- */
+
+/** Today's date (YYYY-MM-DD) as it reads in the given IANA timezone. */
+function localDateInTz(tz: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
+/** Book the recurring daily 1-hour "Network expansion" block on the owner's Google Calendar. */
+export async function bookNetworkingBlock(workspaceId: string, hour = 9): Promise<{ ok: boolean; error?: string }> {
+  const [brief] = await db
+    .select({ tz: businessBriefs.timezone, existing: businessBriefs.networking_block_event_id })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  if (brief?.existing) return { ok: true }; // already booked
+  const token = await getValidAccessToken(workspaceId, "Google Calendar", null);
+  if (!token) return { ok: false, error: "Connect Google Calendar first (Integrations), then try again." };
+  const tz = brief?.tz || "America/New_York";
+  const h = Math.min(Math.max(Math.round(hour), 0), 22);
+  const date = localDateInTz(tz);
+  const startISO = `${date}T${String(h).padStart(2, "0")}:00:00`;
+  const endISO = `${date}T${String(h + 1).padStart(2, "0")}:00:00`;
+  try {
+    const ev = await createCalendarEvent(token, {
+      summary: "Network expansion",
+      description:
+        "Your daily hour to expand your network: review the networking plans the agent prepped and send the intros you like. (Operator · Networking)",
+      startISO,
+      endISO,
+      timeZone: tz,
+      recurrence: ["RRULE:FREQ=DAILY"],
+    });
+    await db
+      .update(businessBriefs)
+      .set({ networking_block_event_id: ev.id, updated_at: new Date() })
+      .where(eq(businessBriefs.workspace_id, workspaceId));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn't book the calendar block." };
+  }
+}
+
+/** Cancel the recurring block (deletes the Google event + clears the stored id). */
+export async function cancelNetworkingBlock(workspaceId: string): Promise<{ ok: boolean }> {
+  const [brief] = await db
+    .select({ id: businessBriefs.networking_block_event_id })
+    .from(businessBriefs)
+    .where(eq(businessBriefs.workspace_id, workspaceId))
+    .limit(1);
+  if (brief?.id) {
+    const token = await getValidAccessToken(workspaceId, "Google Calendar", null);
+    if (token) {
+      try {
+        await deleteCalendarEvent(token, brief.id);
+      } catch {
+        /* event may already be gone — clear our pointer regardless */
+      }
+    }
+    await db
+      .update(businessBriefs)
+      .set({ networking_block_event_id: null, updated_at: new Date() })
+      .where(eq(businessBriefs.workspace_id, workspaceId));
+  }
+  return { ok: true };
+}
+
+/** The background panel's data: standing goals + whether the daily hour is booked. */
+export async function getNetworkingBackground(workspaceId: string): Promise<NetworkingBackground> {
+  const [goals, [brief]] = await Promise.all([
+    listNetworkingGoals(workspaceId),
+    db
+      .select({ id: businessBriefs.networking_block_event_id })
+      .from(businessBriefs)
+      .where(eq(businessBriefs.workspace_id, workspaceId))
+      .limit(1),
+  ]);
+  return { goals, blockBooked: Boolean(brief?.id) };
 }
