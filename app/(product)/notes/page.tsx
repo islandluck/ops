@@ -4,11 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
+  Bold,
   Check,
   CheckCircle2,
+  Code,
+  Eye,
+  Heading2,
+  Italic,
+  Link2,
+  List,
+  ListOrdered,
   Loader2,
   NotebookPen,
+  PenLine,
   Plus,
+  Quote,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -19,6 +29,7 @@ import { Input, Textarea } from "@/components/ui/input";
 import { useStore } from "@/lib/store";
 import { cn } from "@/lib/cn";
 import { CATEGORY_META } from "@/lib/constants";
+import { markdownToHtml, markdownToPlainText } from "@/lib/content/format";
 import {
   actionNoteAction,
   analyzeNoteAction,
@@ -67,7 +78,7 @@ export default function NotesPage() {
     <>
       <PageHeader
         title="Notes"
-        description="Jot down anything on your mind. When you're ready, hand a note to the Executive — it'll turn it into a project or tasks your team can run."
+        description="Jot down anything on your mind. Format it with the toolbar, then hand a note to the Executive — it'll turn it into a project or tasks your team can run."
         actions={
           <Button size="sm" onClick={newNote}>
             <Plus className="h-4 w-4" />
@@ -75,7 +86,7 @@ export default function NotesPage() {
           </Button>
         }
       />
-      <PageBody>
+      <PageBody className="max-w-6xl">
         {loading ? (
           <div className="flex items-center justify-center py-20 text-muted-foreground">
             <Loader2 className="h-5 w-5 animate-spin" />
@@ -88,8 +99,9 @@ export default function NotesPage() {
             <div>
               <h3 className="text-[15px] font-semibold">No notes yet</h3>
               <p className="mx-auto mt-1 max-w-md text-[13px] text-muted-foreground">
-                Jot down a to-do, an idea, or a reminder — anything you don’t want to forget. When you’re ready,
-                hand it to the Executive and it’ll turn it into a project or tasks your team can run.
+                Jot down a to-do, an idea, or a reminder — anything you don’t want to forget. Use the toolbar to
+                bold, bullet, and format, then hand it to the Executive and it’ll turn it into a project or tasks
+                your team can run.
               </p>
             </div>
             <Button size="sm" onClick={newNote}>
@@ -98,7 +110,7 @@ export default function NotesPage() {
             </Button>
           </Card>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+          <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
             {/* List */}
             <div className="space-y-1.5">
               {notes.map((n) => (
@@ -158,7 +170,12 @@ function NoteEditor({
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [view, setView] = useState<"write" | "preview">("write");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  // After a toolbar/shortcut edit we re-select the transformed text once the
+  // controlled textarea has re-rendered with the new value.
+  const pendingSel = useRef<[number, number] | null>(null);
 
   // Analysis / proposal state.
   const [analyzing, setAnalyzing] = useState(false);
@@ -177,22 +194,60 @@ function NoteEditor({
 
   // Debounced autosave — updateNoteAction persists immediately (not via the
   // debounced bundle), so nothing is lost on refresh.
-  function onEdit(next: { title?: string; content?: string }) {
-    if (next.title !== undefined) {
-      setTitle(next.title);
-      onPatch(note.id, { title: next.title });
-    }
-    if (next.content !== undefined) {
-      setContent(next.content);
-      onPatch(note.id, { content: next.content });
-    }
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => persist(next), 700);
-  }
+  const onEdit = useCallback(
+    (next: { title?: string; content?: string }) => {
+      if (next.title !== undefined) {
+        setTitle(next.title);
+        onPatch(note.id, { title: next.title });
+      }
+      if (next.content !== undefined) {
+        setContent(next.content);
+        onPatch(note.id, { content: next.content });
+      }
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => persist(next), 700);
+    },
+    [note.id, onPatch, persist],
+  );
 
   function flush() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     persist({ title, content });
+  }
+
+  // Restore the selection after a formatting command re-renders the textarea.
+  useEffect(() => {
+    if (pendingSel.current && taRef.current) {
+      const [a, b] = pendingSel.current;
+      pendingSel.current = null;
+      taRef.current.focus();
+      taRef.current.setSelectionRange(a, b);
+    }
+  }, [content]);
+
+  // Apply a Markdown transform to the current selection, then re-select the result.
+  const runCmd = useCallback(
+    (fn: (s: Sel) => Sel) => {
+      const ta = taRef.current;
+      if (!ta) return;
+      const r = fn({ value: content, start: ta.selectionStart, end: ta.selectionEnd });
+      pendingSel.current = [r.start, r.end];
+      onEdit({ content: r.value });
+    },
+    [content, onEdit],
+  );
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === "b") {
+        e.preventDefault();
+        runCmd((s) => wrapInline(s, "**", "bold text"));
+      } else if (k === "i") {
+        e.preventDefault();
+        runCmd((s) => wrapInline(s, "*", "italic text"));
+      }
+    }
   }
 
   async function analyze() {
@@ -260,13 +315,117 @@ function NoteEditor({
         </button>
       </div>
 
-      <Textarea
-        value={content}
-        onChange={(e) => onEdit({ content: e.target.value })}
-        onBlur={flush}
-        placeholder="Start typing… jot down to-dos, ideas, reminders. The Executive can turn this into real work."
-        className="min-h-[280px] resize-y border-0 px-0 text-[13.5px] leading-relaxed shadow-none focus-visible:ring-0"
-      />
+      {/* Formatting toolbar + Write/Preview toggle */}
+      <div className="flex flex-wrap items-center gap-0.5 border-y border-border py-1.5">
+        <ToolbarButton
+          label="Bold (⌘B)"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => wrapInline(s, "**", "bold text"))}
+        >
+          <Bold className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Italic (⌘I)"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => wrapInline(s, "*", "italic text"))}
+        >
+          <Italic className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Inline code"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => wrapInline(s, "`", "code"))}
+        >
+          <Code className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarDivider />
+        <ToolbarButton
+          label="Heading"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => applyLine(s, "h2"))}
+        >
+          <Heading2 className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Bulleted list"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => applyLine(s, "bullet"))}
+        >
+          <List className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Numbered list"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => applyLine(s, "number"))}
+        >
+          <ListOrdered className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Quote"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => applyLine(s, "quote"))}
+        >
+          <Quote className="h-4 w-4" />
+        </ToolbarButton>
+        <ToolbarButton
+          label="Link"
+          disabled={view === "preview"}
+          onClick={() => runCmd((s) => wrapLink(s))}
+        >
+          <Link2 className="h-4 w-4" />
+        </ToolbarButton>
+
+        {/* Write / Preview segmented toggle */}
+        <div className="ml-auto inline-flex items-center rounded-lg border border-border bg-muted/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setView("write")}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors",
+              view === "write" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <PenLine className="h-3.5 w-3.5" />
+            Write
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              flush();
+              setView("preview");
+            }}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors",
+              view === "preview" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            Preview
+          </button>
+        </div>
+      </div>
+
+      {view === "write" ? (
+        <Textarea
+          ref={taRef}
+          value={content}
+          onChange={(e) => onEdit({ content: e.target.value })}
+          onKeyDown={onKeyDown}
+          onBlur={flush}
+          placeholder="Start typing… jot down to-dos, ideas, reminders. Use **bold**, *italic*, or the toolbar. The Executive can turn this into real work."
+          className="mt-2 min-h-[460px] resize-y border-0 px-0 text-[13.5px] leading-relaxed shadow-none focus-visible:ring-0"
+        />
+      ) : content.trim() ? (
+        <div
+          className="prose-chat mt-2 min-h-[460px] text-[13.5px] text-foreground"
+          // Safe: markdownToHtml HTML-escapes all input before formatting.
+          dangerouslySetInnerHTML={{ __html: markdownToHtml(content) }}
+        />
+      ) : (
+        <div className="mt-2 flex min-h-[460px] items-start text-[13.5px] text-muted-foreground">
+          Nothing to preview yet — switch to Write and jot something down.
+        </div>
+      )}
 
       {/* Actioned badge */}
       {note.status === "actioned" && !done && (
@@ -337,6 +496,35 @@ function NoteEditor({
       )}
     </Card>
   );
+}
+
+function ToolbarButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {children}
+    </button>
+  );
+}
+
+function ToolbarDivider() {
+  return <span className="mx-1 h-5 w-px bg-border" aria-hidden />;
 }
 
 function ProposalPanel({
@@ -443,9 +631,92 @@ function ProposalPanel({
   );
 }
 
+/* ----------------------------- Markdown editing ----------------------------- */
+// Lightweight selection-aware Markdown transforms for the toolbar. Content is
+// stored as Markdown and rendered with the app's shared markdownToHtml, so the
+// Executive still reads clean, structured text and existing plain-text notes
+// keep working unchanged.
+
+type Sel = { value: string; start: number; end: number };
+
+/** Wrap (or unwrap) the selection with an inline marker like ** or * or `. */
+function wrapInline(s: Sel, marker: string, placeholder: string): Sel {
+  const { value, start, end } = s;
+  const sel = value.slice(start, end);
+  const m = marker.length;
+
+  // Already wrapped inside the selection → unwrap.
+  if (sel.length >= m * 2 && sel.startsWith(marker) && sel.endsWith(marker)) {
+    const inner = sel.slice(m, sel.length - m);
+    return { value: value.slice(0, start) + inner + value.slice(end), start, end: start + inner.length };
+  }
+  // Markers sit just outside the selection → unwrap.
+  if (value.slice(Math.max(0, start - m), start) === marker && value.slice(end, end + m) === marker) {
+    return {
+      value: value.slice(0, start - m) + sel + value.slice(end + m),
+      start: start - m,
+      end: end - m,
+    };
+  }
+  // Otherwise wrap (using a placeholder when nothing is selected).
+  const body = sel || placeholder;
+  const next = value.slice(0, start) + marker + body + marker + value.slice(end);
+  const bodyStart = start + m;
+  return { value: next, start: bodyStart, end: bodyStart + body.length };
+}
+
+/** Insert a Markdown link, selecting the URL slot so the user can paste. */
+function wrapLink(s: Sel): Sel {
+  const { value, start, end } = s;
+  const text = value.slice(start, end) || "text";
+  const insert = `[${text}](url)`;
+  const next = value.slice(0, start) + insert + value.slice(end);
+  const urlStart = start + text.length + 3; // past "[text]("
+  return { value: next, start: urlStart, end: urlStart + 3 };
+}
+
+type LineMode = "bullet" | "number" | "h2" | "quote";
+const ANY_LINE_MARKER = /^(\s*)(?:[-*]\s+|\d+[.)]\s+|#{1,6}\s+|>\s+)/;
+
+/** Toggle a line-level marker across every selected line. */
+function applyLine(s: Sel, mode: LineMode): Sel {
+  const { value } = s;
+  const blockStart = value.lastIndexOf("\n", s.start - 1) + 1;
+  let blockEnd = value.indexOf("\n", s.end);
+  if (blockEnd === -1) blockEnd = value.length;
+  const lines = value.slice(blockStart, blockEnd).split("\n");
+
+  const re =
+    mode === "bullet"
+      ? /^(\s*)[-*]\s+/
+      : mode === "number"
+        ? /^(\s*)\d+[.)]\s+/
+        : mode === "h2"
+          ? /^(\s*)#{2}\s+/
+          : /^(\s*)>\s+/;
+
+  const nonEmpty = lines.filter((l) => l.trim() !== "");
+  const allOn = nonEmpty.length > 0 && nonEmpty.every((l) => re.test(l));
+
+  let n = 0;
+  const nextLines = lines.map((l) => {
+    if (l.trim() === "") return l;
+    const indent = l.match(/^(\s*)/)?.[1] ?? "";
+    const content = l.replace(ANY_LINE_MARKER, "$1").slice(indent.length);
+    if (allOn) return indent + content; // toggle off
+    const marker =
+      mode === "bullet" ? "- " : mode === "number" ? `${(n += 1)}. ` : mode === "h2" ? "## " : "> ";
+    return indent + marker + content;
+  });
+
+  const nextBlock = nextLines.join("\n");
+  const next = value.slice(0, blockStart) + nextBlock + value.slice(blockEnd);
+  return { value: next, start: blockStart, end: blockStart + nextBlock.length };
+}
+
 function firstLine(s: string): string {
-  return s.split("\n")[0]?.trim() ?? "";
+  return (markdownToPlainText(s).split("\n")[0] ?? "").replace(/^•\s+/, "").trim();
 }
 function preview(s: string): string {
-  return s.replace(/\s+/g, " ").trim().slice(0, 80);
+  return markdownToPlainText(s).replace(/\s+/g, " ").trim().slice(0, 80);
 }
