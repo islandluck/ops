@@ -215,14 +215,22 @@ function NoteEditor({
     persist({ title, content });
   }
 
-  // Restore the selection after a formatting command re-renders the textarea.
+  // Restore the selection after a formatting command re-renders the textarea,
+  // WITHOUT scrolling the page: refocus with preventScroll and pin both the
+  // scroll container's and the textarea's scroll positions across the selection
+  // change, so a tall note never jumps to the caret.
   useEffect(() => {
-    if (pendingSel.current && taRef.current) {
-      const [a, b] = pendingSel.current;
-      pendingSel.current = null;
-      taRef.current.focus();
-      taRef.current.setSelectionRange(a, b);
-    }
+    const ta = taRef.current;
+    if (!pendingSel.current || !ta) return;
+    const [a, b] = pendingSel.current;
+    pendingSel.current = null;
+    const scroller = findScrollParent(ta);
+    const scrollerTop = scroller?.scrollTop ?? 0;
+    const taTop = ta.scrollTop;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(a, b);
+    ta.scrollTop = taTop;
+    if (scroller) scroller.scrollTop = scrollerTop;
   }, [content]);
 
   // Apply a Markdown transform to the current selection, then re-select the result.
@@ -515,6 +523,9 @@ function ToolbarButton({
       title={label}
       aria-label={label}
       disabled={disabled}
+      // Keep focus (and the selection) in the textarea when the button is pressed,
+      // so applying a format never steals focus and scrolls the page.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
     >
@@ -712,6 +723,18 @@ function applyLine(s: Sel, mode: LineMode): Sel {
   const nextBlock = nextLines.join("\n");
   const next = value.slice(0, blockStart) + nextBlock + value.slice(blockEnd);
   return { value: next, start: blockStart, end: blockStart + nextBlock.length };
+}
+
+/** Nearest scrollable ancestor (the page-body scroll container) — used to pin
+ *  scroll position across a programmatic selection change. */
+function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const oy = getComputedStyle(node).overflowY;
+    if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight) return node;
+    node = node.parentElement;
+  }
+  return null;
 }
 
 function firstLine(s: string): string {
